@@ -1,0 +1,7 @@
+---
+alwaysApply: true
+---
+
+Use mise https://mise.jdx.dev/walkthrough.html for task execution. Do not
+create ad-hoc script files and avoid writing markdown files with instructions
+on how to run tasks. It should be self explanatory from mise's configuration. 

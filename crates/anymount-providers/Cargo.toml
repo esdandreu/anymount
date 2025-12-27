@@ -1,0 +1,14 @@
+[package]
+name = "anymount-providers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anymount-core = { path = "../anymount-core" }
+async-trait.workspace = true
+thiserror.workspace = true
+bytes.workspace = true
+tokio.workspace = true
+serde.workspace = true
+parking_lot = "0.12"

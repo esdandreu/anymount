@@ -1,0 +1,13 @@
+[package]
+name = "anymount-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+bytes.workspace = true
+tokio.workspace = true
+

@@ -1,0 +1,46 @@
+[tools]
+rust = "latest"
+xcodegen = "latest"
+
+[tasks.build]
+description = "Build the project"
+run = "cargo build"
+
+[tasks.test]
+description = "Run tests"
+run = "cargo test --all"
+
+[tasks."macos:generate"]
+description = "Generate Xcode project from project.yml"
+run = "cd app/macos && xcodegen generate"
+
+[tasks."macos:rust"]
+description = "Build Rust static library for macOS"
+run = "cargo build -p anymount-macos --features ffi --release"
+
+[tasks."macos:build"]
+description = "Build Xcode project"
+run = """
+cd app/macos
+xcodebuild -project Anymount.xcodeproj \
+    -scheme Anymount \
+    -configuration Debug \
+    -derivedDataPath ./build \
+    CODE_SIGN_IDENTITY="-" \
+    CODE_SIGNING_REQUIRED=NO \
+    CODE_SIGNING_ALLOWED=NO
+"""
+depends = ["macos:generate", "macos:rust"]
+
+[tasks."macos:run"]
+description = "Build and run the macOS app"
+run = "open app/macos/build/Build/Products/Debug/Anymount.app"
+depends = ["macos:build"]
+
+[tasks."macos:clean"]
+description = "Clean macOS build artifacts"
+run = """
+rm -rf app/macos/build
+rm -rf app/macos/Anymount.xcodeproj
+cargo clean
+"""
