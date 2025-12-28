@@ -1,46 +1,96 @@
 [tools]
 rust = "latest"
-xcodegen = "latest"
-
-[tasks.build]
-description = "Build the project"
-run = "cargo build"
 
 [tasks.test]
 description = "Run tests"
 run = "cargo test --all"
 
-[tasks."macos:generate"]
-description = "Generate Xcode project from project.yml"
-run = "cd app/macos && xcodegen generate"
+# Build Rust components
+[tasks.build]
+description = "Build platform-specific Rust components"
+run = "cargo build -p anymount --release"
+outputs = ["target/**"]
 
-[tasks."macos:rust"]
-description = "Build Rust static library for macOS"
-run = "cargo build -p anymount-macos --features ffi --release"
-
-[tasks."macos:build"]
-description = "Build Xcode project"
-run = """
-cd app/macos
-xcodebuild -project Anymount.xcodeproj \
-    -scheme Anymount \
-    -configuration Debug \
-    -derivedDataPath ./build \
-    CODE_SIGN_IDENTITY="-" \
-    CODE_SIGNING_REQUIRED=NO \
-    CODE_SIGNING_ALLOWED=NO
-"""
-depends = ["macos:generate", "macos:rust"]
-
-[tasks."macos:run"]
-description = "Build and run the macOS app"
+# Run the app
+[tasks.app]
+description = "Run the application"
+depends = ["build"]
 run = "open app/macos/build/Build/Products/Debug/Anymount.app"
-depends = ["macos:build"]
+run_windows = "target\\release\\anymount-win.exe"
 
-[tasks."macos:clean"]
-description = "Clean macOS build artifacts"
+# Clean build artifacts
+[tasks.clean]
+description = "Clean build artifacts"
 run = """
 rm -rf app/macos/build
 rm -rf app/macos/Anymount.xcodeproj
 cargo clean
+"""
+run_windows = """
+powershell -ExecutionPolicy Bypass -Command "
+    Remove-Item -Path app/windows/anymount-win.exe -ErrorAction SilentlyContinue
+    Remove-Item -Path app/windows/AppPackages -Recurse -ErrorAction SilentlyContinue
+    cargo clean
+"
+"""
+
+# Package the app
+[tasks.package]
+description = "Create platform-specific package"
+depends = ["build"]
+run = "echo 'macOS app bundle created at app/macos/build/Build/Products/Debug/Anymount.app'"
+run_windows = """
+powershell -ExecutionPolicy Bypass -Command "
+    $ErrorActionPreference = 'Stop'
+    
+    # Copy binary
+    $sourceBinary = 'target/release/anymount-win.exe'
+    $destBinary = 'app/windows/anymount-win.exe'
+    Copy-Item $sourceBinary $destBinary -Force
+    
+    # Create output directory
+    $outputDir = 'app/windows/AppPackages'
+    if (!(Test-Path $outputDir)) {
+        New-Item -ItemType Directory -Path $outputDir | Out-Null
+    }
+    
+    # Find MakeAppx
+    $makeAppx = Get-ChildItem \"${env:ProgramFiles(x86)}\\Windows Kits\\10\\bin\\*\\x64\\makeappx.exe\" -ErrorAction SilentlyContinue |
+                Sort-Object -Descending |
+                Select-Object -First 1 -ExpandProperty FullName
+    
+    if (!$makeAppx) {
+        throw 'MakeAppx.exe not found. Install Windows 10 SDK.'
+    }
+    
+    # Create package
+    $packagePath = Join-Path $outputDir 'Anymount.appx'
+    & $makeAppx pack /d app/windows /p $packagePath /o
+    
+    if ($LASTEXITCODE -ne 0) {
+        throw 'MakeAppx failed'
+    }
+    
+    Write-Host \"Package created: $packagePath\" -ForegroundColor Green
+"
+"""
+
+# Install the app
+[tasks.install]
+description = "Install the application"
+run = "echo 'Use Finder to copy the .app to /Applications'"
+run_windows = """
+powershell -ExecutionPolicy Bypass -Command "
+    Add-AppxPackage -Register app/windows/AppxManifest.xml
+"
+"""
+
+# Uninstall the app
+[tasks.uninstall]
+description = "Uninstall the application"
+run = "echo 'Drag Anymount.app from /Applications to Trash'"
+run_windows = """
+powershell -ExecutionPolicy Bypass -Command "
+    Get-AppxPackage 'Anymount.CloudProvider' | Remove-AppxPackage
+"
 """
