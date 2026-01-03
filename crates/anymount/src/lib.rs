@@ -1,11 +1,8 @@
+pub mod cli;
 pub mod error;
-pub use error::{Error, Result};
-pub mod provider;
-pub use provider::{StorageProvider, FileMetadata, FileType};
-
-// Provider implementations
 pub mod providers;
+pub mod storages;
 
-// Platform-specific modules
-#[cfg(target_os = "windows")]
-pub mod windows;
+pub use error::{Error, Result};
+pub use providers::{Provider, ProviderConfiguration, ProvidersConfiguration, get_providers};
+pub use storages::Storage;

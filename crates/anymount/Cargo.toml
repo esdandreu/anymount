@@ -24,8 +24,10 @@ parking_lot = "0.12"
 
 # CLI dependencies
 clap = { version = "4.5", features = ["derive"] }
+ctrlc = "3.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 
 # macOS-specific dependencies
 [target.'cfg(target_os = "macos")'.dependencies]

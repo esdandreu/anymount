@@ -1,5 +1,5 @@
-use crate::{Error, FileMetadata, FileType, Result, StorageProvider};
-use async_trait::async_trait;
+use crate::{Error, Result};
+use super::Storage;
 use bytes::Bytes;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -7,18 +7,35 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// A mock storage provider that simulates a filesystem in memory.
 /// Perfect for testing and demonstrating the mount functionality.
-pub struct MockProvider {
+pub struct MockStorage {
     files: Arc<parking_lot::RwLock<HashMap<String, MockFile>>>,
 }
 
-#[derive(Clone)]
-struct MockFile {
-    content: Bytes,
-    file_type: FileType,
-    modified: u64,
+
+/// Metadata about a file or directory in the storage provider
+#[derive(Debug, Clone)]
+pub struct FileMetadata {
+    pub path: String,
+    pub file_type: FileType,
+    pub size: u64,
+    pub modified: Option<u64>, // Unix timestamp
+    pub created: Option<u64>,  // Unix timestamp
 }
 
-impl MockProvider {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileType {
+    File,
+    Directory,
+}
+
+#[derive(Clone)]
+pub struct MockFile {
+    pub content: Bytes,
+    pub file_type: FileType,
+    pub modified: u64,
+}
+
+impl MockStorage {
     pub fn new() -> Self {
         let files = Arc::new(parking_lot::RwLock::new(HashMap::new()));
         let provider = Self { files };
@@ -29,7 +46,7 @@ impl MockProvider {
     fn setup_mock_filesystem(&self) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs();
 
         let mut files = self.files.write();
@@ -132,16 +149,7 @@ impl MockProvider {
             format!("/{}", path)
         }
     }
-}
 
-impl Default for MockProvider {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait]
-impl StorageProvider for MockProvider {
     fn provider_type(&self) -> &str {
         "mock"
     }
@@ -212,7 +220,7 @@ impl StorageProvider for MockProvider {
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs();
 
         files.insert(
@@ -240,7 +248,7 @@ impl StorageProvider for MockProvider {
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs();
 
         files.insert(
@@ -305,7 +313,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_root() {
-        let provider = MockProvider::new();
+        let provider = MockStorage::new();
         let entries = provider.list_dir("/").await.unwrap();
         
         assert!(!entries.is_empty(), "Root directory should have entries");
@@ -317,14 +325,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_file() {
-        let provider = MockProvider::new();
+        let provider = MockStorage::new();
         let content = provider.read_file("/hello.txt").await.unwrap();
         assert!(!content.is_empty());
     }
 
     #[tokio::test]
     async fn test_write_and_read() {
-        let provider = MockProvider::new();
+        let provider = MockStorage::new();
         let data = Bytes::from("test content");
         provider.write_file("/test.txt", data.clone()).await.unwrap();
         
@@ -334,7 +342,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_directory() {
-        let provider = MockProvider::new();
+        let provider = MockStorage::new();
         provider.create_dir("/newdir").await.unwrap();
         
         let metadata = provider.get_metadata("/newdir").await.unwrap();
@@ -343,13 +351,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_file() {
-        let provider = MockProvider::new();
+        let provider = MockStorage::new();
         let data = Bytes::from("temporary");
         provider.write_file("/temp.txt", data).await.unwrap();
         
         provider.delete_file("/temp.txt").await.unwrap();
         
         assert!(!provider.exists("/temp.txt").await.unwrap());
+    }
+}
+
+impl Storage for MockStorage {}
+
+impl Default for MockStorage {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

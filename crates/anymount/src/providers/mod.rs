@@ -1,4 +1,4 @@
-pub mod mock;
+pub mod cloudfilter;
+pub mod provider;
 
-pub use mock::MockProvider;
-
+pub use provider::{Provider, ProviderConfiguration, ProvidersConfiguration, get_providers};
