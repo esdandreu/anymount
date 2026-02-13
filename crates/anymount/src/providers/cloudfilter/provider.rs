@@ -4,53 +4,70 @@ use cloud_filter::root::{
     Connection, HydrationType, PopulationType, SecurityId, Session, SyncRootId, SyncRootIdBuilder,
     SyncRootInfo,
 };
-use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::path::{PathBuf, absolute};
+use std::sync::Arc;
+use tracing::info;
 
 pub const ID_PREFIX: &'static str = "Anymount";
 
 pub struct CloudFilterProvider<S: Storage> {
     path: PathBuf,
-    session: Session,
-    storage: S,
+    #[allow(dead_code)]
     id: SyncRootId,
-    connection: OnceLock<Connection<Callbacks<S>>>,
+    #[allow(dead_code)]
+    connection: Connection<Callbacks<S>>,
 }
 
 impl<S: Storage> CloudFilterProvider<S> {
-    pub fn new(config: &impl ProviderConfiguration, storage: S) -> Arc<Self> {
-        // TODO This method can fail!
-        let security_id = SecurityId::current_user().unwrap();
-        Arc::new(Self {
-            path: config.path(),
-            storage,
-            session: Session::new(),
-            id: SyncRootIdBuilder::new(ID_PREFIX)
-                .user_security_id(security_id)
-                .build(),
-            connection: OnceLock::new(),
-        })
-    }
-
-    pub fn get_path(&self) -> &PathBuf {
-        &self.path
-    }
-
-    pub fn get_display_name(&self) -> &str {
-        self.path
+    pub fn connect(config: &impl ProviderConfiguration, storage: S) -> Result<Arc<Self>, String> {
+        let security_id = SecurityId::current_user().map_err(|e| e.to_string())?;
+        let path = config.path();
+        if !path.exists() {
+            std::fs::create_dir(&path)
+                .map_err(|e| format!("Failed to create mount path: {}", e))?;
+        }
+        info!("Mount path: {}", path.display());
+        let path = absolute(path)
+            .map_err(|e| format!("Mount path must exist and be accessible: {}", e))?;
+        let name = path
             .file_name()
             .and_then(|os_str| os_str.to_str())
-            .unwrap_or("Anymount")
-    }
+            .ok_or("Invalid path")?;
+        let provider_name = ID_PREFIX.to_owned() + "|" + name;
 
-    pub fn create_sync_root_info(&self) -> windows::core::Result<SyncRootInfo> {
-        SyncRootInfo::default()
-            .with_display_name(self.get_display_name())
-            .with_icon("%SystemRoot%\\system32\\charmap.exe,0")
-            .with_version(env!("CARGO_PKG_VERSION"))
-            .with_hydration_type(HydrationType::Full)
-            .with_population_type(PopulationType::Full)
-            .with_path(self.get_path())
+        let id = SyncRootIdBuilder::new(provider_name)
+            .user_security_id(security_id)
+            .build();
+
+        // Register if not already registered
+        let is_registered = id.is_registered().map_err(|e| e.to_string())?;
+        // TODO(GIA) Handle when registered to a different path
+        if !is_registered {
+            let sync_root_info = SyncRootInfo::default()
+                .with_display_name(name)
+                .with_icon("%SystemRoot%\\system32\\charmap.exe,0")
+                .with_version(env!("CARGO_PKG_VERSION"))
+                .with_hydration_type(HydrationType::Full)
+                .with_population_type(PopulationType::Full)
+                .with_path(&path)
+                .map_err(|e| e.to_string())?;
+
+            id.register(sync_root_info)
+                .map_err(|e| format!("Failed to register sync root: {}", e))?;
+            info!("Sync root registered: {}", name);
+        }
+
+        // Connect session
+        let session = Session::new();
+        let connection = session
+            .connect(&path, Callbacks::new(path.clone(), storage))
+            .map_err(|e| format!("Failed to connect to sync root: {}", e))?;
+
+        Ok(Arc::new(Self {
+            path,
+            id,
+            connection,
+        }))
     }
 }
 
@@ -58,38 +75,8 @@ impl<S: Storage> Provider for Arc<CloudFilterProvider<S>> {
     fn kind(&self) -> &'static str {
         "CloudFilter"
     }
+
     fn path(&self) -> &PathBuf {
         &self.path
-    }
-
-    fn connect(&self) -> Result<(), String> {
-        self.connect_arc()
-    }
-}
-
-impl<S: Storage> CloudFilterProvider<S> {
-    pub fn connect_arc(self: &Arc<Self>) -> Result<(), String> {
-        // Check if already connected
-        if self.connection.get().is_some() {
-            return Err("Already connected".to_string());
-        }
-
-        let is_registered = self.id.is_registered().map_err(|e| e.to_string())?;
-        if !is_registered {
-            self.id
-                .register(self.create_sync_root_info().map_err(|e| e.to_string())?)
-                .map_err(|e| format!("Failed to register sync root: {}", e))?;
-        }
-
-        let wrapper = Callbacks(self.clone());
-        let conn = self
-            .session
-            .connect(&self.path, wrapper)
-            .map_err(|e| format!("Failed to connect to sync root: {}", e))?;
-
-        self.connection
-            .set(conn)
-            .map_err(|_| "Already connected".to_string())?;
-        Ok(())
     }
 }

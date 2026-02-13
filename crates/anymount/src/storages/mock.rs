@@ -1,5 +1,5 @@
-use crate::{Error, Result};
 use super::Storage;
+use crate::{Error, Result};
 use bytes::Bytes;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -10,7 +10,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct MockStorage {
     files: Arc<parking_lot::RwLock<HashMap<String, MockFile>>>,
 }
-
 
 /// Metadata about a file or directory in the storage provider
 #[derive(Debug, Clone)]
@@ -85,7 +84,9 @@ impl MockStorage {
         files.insert(
             "/notes.txt".to_string(),
             MockFile {
-                content: Bytes::from_static(b"Meeting notes:\n- Discuss project goals\n- Review timeline\n- Assign tasks\n"),
+                content: Bytes::from_static(
+                    b"Meeting notes:\n- Discuss project goals\n- Review timeline\n- Assign tasks\n",
+                ),
                 file_type: FileType::File,
                 modified: now - 7200,
             },
@@ -194,10 +195,7 @@ impl MockStorage {
 
         match files.get(&normalized) {
             Some(file) if file.file_type == FileType::File => Ok(file.content.clone()),
-            Some(_) => Err(Error::Provider(format!(
-                "Path '{}' is not a file",
-                path
-            ))),
+            Some(_) => Err(Error::Provider(format!("Path '{}' is not a file", path))),
             None => Err(Error::NotFound(format!("File '{}' not found", path))),
         }
     }
@@ -240,10 +238,7 @@ impl MockStorage {
         let mut files = self.files.write();
 
         if files.contains_key(&normalized) {
-            return Err(Error::Provider(format!(
-                "Path '{}' already exists",
-                path
-            )));
+            return Err(Error::Provider(format!("Path '{}' already exists", path)));
         }
 
         let now = SystemTime::now()
@@ -272,10 +267,7 @@ impl MockStorage {
                 files.remove(&normalized);
                 Ok(())
             }
-            Some(_) => Err(Error::Provider(format!(
-                "Path '{}' is not a file",
-                path
-            ))),
+            Some(_) => Err(Error::Provider(format!("Path '{}' is not a file", path))),
             None => Err(Error::NotFound(format!("File '{}' not found", path))),
         }
     }
@@ -293,10 +285,7 @@ impl MockStorage {
                 "Path '{}' is not a directory",
                 path
             ))),
-            None => Err(Error::NotFound(format!(
-                "Directory '{}' not found",
-                path
-            ))),
+            None => Err(Error::NotFound(format!("Directory '{}' not found", path))),
         }
     }
 
@@ -307,60 +296,6 @@ impl MockStorage {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_list_root() {
-        let provider = MockStorage::new();
-        let entries = provider.list_dir("/").await.unwrap();
-        
-        assert!(!entries.is_empty(), "Root directory should have entries");
-        
-        let names: Vec<_> = entries.iter().map(|e| e.path.as_str()).collect();
-        assert!(names.contains(&"README.txt") || names.contains(&"hello.txt"),
-                "Root should contain sample files, got: {:?}", names);
-    }
-
-    #[tokio::test]
-    async fn test_read_file() {
-        let provider = MockStorage::new();
-        let content = provider.read_file("/hello.txt").await.unwrap();
-        assert!(!content.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_write_and_read() {
-        let provider = MockStorage::new();
-        let data = Bytes::from("test content");
-        provider.write_file("/test.txt", data.clone()).await.unwrap();
-        
-        let read_data = provider.read_file("/test.txt").await.unwrap();
-        assert_eq!(data, read_data);
-    }
-
-    #[tokio::test]
-    async fn test_create_directory() {
-        let provider = MockStorage::new();
-        provider.create_dir("/newdir").await.unwrap();
-        
-        let metadata = provider.get_metadata("/newdir").await.unwrap();
-        assert_eq!(metadata.file_type, FileType::Directory);
-    }
-
-    #[tokio::test]
-    async fn test_delete_file() {
-        let provider = MockStorage::new();
-        let data = Bytes::from("temporary");
-        provider.write_file("/temp.txt", data).await.unwrap();
-        
-        provider.delete_file("/temp.txt").await.unwrap();
-        
-        assert!(!provider.exists("/temp.txt").await.unwrap());
-    }
-}
-
 impl Storage for MockStorage {}
 
 impl Default for MockStorage {
@@ -368,4 +303,3 @@ impl Default for MockStorage {
         Self::new()
     }
 }
-

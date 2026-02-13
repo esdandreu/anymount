@@ -2,7 +2,7 @@ use super::Cli;
 use clap::Parser;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-pub async fn run() -> Result<(), String> {
+pub fn run() -> Result<(), String> {
     let cli = Cli::parse();
 
     // Initialize logging
@@ -26,7 +26,7 @@ pub async fn run() -> Result<(), String> {
 
     // Keep the guard alive for the entire program lifetime
     // This ensures the file writer thread keeps running
-    let result = cli.run().await;
+    let result = cli.run();
     drop(_guard);
     result
 }

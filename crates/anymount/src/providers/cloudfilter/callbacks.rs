@@ -1,19 +1,32 @@
-use super::{CloudFilterProvider, Storage};
+use super::Storage;
 use cloud_filter::{
     error::CResult,
     filter::{Request, SyncFilter, info, ticket},
+    metadata::Metadata,
+    placeholder_file::PlaceholderFile,
+    utility::FileTime,
 };
-use std::sync::Arc;
+use std::path::PathBuf;
 use tracing::info;
 
-// Newtype wrapper to implement SyncFilter for Arc<CloudFilterProvider<S>>
-pub struct Callbacks<S: Storage>(pub Arc<CloudFilterProvider<S>>);
+pub struct Callbacks<S: Storage> {
+    #[allow(dead_code)]
+    path: PathBuf,
+    #[allow(dead_code)]
+    storage: S,
+}
+
+impl<S: Storage> Callbacks<S> {
+    pub fn new(path: PathBuf, storage: S) -> Self {
+        Self { path, storage }
+    }
+}
 
 impl<S: Storage> SyncFilter for Callbacks<S> {
     fn fetch_data(
         &self,
         request: Request,
-        ticket: ticket::FetchData,
+        _ticket: ticket::FetchData,
         info: info::FetchData,
     ) -> CResult<()> {
         info!(
@@ -29,9 +42,34 @@ impl<S: Storage> SyncFilter for Callbacks<S> {
         &self,
         request: Request,
         ticket: ticket::FetchPlaceholders,
-        _info: info::FetchPlaceholders,
+        info: info::FetchPlaceholders,
     ) -> CResult<()> {
-        info!("fetch_placeholders: path={:?}", request.path());
+        info!(
+            "fetch_placeholders: path={:?}, pattern={:?}",
+            request.path(),
+            info.pattern()
+        );
+        // Create a single directory placeholder
+        let now = FileTime::now();
+
+        let dir = PlaceholderFile::new("folder")
+            .metadata(Metadata::directory().size(0).accessed(now))
+            .mark_in_sync()
+            .overwrite()
+            .blob(request.path().into_os_string().into_encoded_bytes());
+
+        let file = PlaceholderFile::new("file.txt")
+            .metadata(Metadata::file().size(0).accessed(now))
+            .mark_in_sync()
+            .overwrite()
+            .blob(request.path().into_os_string().into_encoded_bytes());
+
+        info!("Passing 1 directory and 1 file placeholder");
+        match ticket.pass_with_placeholder(&mut [dir, file]) {
+            Ok(_) => info!("Successfully created Documents directory placeholder"),
+            Err(e) => info!("Failed to create placeholder: {:?}", e),
+        }
+
         CResult::Ok(())
     }
 
@@ -51,7 +89,12 @@ impl<S: Storage> SyncFilter for Callbacks<S> {
         info!("closed: path={:?}", request.path());
     }
 
-    fn delete(&self, request: Request, ticket: ticket::Delete, _info: info::Delete) -> CResult<()> {
+    fn delete(
+        &self,
+        request: Request,
+        _ticket: ticket::Delete,
+        _info: info::Delete,
+    ) -> CResult<()> {
         info!("delete: path={:?}", request.path());
         CResult::Ok(())
     }
@@ -60,7 +103,7 @@ impl<S: Storage> SyncFilter for Callbacks<S> {
         info!("deleted: path={:?}", request.path());
     }
 
-    fn rename(&self, request: Request, ticket: ticket::Rename, info: info::Rename) -> CResult<()> {
+    fn rename(&self, request: Request, _ticket: ticket::Rename, info: info::Rename) -> CResult<()> {
         info!(
             "rename: from={:?} to={:?}",
             request.path(),

@@ -22,9 +22,9 @@ pub enum Commands {
 }
 
 impl Cli {
-    pub async fn run(self) -> Result<(), String> {
+    pub fn run(self) -> Result<(), String> {
         match self.command {
-            Commands::Connect(cmd) => cmd.execute().await,
+            Commands::Connect(cmd) => cmd.execute(),
         }
     }
 }

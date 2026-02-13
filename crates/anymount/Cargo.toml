@@ -16,10 +16,8 @@ required-features = ["windows"]
 
 [dependencies]
 # Core dependencies
-async-trait = "0.1"
 thiserror = "1.0"
 bytes = "1.9"
-tokio = { version = "1.42", features = ["full"] }
 parking_lot = "0.12"
 
 # CLI dependencies

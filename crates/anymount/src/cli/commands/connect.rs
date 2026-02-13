@@ -1,4 +1,4 @@
-use crate::{ProviderConfiguration, ProvidersConfiguration, get_providers};
+use crate::{ProviderConfiguration, ProvidersConfiguration, connect_providers};
 use clap::Args;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -7,7 +7,7 @@ use tracing::{error, info};
 #[derive(Args, Debug, Clone)]
 pub struct ConnectCommand {
     /// Path to the mount point
-    #[arg(long, default_value = r"C:\Users\Public\Anymount-Test")]
+    #[arg(long)]
     pub path: PathBuf,
 }
 
@@ -24,17 +24,19 @@ impl ProvidersConfiguration for ConnectCommand {
 }
 
 impl ConnectCommand {
-    pub async fn execute(&self) -> Result<(), String> {
-        let providers = get_providers(self)?;
-        for provider in providers {
-            provider.connect()?;
+    pub fn execute(&self) -> Result<(), String> {
+        let providers = connect_providers(self)?;
+        for provider in &providers {
             info!(
                 "Connected to {} at {}",
                 provider.kind(),
                 provider.path().display()
             );
         }
+        info!("All providers connected. Press Ctrl+C to disconnect.");
         wait_for_ctrlc();
+        // Keep providers alive until here
+        drop(providers);
         Ok(())
     }
 }
