@@ -1,22 +1,15 @@
 use super::Storage;
-use crate::storages::DirEntry;
+use crate::storages::{DirEntry, WriteAt};
 use cloud_filter::{
     error::CResult,
     filter::{Request, SyncFilter, info, ticket},
     metadata::Metadata,
     placeholder_file::PlaceholderFile,
-    utility::FileTime,
+    utility::{FileTime, WriteAt as CfWriteAt},
 };
 use std::path::PathBuf;
 use std::time::SystemTime;
 use tracing::info;
-
-fn system_time_to_file_time(st: SystemTime) -> FileTime {
-    st.duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .and_then(|d| FileTime::from_unix_time(d.as_secs() as i64).ok())
-        .unwrap_or_else(FileTime::now)
-}
 
 pub struct Callbacks<S: Storage> {
     path: PathBuf,
@@ -33,15 +26,27 @@ impl<S: Storage> SyncFilter for Callbacks<S> {
     fn fetch_data(
         &self,
         request: Request,
-        _ticket: ticket::FetchData,
+        ticket: ticket::FetchData,
         info: info::FetchData,
     ) -> CResult<()> {
-        info!(
-            "fetch_data: path={:?}, offset={}, length={}",
-            request.path(),
-            info.required_file_range().start,
-            info.required_file_range().end - info.required_file_range().start
-        );
+        let full_path = request.path().to_path_buf();
+        let relative = match full_path.strip_prefix(&self.path) {
+            Ok(p) if p.as_os_str().is_empty() => PathBuf::from("."),
+            Ok(p) => p.to_path_buf(),
+            Err(_) => {
+                info!(
+                    "request path {:?} is not under sync root {:?}",
+                    full_path, self.path
+                );
+                return Err(cloud_filter::error::CloudErrorKind::Unsuccessful);
+            }
+        };
+        let range = info.required_file_range();
+        let mut writer = FetchDataWriter { ticket };
+        self.storage.read_file_at(relative, &mut writer, range.clone()).map_err(|e| {
+            info!("read_file_at failed: {}", e);
+            cloud_filter::error::CloudErrorKind::Unsuccessful
+        })?;
         CResult::Ok(())
     }
 
@@ -143,3 +148,30 @@ impl<S: Storage> SyncFilter for Callbacks<S> {
         );
     }
 }
+
+struct FetchDataWriter {
+    ticket: ticket::FetchData,
+}
+
+impl WriteAt for FetchDataWriter {
+    fn write_at(&mut self, buf: &[u8], offset: u64) -> Result<(), String> {
+        const CHUNK: usize = 4096;
+        let mut pos = 0;
+        while pos < buf.len() {
+            let end = (pos + CHUNK).min(buf.len());
+            let chunk = &buf[pos..end];
+            CfWriteAt::write_at(&self.ticket, chunk, offset + pos as u64)
+                .map_err(|e| e.to_string())?;
+            pos = end;
+        }
+        Ok(())
+    }
+}
+
+fn system_time_to_file_time(st: SystemTime) -> FileTime {
+    st.duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|d| FileTime::from_unix_time(d.as_secs() as i64).ok())
+        .unwrap_or_else(FileTime::now)
+}
+
