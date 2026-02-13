@@ -1,4 +1,5 @@
 use super::Storage;
+use crate::storages::DirEntry;
 use cloud_filter::{
     error::CResult,
     filter::{Request, SyncFilter, info, ticket},
@@ -7,12 +8,18 @@ use cloud_filter::{
     utility::FileTime,
 };
 use std::path::PathBuf;
+use std::time::SystemTime;
 use tracing::info;
 
+fn system_time_to_file_time(st: SystemTime) -> FileTime {
+    st.duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|d| FileTime::from_unix_time(d.as_secs() as i64).ok())
+        .unwrap_or_else(FileTime::now)
+}
+
 pub struct Callbacks<S: Storage> {
-    #[allow(dead_code)]
     path: PathBuf,
-    #[allow(dead_code)]
     storage: S,
 }
 
@@ -49,27 +56,43 @@ impl<S: Storage> SyncFilter for Callbacks<S> {
             request.path(),
             info.pattern()
         );
-        // Create a single directory placeholder
-        let now = FileTime::now();
-
-        let dir = PlaceholderFile::new("folder")
-            .metadata(Metadata::directory().size(0).accessed(now))
-            .mark_in_sync()
-            .overwrite()
-            .blob(request.path().into_os_string().into_encoded_bytes());
-
-        let file = PlaceholderFile::new("file.txt")
-            .metadata(Metadata::file().size(0).accessed(now))
-            .mark_in_sync()
-            .overwrite()
-            .blob(request.path().into_os_string().into_encoded_bytes());
-
-        info!("Passing 1 directory and 1 file placeholder");
-        match ticket.pass_with_placeholder(&mut [dir, file]) {
-            Ok(_) => info!("Successfully created Documents directory placeholder"),
-            Err(e) => info!("Failed to create placeholder: {:?}", e),
+        let full_path = request.path().to_path_buf();
+        let relative = match full_path.strip_prefix(&self.path) {
+            Ok(p) if p.as_os_str().is_empty() => PathBuf::from("."),
+            Ok(p) => p.to_path_buf(),
+            Err(_) => {
+                info!(
+                    "request path {:?} is not under sync root {:?}",
+                    full_path, self.path
+                );
+                return Err(cloud_filter::error::CloudErrorKind::Unsuccessful);
+            }
+        };
+        let iter = self.storage.read_dir(relative).map_err(|e| {
+            info!("read_dir failed: {}", e);
+            cloud_filter::error::CloudErrorKind::Unsuccessful
+        })?;
+        let blob: Vec<u8> = request.path().into_os_string().into_encoded_bytes();
+        let mut placeholders: Vec<PlaceholderFile> = iter
+            .map(|entry| {
+                PlaceholderFile::new(entry.file_name())
+                    .metadata(
+                        (if entry.is_dir() {
+                            Metadata::directory()
+                        } else {
+                            Metadata::file()
+                        })
+                        .size(entry.size())
+                        .accessed(system_time_to_file_time(entry.accessed())),
+                    )
+                    .mark_in_sync()
+                    .overwrite()
+                    .blob(blob.clone())
+            })
+            .collect();
+        if let Err(e) = ticket.pass_with_placeholder(&mut placeholders) {
+            info!("Failed to pass placeholders: {:?}", e);
         }
-
         CResult::Ok(())
     }
 

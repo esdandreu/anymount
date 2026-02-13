@@ -4,5 +4,7 @@ pub mod providers;
 pub mod storages;
 
 pub use error::{Error, Result};
-pub use providers::{Provider, ProviderConfiguration, ProvidersConfiguration, connect_providers};
+pub use providers::{
+    Provider, ProviderConfiguration, ProvidersConfiguration, StorageConfig, connect_providers,
+};
 pub use storages::Storage;

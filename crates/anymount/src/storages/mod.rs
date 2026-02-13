@@ -1,5 +1,5 @@
-pub mod mock;
+pub mod local;
 pub mod storage;
 
-pub use mock::MockStorage;
-pub use storage::Storage;
+pub use local::LocalStorage;
+pub use storage::{DirEntry, Storage};

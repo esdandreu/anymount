@@ -1,5 +1,5 @@
-use crate::{ProviderConfiguration, ProvidersConfiguration, connect_providers};
-use clap::Args;
+use crate::{ProviderConfiguration, ProvidersConfiguration, StorageConfig, connect_providers};
+use clap::{Args, Subcommand};
 use std::path::PathBuf;
 use std::sync::mpsc;
 use tracing::{error, info};
@@ -9,11 +9,40 @@ pub struct ConnectCommand {
     /// Path to the mount point
     #[arg(long)]
     pub path: PathBuf,
+    #[command(subcommand)]
+    pub storage: ConnectStorageSubcommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum ConnectStorageSubcommand {
+    /// Local directory as storage backend
+    Local(LocalStorageArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct LocalStorageArgs {
+    /// Root directory to expose
+    #[arg(value_name = "ROOT")]
+    pub root: PathBuf,
+}
+
+impl ConnectStorageSubcommand {
+    fn to_storage_config(&self) -> StorageConfig {
+        match self {
+            Self::Local(args) => StorageConfig::Local {
+                root: args.root.clone(),
+            },
+        }
+    }
 }
 
 impl ProviderConfiguration for ConnectCommand {
     fn path(&self) -> PathBuf {
         self.path.clone()
+    }
+
+    fn storage_config(&self) -> StorageConfig {
+        self.storage.to_storage_config()
     }
 }
 

@@ -1,6 +1,10 @@
-use crate::storages::mock::MockStorage;
+use crate::storages::LocalStorage;
 use std::path::PathBuf;
 use std::result::Result;
+
+pub enum StorageConfig {
+    Local { root: PathBuf },
+}
 
 pub trait ProvidersConfiguration {
     fn providers(&self) -> Vec<&impl ProviderConfiguration>;
@@ -8,6 +12,7 @@ pub trait ProvidersConfiguration {
 
 pub trait ProviderConfiguration {
     fn path(&self) -> PathBuf;
+    fn storage_config(&self) -> StorageConfig;
 }
 
 pub trait Provider {
@@ -21,12 +26,15 @@ pub fn connect_providers(
 ) -> Result<Vec<Box<dyn Provider>>, String> {
     use super::cloudfilter::{CloudFilterProvider, cleanup_registry};
     let mut providers: Vec<Box<dyn Provider>> = Vec::new();
-    for provider in config.providers() {
-        let storage = MockStorage::new();
-        let provider = CloudFilterProvider::<MockStorage>::connect(provider, storage)?;
+    for provider_config in config.providers() {
+        let provider = match provider_config.storage_config() {
+            StorageConfig::Local { root } => {
+                let storage = LocalStorage::new(root);
+                CloudFilterProvider::<LocalStorage>::connect(provider_config, storage)?
+            }
+        };
         providers.push(Box::new(provider));
     }
-    // Cleanup any non-configured registered anymount sync root
     cleanup_registry(config)?;
     Ok(providers)
 }
