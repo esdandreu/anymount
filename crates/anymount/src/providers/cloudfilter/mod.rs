@@ -1,5 +1,6 @@
-pub mod cleanup_registry;
 pub mod callbacks;
+pub mod cleanup_registry;
+pub mod placeholders;
 pub mod provider;
 pub mod register;
 

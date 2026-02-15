@@ -1,5 +1,9 @@
 use super::Storage;
-use crate::storages::{DirEntry, WriteAt};
+use crate::{
+    providers::cloudfilter::placeholders::{dehydrate_file, get_placeholder_info},
+    storages::{DirEntry, WriteAt},
+};
+use windows::Win32::Storage::CloudFilters::CF_PIN_STATE_UNPINNED;
 use cloud_filter::{
     error::CResult,
     filter::{Request, SyncFilter, info, ticket},
@@ -9,7 +13,7 @@ use cloud_filter::{
 };
 use std::path::PathBuf;
 use std::time::SystemTime;
-use tracing::info;
+use tracing::{error, info};
 
 pub struct Callbacks<S: Storage> {
     path: PathBuf,
@@ -29,6 +33,11 @@ impl<S: Storage> SyncFilter for Callbacks<S> {
         ticket: ticket::FetchData,
         info: info::FetchData,
     ) -> CResult<()> {
+        info!(
+            "fetch_data: path={:?}, range={:?}",
+            request.path(),
+            info.required_file_range()
+        );
         let full_path = request.path().to_path_buf();
         let relative = match full_path.strip_prefix(&self.path) {
             Ok(p) if p.as_os_str().is_empty() => PathBuf::from("."),
@@ -43,10 +52,12 @@ impl<S: Storage> SyncFilter for Callbacks<S> {
         };
         let range = info.required_file_range();
         let mut writer = FetchDataWriter { ticket };
-        self.storage.read_file_at(relative, &mut writer, range.clone()).map_err(|e| {
-            info!("read_file_at failed: {}", e);
-            cloud_filter::error::CloudErrorKind::Unsuccessful
-        })?;
+        self.storage
+            .read_file_at(relative, &mut writer, range.clone())
+            .map_err(|e| {
+                info!("read_file_at failed: {}", e);
+                cloud_filter::error::CloudErrorKind::Unsuccessful
+            })?;
         CResult::Ok(())
     }
 
@@ -109,6 +120,28 @@ impl<S: Storage> SyncFilter for Callbacks<S> {
         info!("cancel_fetch_placeholders: path={:?}", request.path());
     }
 
+    fn dehydrate(
+        &self,
+        request: Request,
+        ticket: ticket::Dehydrate,
+        info: info::Dehydrate,
+    ) -> CResult<()> {
+        info!(
+            "dehydrate: path={:?}, reason={:?}, background={}",
+            request.path(),
+            info.reason(),
+            info.background()
+        );
+        ticket.pass().map_err(|e| {
+            info!("dehydrate pass failed: {:?}", e);
+            cloud_filter::error::CloudErrorKind::Unsuccessful
+        })
+    }
+
+    fn dehydrated(&self, request: Request, _info: info::Dehydrated) {
+        info!("dehydrated: path={:?}", request.path());
+    }
+
     fn opened(&self, request: Request, _info: info::Opened) {
         info!("opened: path={:?}", request.path());
     }
@@ -147,6 +180,27 @@ impl<S: Storage> SyncFilter for Callbacks<S> {
             request.path()
         );
     }
+
+    fn state_changed(&self, changes: Vec<PathBuf>) {
+        for path in changes {
+            info!("state_changed: path={:?}", path);
+            let file_info = match get_placeholder_info(&path) {
+                Ok(info) => info,
+                Err(e) => {
+                    error!("get_placeholder_info failed: {}", e);
+                    continue;
+                }
+            };
+            info!("file_info: {:?}", file_info);
+            if file_info.pin_state == CF_PIN_STATE_UNPINNED && file_info.on_disk_size > 0 {
+                info!("dehydrating file: {:?}", path);
+                if let Err(e) = dehydrate_file(&path) {
+                    error!("dehydrate_file failed: {}", e);
+                    continue;
+                }
+            }
+        }
+    }
 }
 
 struct FetchDataWriter {
@@ -174,4 +228,3 @@ fn system_time_to_file_time(st: SystemTime) -> FileTime {
         .and_then(|d| FileTime::from_unix_time(d.as_secs() as i64).ok())
         .unwrap_or_else(FileTime::now)
 }
-
