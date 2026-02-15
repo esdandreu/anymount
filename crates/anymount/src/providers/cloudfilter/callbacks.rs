@@ -3,7 +3,6 @@ use crate::{
     providers::cloudfilter::placeholders::{dehydrate_file, get_placeholder_info},
     storages::{DirEntry, WriteAt},
 };
-use windows::Win32::Storage::CloudFilters::CF_PIN_STATE_UNPINNED;
 use cloud_filter::{
     error::CResult,
     filter::{Request, SyncFilter, info, ticket},
@@ -11,18 +10,26 @@ use cloud_filter::{
     placeholder_file::PlaceholderFile,
     utility::{FileTime, WriteAt as CfWriteAt},
 };
+use parking_lot::Mutex;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::SystemTime;
-use tracing::{error, info};
+use tracing::{error, info, warn};
+use windows::Win32::Storage::CloudFilters::CF_PIN_STATE_UNPINNED;
 
 pub struct Callbacks<S: Storage> {
     path: PathBuf,
     storage: S,
+    pending_dehydrate: Mutex<HashSet<PathBuf>>,
 }
 
 impl<S: Storage> Callbacks<S> {
     pub fn new(path: PathBuf, storage: S) -> Self {
-        Self { path, storage }
+        Self {
+            path,
+            storage,
+            pending_dehydrate: Mutex::new(HashSet::new()),
+        }
     }
 }
 
@@ -147,7 +154,13 @@ impl<S: Storage> SyncFilter for Callbacks<S> {
     }
 
     fn closed(&self, request: Request, _info: info::Closed) {
-        info!("closed: path={:?}", request.path());
+        let path = request.path().to_path_buf();
+        info!("closed: path={:?}", path);
+        if self.pending_dehydrate.lock().remove(&path) {
+            if let Err(e) = dehydrate_file(&path) {
+                error!("dehydrate_file failed: {}", e);
+            }
+        }
     }
 
     fn delete(
@@ -193,10 +206,13 @@ impl<S: Storage> SyncFilter for Callbacks<S> {
             };
             info!("file_info: {:?}", file_info);
             if file_info.pin_state == CF_PIN_STATE_UNPINNED && file_info.on_disk_size > 0 {
-                info!("dehydrating file: {:?}", path);
                 if let Err(e) = dehydrate_file(&path) {
-                    error!("dehydrate_file failed: {}", e);
-                    continue;
+                    warn!(
+                        "dehydrate_file on state_changed failed, \
+                         flagging for pending dehydration: {}",
+                        e
+                    );
+                    self.pending_dehydrate.lock().insert(path);
                 }
             }
         }
