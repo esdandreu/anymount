@@ -1,9 +1,0 @@
----
-alwaysApply: true
----
-
-Consider the Ports & Adapters architectural pattern at all levels. From
-services to classes https://alistair.cockburn.us/hexagonal-architecture. As a
-rule of thumb, a crate/module/function should receive interface inputs. Crates
-should nonetheless export full structures, not interfaces. Use dependency
-injection to isolate logical concerns, allowing them to be unit tested.
