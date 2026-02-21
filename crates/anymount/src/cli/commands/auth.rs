@@ -1,6 +1,39 @@
-use crate::auth::{DeviceCodeResponse, DeviceCodeState, OneDriveAuthorizer, TokenResponse};
+use crate::auth::{OneDriveAuthorizer, OneDriveStartedAuthorization, TokenResponse};
 use clap::Subcommand;
 use std::result::Result;
+
+/// Value returned from [`Authorizer::start_authorization`]; use [`message`](StartedAuthorization::message) and [`verification_uri`](StartedAuthorization::verification_uri) for the user, then [`wait`](StartedAuthorization::wait) to obtain tokens.
+pub trait StartedAuthorization {
+    fn wait(&self) -> Result<TokenResponse, String>;
+    fn message(&self) -> String;
+    fn verification_uri(&self) -> String;
+}
+
+/// Starts an authorization flow; returns a [`StartedAuthorization`] to display
+/// instructions and wait for completion.
+pub trait Authorizer {
+    fn start_authorization(self) -> Result<impl StartedAuthorization, String>;
+}
+
+impl StartedAuthorization for OneDriveStartedAuthorization {
+    fn wait(&self) -> Result<TokenResponse, String> {
+        self.wait()
+    }
+
+    fn message(&self) -> String {
+        self.display_message()
+    }
+
+    fn verification_uri(&self) -> String {
+        self.display_verification_uri()
+    }
+}
+
+impl Authorizer for OneDriveAuthorizer {
+    fn start_authorization(self) -> Result<impl StartedAuthorization, String> {
+        OneDriveAuthorizer::start_authorization(self)
+    }
+}
 
 /// Auth subcommand: which provider to obtain a token for.
 #[derive(Subcommand, Debug, Clone)]
@@ -19,7 +52,7 @@ pub struct AuthOneDrive {
 }
 
 impl AuthSubcommand {
-    fn authorizer(&self) -> Result<impl DeviceCodeAuthorizer, String> {
+    fn authorizer(&self) -> Result<impl Authorizer, String> {
         match self {
             AuthSubcommand::OneDrive(args) => OneDriveAuthorizer::new(args.client_id.clone()),
         }
@@ -42,24 +75,24 @@ impl AuthCommand {
     /// complete sign-in, or the token response is invalid.
     pub fn execute(&self) -> Result<(), String> {
         let authorizer = self.subcommand.authorizer()?;
-        self._execute(&authorizer, &DefaultUrlOpener)
+        self._execute(authorizer, &DefaultUrlOpener)
     }
 
     /// Internal entry point for injection (e.g. tests). Not part of the public
     /// API.
-    pub(crate) fn _execute<A, U>(&self, authorizer: &A, url_opener: &U) -> Result<(), String>
+    pub(crate) fn _execute<A, U>(&self, authorizer: A, url_opener: &U) -> Result<(), String>
     where
-        A: DeviceCodeAuthorizer,
+        A: Authorizer,
         U: UrlOpener,
     {
-        let (device, state) = authorizer.request_device_code()?;
-        print_instructions(&device);
-        if url_opener.open(&device.verification_uri).is_err() {
+        let started = authorizer.start_authorization()?;
+        print_instructions(&started.message());
+        if url_opener.open(&started.verification_uri()).is_err() {
             eprintln!("(Could not open browser; open the URL above manually.)");
         }
         eprintln!();
         eprintln!("Waiting for you to sign in...");
-        let tokens = authorizer.poll_for_tokens(state)?;
+        let tokens = started.wait()?;
         print_tokens(&tokens);
         Ok(())
     }
@@ -80,58 +113,54 @@ impl UrlOpener for DefaultUrlOpener {
     }
 }
 
-pub trait DeviceCodeAuthorizer {
-    /// Opaque state returned from
-    /// [`request_device_code`](DeviceCodeAuthorizer::request_device_code) and
-    /// passed to [`poll_for_tokens`](DeviceCodeAuthorizer::poll_for_tokens).
-    type State;
-
-    fn request_device_code(&self) -> Result<(DeviceCodeResponse, Self::State), String>;
-
-    fn poll_for_tokens(&self, state: Self::State) -> Result<TokenResponse, String>;
-}
-
-impl DeviceCodeAuthorizer for OneDriveAuthorizer {
-    type State = DeviceCodeState;
-
-    fn request_device_code(&self) -> Result<(DeviceCodeResponse, DeviceCodeState), String> {
-        self.request_device_code()
-    }
-
-    fn poll_for_tokens(&self, state: DeviceCodeState) -> Result<TokenResponse, String> {
-        self.poll_for_tokens(state)
-    }
-}
-
-fn print_instructions(device: &DeviceCodeResponse) {
-    eprintln!("{}", device.message);
+fn print_instructions(message: &str) {
+    eprintln!("{}", message);
 }
 
 fn print_tokens(tokens: &TokenResponse) {
     if let Some(ref r) = tokens.refresh_token {
         println!("refresh_token: {}", r);
     }
-    if tokens.access_token.is_some() {
-        eprintln!("access_token is short-lived; use refresh_token for storage config.");
-    }
+    eprintln!("access_token is short-lived; use refresh_token for storage config.");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auth::onedrive::{DeviceCodeResponse, TokenResponse};
+
+    struct MockStarted;
+
+    impl StartedAuthorization for MockStarted {
+        fn wait(&self) -> Result<TokenResponse, String> {
+            Ok(TokenResponse {
+                access_token: "at".into(),
+                refresh_token: Some("rt".into()),
+                expires_in: 3600,
+            })
+        }
+
+        fn message(&self) -> String {
+            "Open example.com".into()
+        }
+
+        fn verification_uri(&self) -> String {
+            "https://example.com/device".into()
+        }
+    }
 
     struct FailingAuthorizer;
 
-    impl DeviceCodeAuthorizer for FailingAuthorizer {
-        type State = ();
-
-        fn request_device_code(&self) -> Result<(DeviceCodeResponse, ()), String> {
-            Err("mock device code error".into())
+    impl Authorizer for FailingAuthorizer {
+        fn start_authorization(self) -> Result<impl StartedAuthorization, String> {
+            Err::<MockStarted, _>("mock device code error".into())
         }
+    }
 
-        fn poll_for_tokens(&self, _state: ()) -> Result<TokenResponse, String> {
-            Err("mock poll error".into())
+    struct SuccessAuthorizer;
+
+    impl Authorizer for SuccessAuthorizer {
+        fn start_authorization(self) -> Result<impl StartedAuthorization, String> {
+            Ok(MockStarted)
         }
     }
 
@@ -151,39 +180,9 @@ mod tests {
             }),
         };
         let err = cmd
-            ._execute(&FailingAuthorizer, &NoOpUrlOpener)
+            ._execute(FailingAuthorizer, &NoOpUrlOpener)
             .unwrap_err();
         assert_eq!(err, "mock device code error");
-    }
-
-    struct SuccessAuthorizer;
-
-    impl DeviceCodeAuthorizer for SuccessAuthorizer {
-        type State = ();
-
-        fn request_device_code(&self) -> Result<(DeviceCodeResponse, ()), String> {
-            Ok((
-                DeviceCodeResponse {
-                    device_code: "dc".into(),
-                    user_code: "uc".into(),
-                    verification_uri: "https://example.com/device".into(),
-                    message: "Open example.com".into(),
-                    expires_in: 900,
-                    interval: 5,
-                },
-                (),
-            ))
-        }
-
-        fn poll_for_tokens(&self, _state: ()) -> Result<TokenResponse, String> {
-            Ok(TokenResponse {
-                access_token: Some("at".into()),
-                refresh_token: Some("rt".into()),
-                expires_in: Some(3600),
-                error: None,
-                error_description: None,
-            })
-        }
     }
 
     #[test]
@@ -193,7 +192,7 @@ mod tests {
                 client_id: Some("test-client".into()),
             }),
         };
-        let result = cmd._execute(&SuccessAuthorizer, &NoOpUrlOpener);
+        let result = cmd._execute(SuccessAuthorizer, &NoOpUrlOpener);
         assert!(result.is_ok());
     }
 }

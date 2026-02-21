@@ -1,12 +1,9 @@
-use jsonwebtoken::dangerous::insecure_decode;
+use super::token_response::TokenResponse;
+pub use oauth2::StandardDeviceAuthorizationResponse;
 use oauth2::{
-    AuthUrl, ClientId, DeviceAuthorizationUrl, RefreshToken, Scope,
-    StandardDeviceAuthorizationResponse, TokenResponse as OAuth2TokenResponse, TokenUrl,
-    basic::{BasicClient, BasicTokenResponse},
+    AuthUrl, ClientId, DeviceAuthorizationUrl, RefreshToken, Scope, TokenUrl, basic::BasicClient,
 };
-use serde::Deserialize;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const AUTH_URL: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
 const TOKEN_URL: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
@@ -15,36 +12,6 @@ const SCOPE_FILES: &str = "Files.ReadWrite";
 const SCOPE_OFFLINE: &str = "offline_access";
 
 const ANYMOUNT_AZURE_APP_CLIENT_ID: &str = "5970173e-1b75-4317-987d-6849236cc3df";
-
-/// Response from the device-code endpoint.
-///
-/// Show `message` (or `verification_uri` and `user_code`) to the user; use
-/// `device_code` and `interval` when calling `poll_for_tokens`.
-#[derive(Debug, Clone)]
-pub struct DeviceCodeResponse {
-    pub device_code: String,
-    pub user_code: String,
-    pub verification_uri: String,
-    pub message: String,
-    pub expires_in: u64,
-    pub interval: u64,
-}
-
-/// Token endpoint response (success or error).
-///
-/// On success, `access_token` and `refresh_token` are `Some`. On pending or
-/// error, `error` and `error_description` may be set.
-#[derive(Debug, Clone)]
-pub struct TokenResponse {
-    pub access_token: Option<String>,
-    pub refresh_token: Option<String>,
-    pub expires_in: Option<u64>,
-    pub error: Option<String>,
-    pub error_description: Option<String>,
-}
-
-/// Opaque state from `request_device_code`; pass to `poll_for_tokens`.
-pub struct DeviceCodeState(StandardDeviceAuthorizationResponse);
 
 /// OAuth client configured with auth, token, and device-authorization URLs.
 type DeviceCodeOAuthClient = oauth2::Client<
@@ -69,8 +36,7 @@ pub struct OneDriveAuthorizer {
 
 impl OneDriveAuthorizer {
     pub fn new(client_id: Option<String>) -> Result<Self, String> {
-        let client_id =
-            client_id.unwrap_or_else(|| ANYMOUNT_AZURE_APP_CLIENT_ID.to_string());
+        let client_id = client_id.unwrap_or_else(|| ANYMOUNT_AZURE_APP_CLIENT_ID.to_string());
         let device_auth_url = DeviceAuthorizationUrl::new(DEVICE_AUTH_URL.to_string())
             .map_err(|e| format!("Invalid device authorization URL: {}", e))?;
         let client = BasicClient::new(ClientId::new(client_id))
@@ -89,51 +55,60 @@ impl OneDriveAuthorizer {
         })
     }
 
+    /// Starts the device-code flow; returns a value to show the user and wait for tokens.
+    pub fn start_authorization(self) -> Result<OneDriveStartedAuthorization, String> {
+        let state = self
+            .client
+            .exchange_device_code()
+            .add_scope(Scope::new(SCOPE_FILES.to_string()))
+            .add_scope(Scope::new(SCOPE_OFFLINE.to_string()))
+            .request(&self.agent)
+            .map_err(|e| format!("Device code request failed: {}", e))?;
+        let uri = state.verification_uri().to_string();
+        let message = format!(
+            "To sign in, use a web browser to open {} and enter the code: {}",
+            uri,
+            state.user_code().secret()
+        );
+        Ok(OneDriveStartedAuthorization {
+            authorizer: self,
+            state,
+            message,
+            verification_uri: uri,
+        })
+    }
+
     /// Exchanges a refresh token for a new access token.
     ///
     /// Uses the Microsoft Entra token endpoint with `grant_type=refresh_token`.
-    /// On success returns a `TokenResponse` with at least `access_token`; Microsoft
-    /// may also return a new `refresh_token` and `expires_in`.
+    /// On success returns a `TokenResponse` with `access_token` and `expires_in`;
+    /// Microsoft may also return a new `refresh_token`.
     pub fn refresh_access_token(&self, refresh_token: &str) -> Result<TokenResponse, String> {
         let token_result = self
             .client
             .exchange_refresh_token(&RefreshToken::new(refresh_token.to_string()))
             .request(&self.agent)
             .map_err(|e| format!("Refresh token request failed: {}", e))?;
-        Ok(token_response_from_standard(&token_result))
+        Ok(TokenResponse::from(token_result))
     }
+}
 
-    /// Starts the device-code flow; returns user-facing details and state for polling.
-    pub fn request_device_code(&self) -> Result<(DeviceCodeResponse, DeviceCodeState), String> {
-        let details: StandardDeviceAuthorizationResponse = self.client
-            .exchange_device_code()
-            .add_scope(Scope::new(SCOPE_FILES.to_string()))
-            .add_scope(Scope::new(SCOPE_OFFLINE.to_string()))
-            .request(&self.agent)
-            .map_err(|e| format!("Device code request failed: {}", e))?;
+/// Started OneDrive device-code flow. Composes an [`OneDriveAuthorizer`] with device state and display strings.
+pub struct OneDriveStartedAuthorization {
+    authorizer: OneDriveAuthorizer,
+    state: StandardDeviceAuthorizationResponse,
+    message: String,
+    verification_uri: String,
+}
 
-        let verification_uri = details.verification_uri().to_string();
-        let user_code = details.user_code().secret().to_string();
-        let message = format!(
-            "To sign in, use a web browser to open {} and enter the code: {}",
-            verification_uri, user_code
-        );
-        let response = DeviceCodeResponse {
-            device_code: details.device_code().secret().to_string(),
-            user_code: user_code.clone(),
-            verification_uri: verification_uri.clone(),
-            message,
-            expires_in: details.expires_in().as_secs(),
-            interval: details.interval().as_secs().max(1),
-        };
-        Ok((response, DeviceCodeState(details)))
-    }
-
-    /// Polls for tokens using state from `request_device_code`.
-    pub fn poll_for_tokens(&self, state: DeviceCodeState) -> Result<TokenResponse, String> {
-        let token_result = self.client
-            .exchange_device_access_token(&state.0)
-            .request(&self.agent, thread::sleep, None)
+impl OneDriveStartedAuthorization {
+    /// Blocks until the user completes sign-in and returns the token response.
+    pub fn wait(&self) -> Result<TokenResponse, String> {
+        let token_result = self
+            .authorizer
+            .client
+            .exchange_device_access_token(&self.state)
+            .request(&self.authorizer.agent, thread::sleep, None)
             .map_err(|e| {
                 let msg = e.to_string();
                 if msg.contains("expired") || msg.contains("expired_token") {
@@ -144,18 +119,17 @@ impl OneDriveAuthorizer {
                     format!("Token request failed: {}", e)
                 }
             })?;
-
-        Ok(token_response_from_standard(&token_result))
+        Ok(TokenResponse::from(token_result))
     }
-}
 
-fn token_response_from_standard(r: &BasicTokenResponse) -> TokenResponse {
-    TokenResponse {
-        access_token: Some(r.access_token().secret().to_string()),
-        refresh_token: r.refresh_token().map(|t| t.secret().to_string()).into(),
-        expires_in: r.expires_in().map(|d| d.as_secs()).into(),
-        error: None,
-        error_description: None,
+    /// User-facing message (e.g. "To sign in, open ... and enter the code: ...").
+    pub fn display_message(&self) -> String {
+        self.message.clone()
+    }
+
+    /// URI for the user to open in a browser.
+    pub fn display_verification_uri(&self) -> String {
+        self.verification_uri.clone()
     }
 }
 
@@ -171,82 +145,18 @@ pub fn refresh_access_token(
     authorizer.refresh_access_token(refresh_token)
 }
 
-/// Reads the `exp` claim from a JWT access token payload.
-///
-/// Decodes without signature verification. Use only to check expiry for
-/// validation; do not use for security decisions that rely on token integrity.
-///
-/// Returns `None` if the token is invalid, or the `exp` claim is missing or
-/// invalid.
-pub fn jwt_expires_at(access_token: &str) -> Option<SystemTime> {
-    #[derive(Deserialize)]
-    struct ExpClaim {
-        exp: Option<u64>,
-    }
-    let token_data = insecure_decode::<ExpClaim>(access_token.as_bytes()).ok()?;
-    let exp = token_data.claims.exp?;
-    Some(UNIX_EPOCH + Duration::from_secs(exp))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn device_code_response_shape() {
-        let r = DeviceCodeResponse {
-            device_code: "dc".into(),
-            user_code: "uc".into(),
-            verification_uri: "https://microsoft.com/devicelogin".into(),
-            message: "open https://microsoft.com/devicelogin".into(),
-            expires_in: 900,
-            interval: 5,
-        };
-        assert_eq!(r.interval, 5);
-        assert!(r.message.contains("devicelogin"));
-    }
-
-    #[test]
     fn token_response_success_shape() {
         let r = TokenResponse {
-            access_token: Some("at".into()),
+            access_token: "at".into(),
             refresh_token: Some("rt".into()),
-            expires_in: Some(3600),
-            error: None,
-            error_description: None,
+            expires_in: 3600,
         };
-        assert!(r.access_token.is_some());
+        assert_eq!(r.access_token, "at");
         assert!(r.refresh_token.is_some());
-    }
-
-    #[test]
-    fn token_response_error_shape() {
-        let r = TokenResponse {
-            access_token: None,
-            refresh_token: None,
-            expires_in: None,
-            error: Some("authorization_pending".into()),
-            error_description: Some("pending".into()),
-        };
-        assert_eq!(r.error.as_deref(), Some("authorization_pending"));
-    }
-
-    #[test]
-    fn jwt_expires_at_valid() {
-        let token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjIwMDAwMDAwMDB9.c2ln";
-        let t = jwt_expires_at(token).unwrap();
-        assert_eq!(t.duration_since(UNIX_EPOCH).unwrap().as_secs(), 2000000000);
-    }
-
-    #[test]
-    fn jwt_expires_at_invalid_shape() {
-        assert!(jwt_expires_at("not-three-parts").is_none());
-        assert!(jwt_expires_at("a.b").is_none());
-    }
-
-    #[test]
-    fn jwt_expires_at_missing_exp() {
-        let token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.c2ln";
-        assert!(jwt_expires_at(token).is_none());
     }
 }

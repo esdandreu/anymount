@@ -1,7 +1,8 @@
 pub mod onedrive;
+pub mod token_response;
 
-#[doc(inline)]
 pub use onedrive::{
-    jwt_expires_at, refresh_access_token,
-    DeviceCodeResponse, DeviceCodeState, OneDriveAuthorizer, TokenResponse,
+    refresh_access_token, OneDriveAuthorizer, OneDriveStartedAuthorization,
+    StandardDeviceAuthorizationResponse,
 };
+pub use token_response::TokenResponse;

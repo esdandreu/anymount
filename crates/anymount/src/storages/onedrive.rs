@@ -1,4 +1,5 @@
-use crate::auth::{jwt_expires_at, refresh_access_token};
+use crate::auth::token_response::jwt_expires_at;
+use crate::auth::refresh_access_token;
 use crate::error::Error;
 use parking_lot::RwLock;
 use serde::Deserialize;
@@ -113,12 +114,9 @@ impl OneDriveStorage {
             };
             let response = refresh_access_token(self.client_id.as_deref(), refresh_token)
                 .map_err(|e| format!("token refresh failed: {}", e))?;
-            let access_token = response
-                .access_token
-                .ok_or_else(|| "refresh response missing access_token".to_string())?;
-            let expires_at = response.expires_in.map(|secs| now + Duration::from_secs(secs));
+            let access_token = response.access_token.clone();
             state.access_token = Some(access_token.clone());
-            state.expires_at = expires_at.or_else(|| jwt_expires_at(&access_token));
+            state.expires_at = Some(now + Duration::from_secs(response.expires_in));
             return Ok(access_token);
         }
         Ok(state.access_token.as_ref().unwrap().clone())
@@ -138,7 +136,7 @@ impl OneDriveStorage {
         if s.is_empty() || s == "." {
             return "".to_string();
         }
-        urlencoding::encode(s).into_owned()
+        format!("/{}", urlencoding::encode(s).into_owned())
     }
 }
 
@@ -397,7 +395,7 @@ mod tests {
         );
         assert_eq!(
             OneDriveStorage::path_to_graph_segment(&PathBuf::from("Docs")),
-            "Docs"
+            "/Docs"
         );
         assert!(OneDriveStorage::path_to_graph_segment(&PathBuf::from("a/b")).contains("a"));
     }

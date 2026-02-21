@@ -58,7 +58,7 @@ impl<S: Storage> SyncFilter for Callbacks<S> {
             }
         };
         let range = info.required_file_range();
-        let mut writer = FetchDataWriter { ticket };
+        let mut writer = FetchDataWriter::new(ticket, range.end);
         self.storage
             .read_file_at(relative, &mut writer, range.clone())
             .map_err(|e| {
@@ -219,20 +219,66 @@ impl<S: Storage> SyncFilter for Callbacks<S> {
     }
 }
 
+/// Cloud Filter requires each TRANSFER_DATA buffer to be 4 KiB or the final
+/// chunk ending at the logical file size; otherwise CfExecute returns
+/// ERROR_CLOUD_FILE_INVALID_REQUEST (0x8007017C).
+const CF_TRANSFER_CHUNK: usize = 4096;
+
 struct FetchDataWriter {
     ticket: ticket::FetchData,
+    range_end: u64,
+    buffer: Vec<u8>,
+    next_offset: u64,
+}
+
+impl FetchDataWriter {
+    fn new(ticket: ticket::FetchData, range_end: u64) -> Self {
+        Self {
+            ticket,
+            range_end,
+            buffer: Vec::new(),
+            next_offset: 0,
+        }
+    }
+
+    fn flush_chunks(&mut self) -> Result<(), String> {
+        while self.buffer.len() >= CF_TRANSFER_CHUNK
+            && self.next_offset + CF_TRANSFER_CHUNK as u64 <= self.range_end
+        {
+            let offset = self.next_offset;
+            let chunk: Vec<u8> = self.buffer.drain(..CF_TRANSFER_CHUNK).collect();
+            CfWriteAt::write_at(&self.ticket, &chunk, offset).map_err(|e| e.to_string())?;
+            self.next_offset += CF_TRANSFER_CHUNK as u64;
+        }
+        Ok(())
+    }
+
+    fn flush_final(&mut self) -> Result<(), String> {
+        if !self.buffer.is_empty() {
+            let offset = self.range_end - self.buffer.len() as u64;
+            let chunk = std::mem::take(&mut self.buffer);
+            CfWriteAt::write_at(&self.ticket, &chunk, offset).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
 }
 
 impl WriteAt for FetchDataWriter {
     fn write_at(&mut self, buf: &[u8], offset: u64) -> Result<(), String> {
-        const CHUNK: usize = 4096;
-        let mut pos = 0;
-        while pos < buf.len() {
-            let end = (pos + CHUNK).min(buf.len());
-            let chunk = &buf[pos..end];
-            CfWriteAt::write_at(&self.ticket, chunk, offset + pos as u64)
-                .map_err(|e| e.to_string())?;
-            pos = end;
+        if buf.is_empty() {
+            return Ok(());
+        }
+        if self.next_offset != offset {
+            return Err(format!(
+                "fetch_data: non-contiguous write at {} (expected {})",
+                offset, self.next_offset
+            ));
+        }
+        self.buffer.extend_from_slice(buf);
+        self.next_offset += buf.len() as u64;
+        self.flush_chunks()?;
+        if self.next_offset == self.range_end {
+            self.flush_final()?;
         }
         Ok(())
     }
