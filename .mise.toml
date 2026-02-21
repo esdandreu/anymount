@@ -5,6 +5,10 @@ rust = "latest"
 description = "Run tests"
 run = "cargo test --all"
 
+[tasks.coverage]
+description = "Run tests with code coverage"
+run = "cargo llvm-cov --all-features"
+
 # Build Rust components
 [tasks.build]
 description = "Build platform-specific Rust components"

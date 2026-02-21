@@ -9,11 +9,6 @@ authors.workspace = true
 name = "anymount-cli"
 path = "src/main.rs"
 
-[[bin]]
-name = "anymount-win"
-path = "src/windows/main.rs"
-required-features = ["windows"]
-
 [dependencies]
 # Core dependencies
 thiserror = "1.0"
@@ -26,14 +21,6 @@ ctrlc = "3.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
-
-# macOS-specific dependencies
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.6"
-objc2-foundation = "0.3"
-objc2-file-provider = "0.3"
-block2 = "0.6"
-objc2-uniform-type-identifiers = "0.3"
 
 # Windows-specific dependencies
 [target.'cfg(target_os = "windows")'.dependencies]
