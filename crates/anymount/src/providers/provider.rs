@@ -1,9 +1,17 @@
-use crate::storages::LocalStorage;
+use crate::storages::{LocalStorage, OneDriveConfig, OneDriveStorage};
 use std::path::PathBuf;
 use std::result::Result;
 
 pub enum StorageConfig {
     Local { root: PathBuf },
+    OneDrive {
+        root: PathBuf,
+        endpoint: String,
+        access_token: Option<String>,
+        refresh_token: Option<String>,
+        client_id: Option<String>,
+        token_expiry_buffer_secs: Option<u64>,
+    },
 }
 
 pub trait ProvidersConfiguration {
@@ -24,16 +32,38 @@ pub trait Provider {
 pub fn connect_providers(
     config: &impl ProvidersConfiguration,
 ) -> Result<Vec<Box<dyn Provider>>, String> {
-    use super::cloudfilter::{CloudFilterProvider, cleanup_registry};
+    use super::cloudfilter::{cleanup_registry, CloudFilterProvider};
     let mut providers: Vec<Box<dyn Provider>> = Vec::new();
     for provider_config in config.providers() {
-        let provider = match provider_config.storage_config() {
+        match provider_config.storage_config() {
             StorageConfig::Local { root } => {
                 let storage = LocalStorage::new(root);
-                CloudFilterProvider::<LocalStorage>::connect(provider_config, storage)?
+                let provider =
+                    CloudFilterProvider::<LocalStorage>::connect(provider_config, storage)?;
+                providers.push(Box::new(provider) as Box<dyn Provider>);
             }
-        };
-        providers.push(Box::new(provider));
+            StorageConfig::OneDrive {
+                root,
+                endpoint,
+                access_token,
+                refresh_token,
+                client_id,
+                token_expiry_buffer_secs,
+            } => {
+                let config = OneDriveConfig {
+                    root,
+                    endpoint,
+                    access_token,
+                    refresh_token,
+                    client_id,
+                    token_expiry_buffer_secs,
+                };
+                let storage = config.connect().map_err(|e| e.to_string())?;
+                let provider =
+                    CloudFilterProvider::<OneDriveStorage>::connect(provider_config, storage)?;
+                providers.push(Box::new(provider) as Box<dyn Provider>);
+            }
+        }
     }
     cleanup_registry(config)?;
     Ok(providers)
