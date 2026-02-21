@@ -1,8 +1,8 @@
 use jsonwebtoken::dangerous::insecure_decode;
 use oauth2::{
-    basic::{BasicClient, BasicTokenResponse}, AuthUrl, ClientId, DeviceAuthorizationUrl,
-    RefreshToken, Scope, StandardDeviceAuthorizationResponse, TokenResponse as OAuth2TokenResponse,
-    TokenUrl,
+    AuthUrl, ClientId, DeviceAuthorizationUrl, RefreshToken, Scope,
+    StandardDeviceAuthorizationResponse, TokenResponse as OAuth2TokenResponse, TokenUrl,
+    basic::{BasicClient, BasicTokenResponse},
 };
 use serde::Deserialize;
 use std::thread;
@@ -10,11 +10,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const AUTH_URL: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
 const TOKEN_URL: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
-const DEVICE_AUTH_URL: &str =
-    "https://login.microsoftonline.com/common/oauth2/v2.0/devicecode";
+const DEVICE_AUTH_URL: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/devicecode";
 const SCOPE_FILES: &str = "Files.ReadWrite";
 const SCOPE_OFFLINE: &str = "offline_access";
 
+const ANYMOUNT_AZURE_APP_CLIENT_ID: &str = "5970173e-1b75-4317-987d-6849236cc3df";
 
 /// Response from the device-code endpoint.
 ///
@@ -46,99 +46,113 @@ pub struct TokenResponse {
 /// Opaque state from `request_device_code`; pass to `poll_for_tokens`.
 pub struct DeviceCodeState(StandardDeviceAuthorizationResponse);
 
-fn http_client() -> ureq::Agent {
-    ureq::Agent::new()
+/// OAuth client configured with auth, token, and device-authorization URLs.
+type DeviceCodeOAuthClient = oauth2::Client<
+    oauth2::basic::BasicErrorResponse,
+    oauth2::basic::BasicTokenResponse,
+    oauth2::basic::BasicTokenIntrospectionResponse,
+    oauth2::StandardRevocableToken,
+    oauth2::basic::BasicRevocationErrorResponse,
+    oauth2::EndpointSet,
+    oauth2::EndpointSet,
+    oauth2::EndpointNotSet,
+    oauth2::EndpointNotSet,
+    oauth2::EndpointSet,
+>;
+
+/// Authorizer that uses the Microsoft device-code flow. Client ID is baked in.
+#[derive(Debug)]
+pub struct OneDriveAuthorizer {
+    client: DeviceCodeOAuthClient,
+    agent: ureq::Agent,
 }
 
-/// Requests a device code from Microsoft.
-///
-/// Returns user-facing `DeviceCodeResponse` and a `DeviceCodeState` to pass to
-/// `poll_for_tokens`. Show `message` (or `verification_uri` and `user_code`) to
-/// the user, then call `poll_for_tokens` with the state.
-///
-/// # Errors
-///
-/// Returns an error if the HTTP request fails, the response is not 200, or
-/// the response body is not valid.
-pub fn request_device_code(
-    client_id: &str,
-) -> Result<(DeviceCodeResponse, DeviceCodeState), String> {
-    let device_auth_url = DeviceAuthorizationUrl::new(DEVICE_AUTH_URL.to_string())
-        .map_err(|e| format!("Invalid device authorization URL: {}", e))?;
-    let client = BasicClient::new(ClientId::new(client_id.to_string()))
-        .set_auth_uri(AuthUrl::new(AUTH_URL.to_string()).map_err(|e| format!("Invalid auth URL: {}", e))?)
-        .set_token_uri(TokenUrl::new(TOKEN_URL.to_string()).map_err(|e| format!("Invalid token URL: {}", e))?)
-        .set_device_authorization_url(device_auth_url);
-    let agent = http_client();
-    let details: StandardDeviceAuthorizationResponse = client
-        .exchange_device_code()
-        .add_scope(Scope::new(SCOPE_FILES.to_string()))
-        .add_scope(Scope::new(SCOPE_OFFLINE.to_string()))
-        .request(&agent)
-        .map_err(|e| format!("Device code request failed: {}", e))?;
+impl OneDriveAuthorizer {
+    pub fn new(client_id: Option<String>) -> Result<Self, String> {
+        let client_id =
+            client_id.unwrap_or_else(|| ANYMOUNT_AZURE_APP_CLIENT_ID.to_string());
+        let device_auth_url = DeviceAuthorizationUrl::new(DEVICE_AUTH_URL.to_string())
+            .map_err(|e| format!("Invalid device authorization URL: {}", e))?;
+        let client = BasicClient::new(ClientId::new(client_id))
+            .set_auth_uri(
+                AuthUrl::new(AUTH_URL.to_string())
+                    .map_err(|e| format!("Invalid auth URL: {}", e))?,
+            )
+            .set_token_uri(
+                TokenUrl::new(TOKEN_URL.to_string())
+                    .map_err(|e| format!("Invalid token URL: {}", e))?,
+            )
+            .set_device_authorization_url(device_auth_url);
+        Ok(Self {
+            client,
+            agent: ureq::Agent::new(),
+        })
+    }
 
-    let verification_uri = details.verification_uri().to_string();
-    let user_code = details.user_code().secret().to_string();
-    let message = format!(
-        "To sign in, use a web browser to open {} and enter the code: {}",
-        verification_uri, user_code
-    );
-    let response = DeviceCodeResponse {
-        device_code: details.device_code().secret().to_string(),
-        user_code: user_code.clone(),
-        verification_uri: verification_uri.clone(),
-        message,
-        expires_in: details.expires_in().as_secs(),
-        interval: details.interval().as_secs().max(1),
-    };
-    Ok((response, DeviceCodeState(details)))
-}
+    /// Exchanges a refresh token for a new access token.
+    ///
+    /// Uses the Microsoft Entra token endpoint with `grant_type=refresh_token`.
+    /// On success returns a `TokenResponse` with at least `access_token`; Microsoft
+    /// may also return a new `refresh_token` and `expires_in`.
+    pub fn refresh_access_token(&self, refresh_token: &str) -> Result<TokenResponse, String> {
+        let token_result = self
+            .client
+            .exchange_refresh_token(&RefreshToken::new(refresh_token.to_string()))
+            .request(&self.agent)
+            .map_err(|e| format!("Refresh token request failed: {}", e))?;
+        Ok(token_response_from_standard(&token_result))
+    }
 
-/// Polls the token endpoint until the user completes sign-in or the code expires.
-///
-/// Pass the `DeviceCodeState` returned from `request_device_code`. The oauth2
-/// crate uses the interval from the device response. Returns a `TokenResponse`
-/// with tokens on success.
-///
-/// # Errors
-///
-/// Returns an error if the device code expires, the user declines, the
-/// response is invalid, or the token response lacks access or refresh token.
-pub fn poll_for_tokens(
-    client_id: &str,
-    state: DeviceCodeState,
-) -> Result<TokenResponse, String> {
-    let device_auth_url = DeviceAuthorizationUrl::new(DEVICE_AUTH_URL.to_string())
-        .map_err(|e| format!("Invalid device authorization URL: {}", e))?;
-    let client = BasicClient::new(ClientId::new(client_id.to_string()))
-        .set_auth_uri(AuthUrl::new(AUTH_URL.to_string()).map_err(|e| format!("Invalid auth URL: {}", e))?)
-        .set_token_uri(TokenUrl::new(TOKEN_URL.to_string()).map_err(|e| format!("Invalid token URL: {}", e))?)
-        .set_device_authorization_url(device_auth_url);
-    let agent = http_client();
-    let token_result = client
-        .exchange_device_access_token(&state.0)
-        .request(&agent, thread::sleep, None)
-        .map_err(|e| {
-            let msg = e.to_string();
-            if msg.contains("expired") || msg.contains("expired_token") {
-                "Device code expired. Please run the command again.".to_string()
-            } else if msg.contains("declined") || msg.contains("authorization_declined") {
-                "Sign-in was declined.".to_string()
-            } else {
-                format!("Token request failed: {}", e)
-            }
-        })?;
+    /// Starts the device-code flow; returns user-facing details and state for polling.
+    pub fn request_device_code(&self) -> Result<(DeviceCodeResponse, DeviceCodeState), String> {
+        let details: StandardDeviceAuthorizationResponse = self.client
+            .exchange_device_code()
+            .add_scope(Scope::new(SCOPE_FILES.to_string()))
+            .add_scope(Scope::new(SCOPE_OFFLINE.to_string()))
+            .request(&self.agent)
+            .map_err(|e| format!("Device code request failed: {}", e))?;
 
-    Ok(token_response_from_standard(&token_result))
+        let verification_uri = details.verification_uri().to_string();
+        let user_code = details.user_code().secret().to_string();
+        let message = format!(
+            "To sign in, use a web browser to open {} and enter the code: {}",
+            verification_uri, user_code
+        );
+        let response = DeviceCodeResponse {
+            device_code: details.device_code().secret().to_string(),
+            user_code: user_code.clone(),
+            verification_uri: verification_uri.clone(),
+            message,
+            expires_in: details.expires_in().as_secs(),
+            interval: details.interval().as_secs().max(1),
+        };
+        Ok((response, DeviceCodeState(details)))
+    }
+
+    /// Polls for tokens using state from `request_device_code`.
+    pub fn poll_for_tokens(&self, state: DeviceCodeState) -> Result<TokenResponse, String> {
+        let token_result = self.client
+            .exchange_device_access_token(&state.0)
+            .request(&self.agent, thread::sleep, None)
+            .map_err(|e| {
+                let msg = e.to_string();
+                if msg.contains("expired") || msg.contains("expired_token") {
+                    "Device code expired. Please run the command again.".to_string()
+                } else if msg.contains("declined") || msg.contains("authorization_declined") {
+                    "Sign-in was declined.".to_string()
+                } else {
+                    format!("Token request failed: {}", e)
+                }
+            })?;
+
+        Ok(token_response_from_standard(&token_result))
+    }
 }
 
 fn token_response_from_standard(r: &BasicTokenResponse) -> TokenResponse {
     TokenResponse {
         access_token: Some(r.access_token().secret().to_string()),
-        refresh_token: r
-            .refresh_token()
-            .map(|t| t.secret().to_string())
-            .into(),
+        refresh_token: r.refresh_token().map(|t| t.secret().to_string()).into(),
         expires_in: r.expires_in().map(|d| d.as_secs()).into(),
         error: None,
         error_description: None,
@@ -147,29 +161,14 @@ fn token_response_from_standard(r: &BasicTokenResponse) -> TokenResponse {
 
 /// Exchanges a refresh token for a new access token.
 ///
-/// Uses the Microsoft Entra token endpoint with `grant_type=refresh_token`.
-/// On success returns a `TokenResponse` with at least `access_token`; Microsoft
-/// may also return a new `refresh_token` and `expires_in`.
-///
-/// # Errors
-///
-/// Returns an error if the HTTP request fails, the response is not 200, the
-/// body is not valid, or the response contains an OAuth error or lacks
-/// an access_token.
+/// When `client_id` is `None`, uses the default Azure app client ID.
+/// Prefer using [`OneDriveAuthorizer::refresh_access_token`] when you have an authorizer.
 pub fn refresh_access_token(
-    client_id: &str,
+    client_id: Option<&str>,
     refresh_token: &str,
 ) -> Result<TokenResponse, String> {
-    let client = BasicClient::new(ClientId::new(client_id.to_string()))
-        .set_auth_uri(AuthUrl::new(AUTH_URL.to_string()).map_err(|e| format!("Invalid auth URL: {}", e))?)
-        .set_token_uri(TokenUrl::new(TOKEN_URL.to_string()).map_err(|e| format!("Invalid token URL: {}", e))?);
-    let agent = http_client();
-    let token_result = client
-        .exchange_refresh_token(&RefreshToken::new(refresh_token.to_string()))
-        .request(&agent)
-        .map_err(|e| format!("Refresh token request failed: {}", e))?;
-
-    Ok(token_response_from_standard(&token_result))
+    let authorizer = OneDriveAuthorizer::new(client_id.map(String::from))?;
+    authorizer.refresh_access_token(refresh_token)
 }
 
 /// Reads the `exp` claim from a JWT access token payload.

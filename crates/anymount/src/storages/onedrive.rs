@@ -2,7 +2,7 @@ use crate::auth::{jwt_expires_at, refresh_access_token};
 use crate::error::Error;
 use parking_lot::RwLock;
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::path::{Component, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::storage::{DirEntry, Storage, WriteAt};
@@ -13,9 +13,9 @@ const DEFAULT_TOKEN_EXPIRY_BUFFER_SECS: u64 = 60;
 /// OneDrive storage configuration.
 ///
 /// At least one of `access_token` or `refresh_token` must be set. If only
-/// `access_token` is set it must not be expired. If `refresh_token` is set,
-/// `client_id` is required. Optional `token_expiry_buffer_secs` defaults to
-/// 60.
+/// `access_token` is set it must not be expired. Optional `client_id` defaults
+/// to the built-in Azure app when refreshing. Optional `token_expiry_buffer_secs`
+/// defaults to 60.
 #[derive(Clone, Debug)]
 pub struct OneDriveConfig {
     pub root: PathBuf,
@@ -33,19 +33,14 @@ impl OneDriveConfig {
     ///
     /// # Errors
     ///
-    /// Returns `InvalidConfig` if neither token is set, access_token is expired
-    /// without a refresh_token, or refresh_token is set without client_id.
+    /// Returns `InvalidConfig` if neither token is set or access_token is expired
+    /// without a refresh_token.
     pub fn connect(self) -> Result<OneDriveStorage, Error> {
         let has_access = self.access_token.is_some();
         let has_refresh = self.refresh_token.is_some();
         if !has_access && !has_refresh {
             return Err(Error::InvalidConfig(
                 "OneDrive requires access_token or refresh_token".into(),
-            ));
-        }
-        if has_refresh && self.client_id.is_none() {
-            return Err(Error::InvalidConfig(
-                "OneDrive refresh_token requires client_id".into(),
             ));
         }
         let buffer_secs = self
@@ -108,15 +103,15 @@ impl OneDriveStorage {
                 .map(|exp| exp <= now + buffer)
                 .unwrap_or(true);
         if need_refresh {
-            let (refresh_token, client_id) = match (self.refresh_token.as_deref(), self.client_id.as_deref()) {
-                (Some(rt), Some(cid)) => (rt, cid),
-                _ => {
+            let refresh_token = match self.refresh_token.as_deref() {
+                Some(rt) => rt,
+                None => {
                     return Err(
                         "access token expired or missing and no refresh_token available".to_string(),
                     );
                 }
             };
-            let response = refresh_access_token(client_id, refresh_token)
+            let response = refresh_access_token(self.client_id.as_deref(), refresh_token)
                 .map_err(|e| format!("token refresh failed: {}", e))?;
             let access_token = response
                 .access_token
@@ -130,12 +125,20 @@ impl OneDriveStorage {
     }
 
     fn path_to_graph_segment(path: &PathBuf) -> String {
-        let s = path.to_string_lossy();
-        let s = s.trim_start_matches('/').replace('\\', "/");
-        if s.is_empty() {
+        if path.as_os_str().is_empty() {
             return "".to_string();
         }
-        urlencoding::encode(&s).into_owned()
+        let has_normal = path.components().any(|c| matches!(c, Component::Normal(_)));
+        if !has_normal {
+            return "".to_string();
+        }
+        let s = path.to_string_lossy();
+        let s = s.trim_start_matches('/').replace('\\', "/");
+        let s = s.trim_end_matches('/');
+        if s.is_empty() || s == "." {
+            return "".to_string();
+        }
+        urlencoding::encode(s).into_owned()
     }
 }
 
@@ -318,7 +321,7 @@ mod tests {
     }
 
     #[test]
-    fn config_fails_refresh_token_without_client_id() {
+    fn config_ok_with_refresh_token_without_client_id() {
         let config = OneDriveConfig {
             root: PathBuf::from("/"),
             endpoint: "https://graph.microsoft.com/v1.0".into(),
@@ -328,8 +331,7 @@ mod tests {
             token_expiry_buffer_secs: None,
         };
         let r = config.connect();
-        let Err(e) = r else { panic!("expected config to fail") };
-        assert!(e.to_string().contains("client_id"));
+        assert!(r.is_ok());
     }
 
     #[test]
@@ -383,6 +385,14 @@ mod tests {
     fn path_to_graph_segment() {
         assert_eq!(
             OneDriveStorage::path_to_graph_segment(&PathBuf::from("")),
+            ""
+        );
+        assert_eq!(
+            OneDriveStorage::path_to_graph_segment(&PathBuf::from(".")),
+            ""
+        );
+        assert_eq!(
+            OneDriveStorage::path_to_graph_segment(&PathBuf::from("/.")),
             ""
         );
         assert_eq!(

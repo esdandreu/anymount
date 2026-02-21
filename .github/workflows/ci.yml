@@ -28,11 +28,26 @@ jobs:
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Run tests (JUnit for analytics)
+        run: cargo nextest run --all-features --profile ci
+
       - name: Run tests with coverage
         run: cargo llvm-cov --all-features --lcov --output-path lcov.info
 
-      - name: Upload to Codecov
-        uses: codecov/codecov-action@v4
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
         with:
           files: lcov.info
+          disable_search: true
+          fail_ci_if_error: false
+
+      - name: Upload test results to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          report_type: test_results
+          files: target/nextest/ci/junit.xml
+          disable_search: true
           fail_ci_if_error: false

@@ -18,6 +18,7 @@ pub enum ConnectStorageSubcommand {
     /// Local directory as storage backend
     Local(LocalStorageArgs),
     /// OneDrive (Microsoft Graph) as storage backend
+    #[command(name = "onedrive")]
     OneDrive(OneDriveStorageArgs),
 }
 

@@ -47,7 +47,7 @@ impl<S: Storage> SyncFilter for Callbacks<S> {
         );
         let full_path = request.path().to_path_buf();
         let relative = match full_path.strip_prefix(&self.path) {
-            Ok(p) if p.as_os_str().is_empty() => PathBuf::from("."),
+            Ok(p) if p.as_os_str().is_empty() => PathBuf::new(),
             Ok(p) => p.to_path_buf(),
             Err(_) => {
                 info!(
@@ -81,7 +81,7 @@ impl<S: Storage> SyncFilter for Callbacks<S> {
         );
         let full_path = request.path().to_path_buf();
         let relative = match full_path.strip_prefix(&self.path) {
-            Ok(p) if p.as_os_str().is_empty() => PathBuf::from("."),
+            Ok(p) if p.as_os_str().is_empty() => PathBuf::new(),
             Ok(p) => p.to_path_buf(),
             Err(_) => {
                 info!(
