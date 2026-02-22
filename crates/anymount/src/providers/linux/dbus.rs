@@ -4,8 +4,8 @@ use zbus::fdo;
 use zbus::interface;
 
 const PROVIDER_NAME: &str = "Anymount";
-const PROVIDER_PATH: &str = "/org/anymount/CloudProviders";
-const BUS_NAME: &str = "org.anymount.CloudProviders";
+pub const PROVIDER_PATH: &str = "/org/anymount/CloudProviders";
+pub const BUS_NAME: &str = "org.anymount.CloudProviders";
 
 /// Exposes org.freedesktop.CloudProviders.Provider at the root path.
 #[derive(Clone, Default)]
@@ -62,9 +62,6 @@ pub async fn request_bus_name(connection: &zbus::Connection) -> zbus::Result<()>
     connection.request_name(BUS_NAME).await?;
     Ok(())
 }
-
-pub use PROVIDER_PATH;
-pub use BUS_NAME;
 
 #[cfg(test)]
 mod tests {

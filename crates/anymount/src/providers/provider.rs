@@ -1,4 +1,6 @@
-use crate::storages::{LocalStorage, OneDriveConfig, OneDriveStorage};
+use crate::storages::{LocalStorage, OneDriveConfig};
+#[cfg(target_os = "windows")]
+use crate::storages::OneDriveStorage;
 use std::path::PathBuf;
 use std::result::Result;
 

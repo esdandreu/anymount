@@ -2,7 +2,7 @@
 
 use super::dbus::{request_bus_name, AccountExporter, ProviderExporter, PROVIDER_PATH};
 use super::fuse::StorageFilesystem;
-use crate::providers::{Provider, ProviderConfiguration};
+use crate::providers::Provider;
 use crate::storages::Storage;
 use std::path::PathBuf;
 use std::result::Result;
@@ -83,7 +83,8 @@ pub async fn export_on_dbus(accounts: &[(PathBuf, AccountExporter)]) -> Result<(
     }
 
     tokio::spawn(async move {
-        let _ = connection.run_until(std::future::pending::<()>()).await;
+        let _ = connection;
+        std::future::pending::<()>().await;
     });
     Ok(())
 }

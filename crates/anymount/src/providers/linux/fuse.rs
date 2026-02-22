@@ -2,8 +2,8 @@
 
 use crate::storages::{DirEntry, Storage, WriteAt};
 use fuser::{
-    Errno, FileAttr, FileType, Generation, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry,
-    Request,
+    Errno, FileAttr, FileHandle, FileType, Generation, INodeNo, OpenFlags, ReplyAttr, ReplyData,
+    ReplyDirectory, ReplyEntry, Request,
 };
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -17,6 +17,7 @@ const TTL: Duration = Duration::from_secs(1);
 const FUSE_GENERATION: Generation = Generation(1);
 
 /// Metadata for a single node (file or directory) in the FUSE tree.
+#[derive(Clone)]
 struct NodeInfo {
     path: PathBuf,
     is_dir: bool,
@@ -84,7 +85,7 @@ impl<S: Storage> StorageFilesystem<S> {
         ino
     }
 
-    fn attr_from_info(&self, ino: u64, info: &NodeInfo) -> FileAttr {
+    fn attr_from_info(&self, ino: INodeNo, info: &NodeInfo) -> FileAttr {
         let kind = if info.is_dir {
             FileType::Directory
         } else {
@@ -115,11 +116,11 @@ impl<S: Storage> fuser::Filesystem for StorageFilesystem<S> {
     fn lookup(
         &self,
         _req: &Request,
-        parent: u64,
+        parent: INodeNo,
         name: &std::ffi::OsStr,
         reply: ReplyEntry,
     ) {
-        let parent_info = match self.get_info(parent) {
+        let parent_info = match self.get_info(parent.0) {
             Some(i) => i,
             None => {
                 reply.error(Errno::from_i32(libc::ENOENT));
@@ -134,7 +135,7 @@ impl<S: Storage> fuser::Filesystem for StorageFilesystem<S> {
             return;
         }
         if name_str == ".." {
-            let (ino, info) = if parent == ROOT_INO {
+            let (ino, info) = if parent.0 == ROOT_INO {
                 (ROOT_INO, self.get_info(ROOT_INO).unwrap())
             } else {
                 let grandparent = parent_info
@@ -150,7 +151,7 @@ impl<S: Storage> fuser::Filesystem for StorageFilesystem<S> {
                 let info = self.get_info(ino).unwrap();
                 (ino, info)
             };
-            let attr = self.attr_from_info(ino, &info);
+            let attr = self.attr_from_info(INodeNo(ino), &info);
             reply.entry(&TTL, &attr, FUSE_GENERATION);
             return;
         }
@@ -178,18 +179,18 @@ impl<S: Storage> fuser::Filesystem for StorageFilesystem<S> {
         let atime = entry.accessed();
         let ino = self.get_or_create_ino(child_path.clone(), is_dir, size, atime);
         let info = self.get_info(ino).unwrap();
-        let attr = self.attr_from_info(ino, &info);
+        let attr = self.attr_from_info(INodeNo(ino), &info);
         reply.entry(&TTL, &attr, FUSE_GENERATION);
     }
 
     fn getattr(
         &self,
         _req: &Request,
-        ino: u64,
-        _fh: Option<u64>,
+        ino: INodeNo,
+        _fh: Option<FileHandle>,
         reply: ReplyAttr,
     ) {
-        match self.get_info(ino) {
+        match self.get_info(ino.0) {
             Some(info) => {
                 let attr = self.attr_from_info(ino, &info);
                 reply.attr(&TTL, &attr);
@@ -201,15 +202,15 @@ impl<S: Storage> fuser::Filesystem for StorageFilesystem<S> {
     fn read(
         &self,
         _req: &Request,
-        ino: u64,
-        _fh: u64,
-        offset: i64,
+        ino: INodeNo,
+        _fh: FileHandle,
+        offset: u64,
         size: u32,
-        _flags: i32,
-        _lock_owner: Option<u64>,
+        _flags: OpenFlags,
+        _lock_owner: Option<fuser::LockOwner>,
         reply: ReplyData,
     ) {
-        let info = match self.get_info(ino) {
+        let info = match self.get_info(ino.0) {
             Some(i) => i,
             None => {
                 reply.error(Errno::from_i32(libc::ENOENT));
@@ -220,7 +221,6 @@ impl<S: Storage> fuser::Filesystem for StorageFilesystem<S> {
             reply.error(Errno::from_i32(libc::EISDIR));
             return;
         }
-        let offset = offset as u64;
         let end = (offset + size as u64).min(info.size);
         if offset >= end {
             reply.data(&[]);
@@ -260,12 +260,12 @@ impl<S: Storage> fuser::Filesystem for StorageFilesystem<S> {
     fn readdir(
         &self,
         _req: &Request,
-        ino: u64,
-        _fh: u64,
-        offset: i64,
-        reply: ReplyDirectory,
+        ino: INodeNo,
+        _fh: FileHandle,
+        offset: u64,
+        mut reply: ReplyDirectory,
     ) {
-        let info = match self.get_info(ino) {
+        let info = match self.get_info(ino.0) {
             Some(i) => i,
             None => {
                 reply.error(Errno::from_i32(libc::ENOENT));
@@ -283,9 +283,9 @@ impl<S: Storage> fuser::Filesystem for StorageFilesystem<S> {
                 return;
             }
         };
-        let mut offset = offset as u64;
+        let mut offset = offset;
         if offset == 0 {
-            if reply.add(ROOT_INO, offset, FileType::Directory, ".") {
+            if reply.add(INodeNo(ROOT_INO), offset, FileType::Directory, ".") {
                 reply.ok();
                 return;
             }
@@ -295,16 +295,20 @@ impl<S: Storage> fuser::Filesystem for StorageFilesystem<S> {
             let parent_ino = if info.path.as_os_str().is_empty() {
                 ROOT_INO
             } else {
-                *self.path_to_ino.read().get(&info.path.parent().unwrap_or(std::path::Path::new()).to_path_buf()).unwrap_or(&ROOT_INO)
+                *self
+                    .path_to_ino
+                    .read()
+                    .get(&info.path.parent().unwrap_or(std::path::Path::new("")).to_path_buf())
+                    .unwrap_or(&ROOT_INO)
             };
-            let parent_info = self.get_info(parent_ino).unwrap();
-            if reply.add(parent_ino, offset, FileType::Directory, "..") {
+            let _parent_info = self.get_info(parent_ino).unwrap();
+            if reply.add(INodeNo(parent_ino), offset, FileType::Directory, "..") {
                 reply.ok();
                 return;
             }
             offset += 1;
         }
-        let mut idx = (offset - 2) as usize;
+        let idx = (offset - 2) as usize;
         for entry in entries.iter().skip(idx) {
             let child_path = if info.path.as_os_str().is_empty() {
                 PathBuf::from(entry.file_name())
@@ -322,12 +326,11 @@ impl<S: Storage> fuser::Filesystem for StorageFilesystem<S> {
                 entry.size(),
                 entry.accessed(),
             );
-            if reply.add(child_ino, offset, kind, entry.file_name()) {
+            if reply.add(INodeNo(child_ino), offset, kind, entry.file_name()) {
                 reply.ok();
                 return;
             }
             offset += 1;
-            idx += 1;
         }
         reply.ok();
     }
