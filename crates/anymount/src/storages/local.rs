@@ -117,3 +117,95 @@ impl Storage for LocalStorage {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    struct RecordingWriter {
+        writes: Vec<(u64, Vec<u8>)>,
+    }
+
+    impl RecordingWriter {
+        fn new() -> Self {
+            Self { writes: Vec::new() }
+        }
+        fn total_bytes(&self) -> u64 {
+            self.writes.iter().map(|(_, b)| b.len() as u64).sum()
+        }
+        fn flat_bytes(&self) -> Vec<u8> {
+            self.writes.iter().flat_map(|(_, b)| b.iter().copied()).collect()
+        }
+    }
+
+    impl WriteAt for RecordingWriter {
+        fn write_at(&mut self, buf: &[u8], offset: u64) -> Result<(), String> {
+            self.writes.push((offset, buf.to_vec()));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn new_and_with_chunk_size() {
+        let storage = LocalStorage::new(PathBuf::from("/tmp")).with_chunk_size(4096);
+        let _ = storage;
+    }
+
+    #[test]
+    fn read_dir_returns_entries() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        let file_path = path.join("f.txt");
+        let content = b"hello world";
+        std::fs::write(&file_path, content).unwrap();
+        let subdir = path.join("sub");
+        std::fs::create_dir(&subdir).unwrap();
+
+        let storage = LocalStorage::new(path.to_path_buf());
+        let iter = storage.read_dir(PathBuf::new()).unwrap();
+        let entries: Vec<_> = iter.collect();
+        assert!(entries.len() >= 2);
+
+        let file_entry = entries.iter().find(|e| e.file_name() == "f.txt").unwrap();
+        assert_eq!(file_entry.file_name(), "f.txt");
+        assert!(!file_entry.is_dir());
+        assert_eq!(file_entry.size(), content.len() as u64);
+
+        let dir_entry = entries.iter().find(|e| e.file_name() == "sub").unwrap();
+        assert!(dir_entry.is_dir());
+    }
+
+    #[test]
+    fn read_file_at_writes_exact_range() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        let body: Vec<u8> = (0..5000).map(|i| (i % 256) as u8).collect();
+        let file_path = path.join("f");
+        std::fs::write(&file_path, &body).unwrap();
+
+        let storage = LocalStorage::new(path.to_path_buf());
+        let mut writer = RecordingWriter::new();
+        storage
+            .read_file_at(PathBuf::from("f"), &mut writer, 0..5000)
+            .unwrap();
+        assert_eq!(writer.total_bytes(), 5000);
+        assert_eq!(writer.flat_bytes(), body);
+    }
+
+    #[test]
+    fn read_file_at_caps_at_range() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+        let body: Vec<u8> = (0..10_000).map(|i| (i % 256) as u8).collect();
+        let file_path = path.join("f");
+        std::fs::write(&file_path, &body).unwrap();
+
+        let storage = LocalStorage::new(path.to_path_buf());
+        let mut writer = RecordingWriter::new();
+        storage
+            .read_file_at(PathBuf::from("f"), &mut writer, 0..5000)
+            .unwrap();
+        assert_eq!(writer.total_bytes(), 5000);
+    }
+}
