@@ -1,9 +1,11 @@
 //! Linux provider: FUSE mount + D-Bus org.freedesktop.CloudProviders.
 
-use super::dbus::{request_bus_name, AccountExporter, ProviderExporter, PROVIDER_PATH};
+use super::dbus::{AccountExporter, PROVIDER_PATH, ProviderExporter, request_bus_name};
 use super::fuse::StorageFilesystem;
 use crate::providers::Provider;
 use crate::storages::Storage;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::result::Result;
 use tracing::info;
@@ -34,20 +36,50 @@ impl Provider for LibCloudProvider {
     }
 }
 
+fn default_cache_base_dir() -> PathBuf {
+    if let Some(path) = std::env::var_os("XDG_CACHE_HOME") {
+        return PathBuf::from(path);
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home).join(".cache");
+    }
+    std::env::temp_dir()
+}
+
+fn cache_root_for_mount(path: &PathBuf) -> PathBuf {
+    let mut hasher = DefaultHasher::new();
+    path.to_string_lossy().hash(&mut hasher);
+    let mount_hash = format!("{:016x}", hasher.finish());
+    default_cache_base_dir()
+        .join("anymount")
+        .join("linux")
+        .join(mount_hash)
+}
+
 /// Mount storage at path with FUSE and return (path, BackgroundSession).
 pub fn mount_storage<S: Storage>(
     path: PathBuf,
     storage: S,
 ) -> Result<(PathBuf, fuser::BackgroundSession), String> {
     if !path.exists() {
-        std::fs::create_dir_all(&path).map_err(|e| format!("Failed to create mount path: {}", e))?;
+        std::fs::create_dir_all(&path)
+            .map_err(|e| format!("Failed to create mount path: {}", e))?;
     }
     let path = path
         .canonicalize()
         .map_err(|e| format!("Mount path: {}", e))?;
     info!("Mount path: {}", path.display());
+    let cache_root = cache_root_for_mount(&path);
+    std::fs::create_dir_all(&cache_root).map_err(|e| {
+        format!(
+            "Failed to create cache directory {}: {}",
+            cache_root.display(),
+            e
+        )
+    })?;
+    info!("Cache path: {}", cache_root.display());
 
-    let fs = StorageFilesystem::new(storage);
+    let fs = StorageFilesystem::new(storage, cache_root)?;
     let session = fuser::spawn_mount2(fs, &path, &fuser::Config::default())
         .map_err(|e| format!("FUSE mount failed: {}", e))?;
     Ok((path, session))
@@ -88,4 +120,3 @@ pub async fn export_on_dbus(accounts: &[(PathBuf, AccountExporter)]) -> Result<(
     });
     Ok(())
 }
-
