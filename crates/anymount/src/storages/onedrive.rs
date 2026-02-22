@@ -1,9 +1,9 @@
+use crate::auth::onedrive::OneDriveTokenSource;
 use crate::auth::token_response::jwt_expires_at;
-use crate::auth::refresh_access_token;
 use crate::error::Error;
-use parking_lot::RwLock;
 use serde::Deserialize;
 use std::path::{Component, PathBuf};
+use chrono::{DateTime, Utc};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::storage::{DirEntry, Storage, WriteAt};
@@ -15,8 +15,8 @@ const DEFAULT_TOKEN_EXPIRY_BUFFER_SECS: u64 = 60;
 ///
 /// At least one of `access_token` or `refresh_token` must be set. If only
 /// `access_token` is set it must not be expired. Optional `client_id` defaults
-/// to the built-in Azure app when refreshing. Optional `token_expiry_buffer_secs`
-/// defaults to 60.
+/// to the built-in Azure app when refreshing. Optional
+/// `token_expiry_buffer_secs` defaults to 60.
 #[derive(Clone, Debug)]
 pub struct OneDriveConfig {
     pub root: PathBuf,
@@ -24,8 +24,6 @@ pub struct OneDriveConfig {
     pub access_token: Option<String>,
     pub refresh_token: Option<String>,
     pub client_id: Option<String>,
-    /// Seconds before expiry to treat token as expired; default to 60 when
-    /// not set.
     pub token_expiry_buffer_secs: Option<u64>,
 }
 
@@ -34,8 +32,8 @@ impl OneDriveConfig {
     ///
     /// # Errors
     ///
-    /// Returns `InvalidConfig` if neither token is set or access_token is expired
-    /// without a refresh_token.
+    /// Returns `InvalidConfig` if neither token is set or access_token is
+    /// expired without a refresh_token.
     pub fn connect(self) -> Result<OneDriveStorage, Error> {
         let has_access = self.access_token.is_some();
         let has_refresh = self.refresh_token.is_some();
@@ -60,68 +58,28 @@ impl OneDriveConfig {
             }
         }
         let endpoint = self.endpoint.trim_end_matches('/').to_string();
-        let token_state = RwLock::new(TokenState {
-            access_token: self.access_token.clone(),
-            expires_at: self
-                .access_token
-                .as_ref()
-                .and_then(|t| jwt_expires_at(t)),
-        });
+        let token_source = OneDriveTokenSource::new(
+            self.refresh_token.clone(),
+            self.access_token.clone(),
+            self.client_id.clone(),
+            self.token_expiry_buffer_secs,
+        )
+        .map_err(Error::InvalidConfig)?;
         Ok(OneDriveStorage {
             root: self.root,
             endpoint,
-            token_state,
-            refresh_token: self.refresh_token,
-            client_id: self.client_id,
-            token_expiry_buffer_secs: buffer_secs,
+            token_source,
         })
     }
-}
-
-struct TokenState {
-    access_token: Option<String>,
-    expires_at: Option<SystemTime>,
 }
 
 pub struct OneDriveStorage {
     root: PathBuf,
     endpoint: String,
-    token_state: RwLock<TokenState>,
-    refresh_token: Option<String>,
-    client_id: Option<String>,
-    token_expiry_buffer_secs: u64,
+    token_source: OneDriveTokenSource,
 }
 
 impl OneDriveStorage {
-    /// Ensures we have a valid access token; refreshes if needed.
-    fn ensure_token(&self) -> Result<String, String> {
-        let mut state = self.token_state.write();
-        let now = SystemTime::now();
-        let buffer = Duration::from_secs(self.token_expiry_buffer_secs);
-        let need_refresh = state.access_token.is_none()
-            || state
-                .expires_at
-                .map(|exp| exp <= now + buffer)
-                .unwrap_or(true);
-        if need_refresh {
-            let refresh_token = match self.refresh_token.as_deref() {
-                Some(rt) => rt,
-                None => {
-                    return Err(
-                        "access token expired or missing and no refresh_token available".to_string(),
-                    );
-                }
-            };
-            let response = refresh_access_token(self.client_id.as_deref(), refresh_token)
-                .map_err(|e| format!("token refresh failed: {}", e))?;
-            let access_token = response.access_token.clone();
-            state.access_token = Some(access_token.clone());
-            state.expires_at = Some(now + Duration::from_secs(response.expires_in));
-            return Ok(access_token);
-        }
-        Ok(state.access_token.as_ref().unwrap().clone())
-    }
-
     fn path_to_graph_segment(path: &PathBuf) -> String {
         if path.as_os_str().is_empty() {
             return "".to_string();
@@ -177,41 +135,15 @@ impl DirEntry for OneDriveDirEntry {
     }
 }
 
-fn parse_last_modified(s: &str) -> SystemTime {
-    // ISO 8601 like "2024-01-15T12:00:00Z"; fallback to UNIX_EPOCH on parse failure.
-    let s = s.trim();
-    if s.len() >= 19 {
-        if let (Some(y), Some(m), Some(d), Some(h), Some(min), Some(sec)) = (
-            s.get(0..4).and_then(|x| x.parse::<u64>().ok()),
-            s.get(5..7).and_then(|x| x.parse::<u64>().ok()),
-            s.get(8..10).and_then(|x| x.parse::<u64>().ok()),
-            s.get(11..13).and_then(|x| x.parse::<u64>().ok()),
-            s.get(14..16).and_then(|x| x.parse::<u64>().ok()),
-            s.get(17..19).and_then(|x| x.parse::<u64>().ok()),
-        ) {
-            if (1..=12).contains(&m) && (1..=31).contains(&d) && h < 24 && min < 60 && sec < 60 {
-                let secs_since_epoch = (y as i64 - 1970) * 365 * 86400
-                    + (m as i64 - 1) * 31 * 86400
-                    + (d as i64 - 1) * 86400
-                    + h as i64 * 3600
-                    + min as i64 * 60
-                    + sec as i64;
-                if secs_since_epoch >= 0 {
-                    let d = Duration::from_secs(secs_since_epoch as u64);
-                    return UNIX_EPOCH + d;
-                }
-            }
-        }
-    }
-    UNIX_EPOCH
-}
-
 impl Storage for OneDriveStorage {
     type Entry = OneDriveDirEntry;
     type Iter = std::vec::IntoIter<OneDriveDirEntry>;
 
     fn read_dir(&self, path: PathBuf) -> std::result::Result<Self::Iter, String> {
-        let token = self.ensure_token()?;
+        let token = self
+            .token_source
+            .access_token()
+            .map_err(|e| format!("token: {}", e))?;
         let full_path = if path.as_os_str().is_empty() {
             self.root.clone()
         } else {
@@ -264,7 +196,10 @@ impl Storage for OneDriveStorage {
         writer: &mut impl WriteAt,
         range: std::ops::Range<u64>,
     ) -> std::result::Result<(), String> {
-        let token = self.ensure_token()?;
+        let token = self
+            .token_source
+            .access_token()
+            .map_err(|e| format!("token: {}", e))?;
         let full_path = self.root.join(path);
         let segment = Self::path_to_graph_segment(&full_path);
         let url = format!("{}/me/drive/root:{}:/content", self.endpoint, segment);
@@ -279,7 +214,10 @@ impl Storage for OneDriveStorage {
             let text = response
                 .into_string()
                 .unwrap_or_else(|_| String::from("(invalid body)"));
-            return Err(format!("OneDrive download failed: HTTP {} {}", status, text));
+            return Err(format!(
+                "OneDrive download failed: HTTP {} {}",
+                status, text
+            ));
         }
         let mut reader = response.into_reader();
         let mut pos = range.start;
@@ -299,6 +237,12 @@ impl Storage for OneDriveStorage {
     }
 }
 
+fn parse_last_modified(s: &str) -> SystemTime {
+    DateTime::parse_from_rfc3339(s.trim())
+        .map(|dt| dt.with_timezone(&Utc).into())
+        .unwrap_or(UNIX_EPOCH)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,7 +258,9 @@ mod tests {
             token_expiry_buffer_secs: None,
         };
         let r = config.connect();
-        let Err(e) = r else { panic!("expected config to fail") };
+        let Err(e) = r else {
+            panic!("expected config to fail")
+        };
         assert!(e.to_string().contains("access_token or refresh_token"));
     }
 
@@ -375,7 +321,9 @@ mod tests {
             token_expiry_buffer_secs: None,
         };
         let r = config.connect();
-        let Err(e) = r else { panic!("expected config to fail") };
+        let Err(e) = r else {
+            panic!("expected config to fail")
+        };
         assert!(e.to_string().contains("expired"));
     }
 

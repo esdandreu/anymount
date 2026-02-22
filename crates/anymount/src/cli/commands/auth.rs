@@ -21,11 +21,11 @@ impl StartedAuthorization for OneDriveStartedAuthorization {
     }
 
     fn message(&self) -> String {
-        self.display_message()
+        self.message()
     }
 
     fn verification_uri(&self) -> String {
-        self.display_verification_uri()
+        self.verification_uri()
     }
 }
 
