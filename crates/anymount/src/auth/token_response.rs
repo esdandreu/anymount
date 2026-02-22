@@ -53,10 +53,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn jwt_expires_at_valid() {
+    fn jwt_expires_at_valid() -> Result<(), Box<dyn std::error::Error>> {
         let token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjIwMDAwMDAwMDB9.c2ln";
-        let t = jwt_expires_at(token).unwrap();
-        assert_eq!(t.duration_since(UNIX_EPOCH).unwrap().as_secs(), 2000000000);
+        let t = jwt_expires_at(token).ok_or("missing exp")?;
+        assert_eq!(t.duration_since(UNIX_EPOCH)?.as_secs(), 2000000000);
+        Ok(())
     }
 
     #[test]

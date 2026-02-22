@@ -46,7 +46,10 @@ impl OneDriveConfig {
             .token_expiry_buffer_secs
             .unwrap_or(DEFAULT_TOKEN_EXPIRY_BUFFER_SECS);
         if has_access && !has_refresh {
-            let token = self.access_token.as_deref().unwrap();
+            let token = self
+                .access_token
+                .as_deref()
+                .ok_or_else(|| Error::InvalidConfig("access_token required".into()))?;
             if let Some(exp) = jwt_expires_at(token) {
                 let now = SystemTime::now();
                 let buffer = Duration::from_secs(buffer_secs);

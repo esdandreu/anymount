@@ -33,7 +33,7 @@ tracing-appender = "0.2"
 
 # Windows-specific dependencies
 [target.'cfg(target_os = "windows")'.dependencies]
-cloud-filter = "0.0.6"
+cloud-filter = { git = "https://github.com/esdandreu/cloud-filter-rs" }
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_Security",
@@ -50,6 +50,9 @@ windows = { version = "0.58", features = [
 default = []
 windows = []
 macos = []
+
+[lints.clippy]
+unwrap_used = "deny"
 
 [lib]
 crate-type = ["lib", "staticlib", "cdylib"]

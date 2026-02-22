@@ -23,7 +23,7 @@ mise run cli
 
 ### Windows
 - [**windows-rs**](https://github.com/microsoft/windows-rs) - Official Microsoft Rust bindings
-- [**cloud-filter**](https://docs.rs/cloud-filter) - Cloud Filter API wrapper
+- [**cloud-filter**](https://github.com/ho-229/cloud-filter-rs) - Cloud Filter API wrapper
 
 ## License
 
