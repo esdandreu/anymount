@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Anymount Cloud Provider
+NoDisplay=true
+Implements=org.freedesktop.CloudProviders
+
+[org.freedesktop.CloudProviders]
+BusName=org.anymount.CloudProviders
+ObjectPath=/org/anymount/CloudProviders

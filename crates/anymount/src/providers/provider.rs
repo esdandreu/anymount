@@ -69,7 +69,84 @@ pub fn connect_providers(
     Ok(providers)
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "linux")]
+pub fn connect_providers(
+    config: &impl ProvidersConfiguration,
+) -> Result<Vec<Box<dyn Provider>>, String> {
+    use super::linux::dbus::AccountExporter;
+    use super::linux::provider::{export_on_dbus, mount_storage, LibCloudProvider};
+    let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    let mut accounts: Vec<(std::path::PathBuf, AccountExporter)> = Vec::new();
+    let mut sessions: Vec<(std::path::PathBuf, fuser::BackgroundSession)> = Vec::new();
+    for provider_config in config.providers() {
+        let path = provider_config.path();
+        match provider_config.storage_config() {
+            StorageConfig::Local { root } => {
+                let storage = LocalStorage::new(root);
+                let (mount_path, session) = mount_storage(path, storage)?;
+                let name = mount_path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("Anymount")
+                    .to_string();
+                accounts.push((
+                    mount_path.clone(),
+                    AccountExporter {
+                        name: name.clone(),
+                        path: mount_path.display().to_string(),
+                        icon: String::new(),
+                        status: 0,
+                        status_details: String::new(),
+                    },
+                ));
+                sessions.push((mount_path, session));
+            }
+            StorageConfig::OneDrive {
+                root,
+                endpoint,
+                access_token,
+                refresh_token,
+                client_id,
+                token_expiry_buffer_secs,
+            } => {
+                let one_drive_config = OneDriveConfig {
+                    root,
+                    endpoint,
+                    access_token,
+                    refresh_token,
+                    client_id,
+                    token_expiry_buffer_secs,
+                };
+                let storage = one_drive_config.connect().map_err(|e| e.to_string())?;
+                let (mount_path, session) = mount_storage(path, storage)?;
+                let name = mount_path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("OneDrive")
+                    .to_string();
+                accounts.push((
+                    mount_path.clone(),
+                    AccountExporter {
+                        name,
+                        path: mount_path.display().to_string(),
+                        icon: String::new(),
+                        status: 0,
+                        status_details: String::new(),
+                    },
+                ));
+                sessions.push((mount_path, session));
+            }
+        }
+    }
+    rt.block_on(export_on_dbus(&accounts))?;
+    let providers: Vec<Box<dyn Provider>> = sessions
+        .into_iter()
+        .map(|(path, session)| Box::new(LibCloudProvider::new(path, session)) as Box<dyn Provider>)
+        .collect();
+    Ok(providers)
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 pub fn connect_providers(
     _config: &impl ProvidersConfiguration,
 ) -> Result<Vec<Box<dyn Provider>>, String> {
