@@ -1,11 +1,13 @@
-use crate::storages::{LocalStorage, OneDriveConfig};
 #[cfg(target_os = "windows")]
 use crate::storages::OneDriveStorage;
+use crate::storages::{LocalStorage, OneDriveConfig};
 use std::path::PathBuf;
 use std::result::Result;
 
 pub enum StorageConfig {
-    Local { root: PathBuf },
+    Local {
+        root: PathBuf,
+    },
     OneDrive {
         root: PathBuf,
         endpoint: String,
@@ -34,7 +36,7 @@ pub trait Provider {
 pub fn connect_providers(
     config: &impl ProvidersConfiguration,
 ) -> Result<Vec<Box<dyn Provider>>, String> {
-    use super::cloudfilter::{cleanup_registry, CloudFilterProvider};
+    use super::cloudfilter::{CloudFilterProvider, cleanup_registry};
     let mut providers: Vec<Box<dyn Provider>> = Vec::new();
     for provider_config in config.providers() {
         match provider_config.storage_config() {
@@ -75,8 +77,8 @@ pub fn connect_providers(
 pub fn connect_providers(
     config: &impl ProvidersConfiguration,
 ) -> Result<Vec<Box<dyn Provider>>, String> {
-    use super::linux::dbus::AccountExporter;
-    use super::linux::provider::{export_on_dbus, mount_storage, LibCloudProvider};
+    use super::libcloudprovider::dbus::AccountExporter;
+    use super::libcloudprovider::provider::{LibCloudProvider, export_on_dbus, mount_storage};
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     let mut accounts: Vec<(std::path::PathBuf, AccountExporter)> = Vec::new();
     let mut sessions: Vec<(std::path::PathBuf, fuser::BackgroundSession)> = Vec::new();
