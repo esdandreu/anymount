@@ -1,8 +1,11 @@
 use crate::Logger;
 use crate::storages::{LocalStorage, OneDriveConfig};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::result::Result;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum StorageConfig {
     Local {
         root: PathBuf,
@@ -10,9 +13,13 @@ pub enum StorageConfig {
     OneDrive {
         root: PathBuf,
         endpoint: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
         access_token: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         refresh_token: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         client_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         token_expiry_buffer_secs: Option<u64>,
     },
 }
@@ -60,7 +67,8 @@ pub fn connect_providers(
                 config.connect().map_err(|e| e.to_string())?
             }
         };
-        let provider = CloudFilterProvider::connect(provider_config, storage, logger)?;
+        let provider =
+            CloudFilterProvider::connect(provider_config, storage, logger.clone())?;
         providers.push(Box::new(provider) as Box<dyn Provider>);
     }
     cleanup_registry(config, logger)?;

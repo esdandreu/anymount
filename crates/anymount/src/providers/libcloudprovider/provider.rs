@@ -73,8 +73,7 @@ pub fn mount_storage<S: Storage, L: Logger + Clone + 'static>(
     let path = path
         .canonicalize()
         .map_err(|e| format!("Mount path: {}", e))?;
-    let mount_logger = logger.with_context("mount_path", path.display());
-    mount_logger.info(format!("Mount path: {}", path.display()));
+    logger.info(format!("Mount path: {}", path.display()));
     let cache_root = cache_root_for_mount(&path);
     std::fs::create_dir_all(&cache_root).map_err(|e| {
         format!(
@@ -83,9 +82,9 @@ pub fn mount_storage<S: Storage, L: Logger + Clone + 'static>(
             e
         )
     })?;
-    mount_logger.info(format!("Cache path: {}", cache_root.display()));
+    logger.info(format!("Cache path: {}", cache_root.display()));
 
-    let fs = StorageFilesystem::new(storage, cache_root, mount_logger)?;
+    let fs = StorageFilesystem::new(storage, cache_root, logger)?;
     let session = fuser::spawn_mount2(fs, &path, &fuser::Config::default())
         .map_err(|e| format!("FUSE mount failed: {}", e))?;
     Ok((path, session))

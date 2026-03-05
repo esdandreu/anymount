@@ -1,6 +1,9 @@
 use std::fmt::Display;
 
-/// Injected logger for logs (and later traces/metrics). Use static polymorphism via `L: Logger`.
+/// Injectable structured logger port with span support.
+///
+/// Adapters forward log events to backends like `tracing` or OpenTelemetry.
+/// Use static polymorphism via `L: Logger` at module boundaries.
 pub trait Logger: Clone + Send + Sync {
     fn trace(&self, msg: impl Display);
     fn debug(&self, msg: impl Display);
@@ -8,82 +11,65 @@ pub trait Logger: Clone + Send + Sync {
     fn warn(&self, msg: impl Display);
     fn error(&self, msg: impl Display);
 
-    /// Returns a logger that includes this key-value in all subsequent log calls.
-    fn with_context(&self, key: &str, value: impl Display) -> Self;
+    /// Run `f` inside a named span with optional key-value context.
+    ///
+    /// The default implementation runs `f` without creating a span.
+    fn in_span<F: FnOnce() -> R, R>(
+        &self,
+        _name: &'static str,
+        _context: &[(&str, &str)],
+        f: F,
+    ) -> R {
+        f()
+    }
 }
 
-/// Context attached to a logger for correlation (e.g. mount path).
+/// Adapter that forwards to the `tracing` crate
 #[derive(Clone, Default)]
-pub struct LoggerContext {
-    pub key: String,
-    pub value: String,
-}
-
-/// Adapter that forwards to the `tracing` crate.
-#[derive(Clone, Default)]
-pub struct TracingLogger {
-    context: Option<LoggerContext>,
-}
+pub struct TracingLogger;
 
 impl TracingLogger {
     pub fn new() -> Self {
-        Self::default()
-    }
-
-    fn emit(&self, level: tracing::Level, msg: impl Display) {
-        let msg = msg.to_string();
-        match level {
-            tracing::Level::TRACE => match &self.context {
-                Some(ctx) => tracing::trace!(key = %ctx.key, value = %ctx.value, "{}", msg),
-                None => tracing::trace!("{}", msg),
-            },
-            tracing::Level::DEBUG => match &self.context {
-                Some(ctx) => tracing::debug!(key = %ctx.key, value = %ctx.value, "{}", msg),
-                None => tracing::debug!("{}", msg),
-            },
-            tracing::Level::INFO => match &self.context {
-                Some(ctx) => tracing::info!(key = %ctx.key, value = %ctx.value, "{}", msg),
-                None => tracing::info!("{}", msg),
-            },
-            tracing::Level::WARN => match &self.context {
-                Some(ctx) => tracing::warn!(key = %ctx.key, value = %ctx.value, "{}", msg),
-                None => tracing::warn!("{}", msg),
-            },
-            tracing::Level::ERROR => match &self.context {
-                Some(ctx) => tracing::error!(key = %ctx.key, value = %ctx.value, "{}", msg),
-                None => tracing::error!("{}", msg),
-            },
-        }
+        Self
     }
 }
 
 impl Logger for TracingLogger {
     fn trace(&self, msg: impl Display) {
-        self.emit(tracing::Level::TRACE, msg);
+        self.in_span("trace", &[], || tracing::trace!("{}", msg));
     }
 
     fn debug(&self, msg: impl Display) {
-        self.emit(tracing::Level::DEBUG, msg);
+        tracing::debug!("{}", msg);
     }
 
     fn info(&self, msg: impl Display) {
-        self.emit(tracing::Level::INFO, msg);
+        tracing::info!("{}", msg);
     }
 
     fn warn(&self, msg: impl Display) {
-        self.emit(tracing::Level::WARN, msg);
+        tracing::warn!("{}", msg);
     }
 
     fn error(&self, msg: impl Display) {
-        self.emit(tracing::Level::ERROR, msg);
+        tracing::error!("{}", msg);
     }
 
-    fn with_context(&self, key: &str, value: impl Display) -> Self {
-        Self {
-            context: Some(LoggerContext {
-                key: key.to_string(),
-                value: value.to_string(),
-            }),
+    fn in_span<F: FnOnce() -> R, R>(
+        &self,
+        name: &'static str,
+        context: &[(&str, &str)],
+        f: F,
+    ) -> R {
+        if context.is_empty() {
+            tracing::info_span!("span", op = name).in_scope(f)
+        } else {
+            let formatted: String = context
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect::<Vec<_>>()
+                .join(" ");
+            tracing::info_span!("span", op = name, context = %formatted).in_scope(f)
         }
     }
 }
@@ -98,8 +84,23 @@ impl Logger for NoOpLogger {
     fn info(&self, _msg: impl Display) {}
     fn warn(&self, _msg: impl Display) {}
     fn error(&self, _msg: impl Display) {}
+}
 
-    fn with_context(&self, _key: &str, _value: impl Display) -> Self {
-        Self
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn in_span_runs_closure() {
+        let logger = NoOpLogger;
+        let result = logger.in_span("test_span", &[], || 42);
+        assert_eq!(result, 42);
+    }
+
+    #[test]
+    fn in_span_with_context_runs_closure() {
+        let logger = NoOpLogger;
+        let result = logger.in_span("test_span", &[("key", "value")], || "hello");
+        assert_eq!(result, "hello");
     }
 }

@@ -1,28 +1,43 @@
+use crate::config::ConfigDir;
 use crate::{
-    Logger, Provider, ProviderConfiguration, ProvidersConfiguration, StorageConfig, TracingLogger,
+    Config, Logger, Provider, ProviderFileConfig, ProvidersConfiguration, StorageConfig,
+    TracingLogger,
 };
 use clap::{Args, Subcommand};
 use std::path::PathBuf;
 use std::sync::mpsc;
 
-/// Connect command (CLI args). Logger is created inside [`ConnectCommand::execute`].
+/// Connect command. Providers can come from config files
+/// (`--name` / `--all`) or inline CLI args (`--path` + storage
+/// subcommand).
 #[derive(Args, Debug, Clone)]
 pub struct ConnectCommand {
-    /// Path to the mount point
+    /// Connect a named provider from config.
+    #[arg(long, conflicts_with_all = ["all", "path"])]
+    pub name: Option<String>,
+
+    /// Connect all configured providers.
+    #[arg(long, conflicts_with_all = ["name", "path"])]
+    pub all: bool,
+
+    /// Path to the mount point (inline mode).
+    #[arg(long, conflicts_with_all = ["name", "all"])]
+    pub path: Option<PathBuf>,
+
+    /// Config directory override.
     #[arg(long)]
-    pub path: PathBuf,
+    pub config_dir: Option<PathBuf>,
+
     #[command(subcommand)]
-    pub storage: ConnectStorageSubcommand,
+    pub storage: Option<ConnectStorageSubcommand>,
 }
 
 impl ConnectCommand {
-    /// Runs with default connector and waiter. Initializes the logger inside.
     pub fn execute(&self) -> Result<(), String> {
         let logger = TracingLogger::new();
         self._execute(&DefaultProviderConnector, &DefaultStopSignalWaiter, &logger)
     }
 
-    /// Internal entry point for injection (e.g. tests). Not part of the public API.
     pub(crate) fn _execute<C, W, L>(
         &self,
         connector: &C,
@@ -34,19 +49,75 @@ impl ConnectCommand {
         W: StopSignalWaiter,
         L: Logger + 'static,
     {
-        let providers = connector.connect(self, logger)?;
-        for provider in &providers {
-            logger.info(format!(
-                "Connected to {} at {}",
-                provider.kind(),
-                provider.path().display()
-            ));
+        if self.all {
+            let cd = self.config_dir();
+            let config = cd.load_all()?;
+            run_providers(&config, connector, waiter, logger)
+        } else if let Some(name) = &self.name {
+            let cd = self.config_dir();
+            let provider = cd.read(name)?;
+            let config = Config {
+                providers: vec![provider],
+            };
+            run_providers(&config, connector, waiter, logger)
+        } else if let (Some(path), Some(storage)) = (&self.path, &self.storage) {
+            let inline = InlineConfig {
+                path: path.clone(),
+                storage: storage.to_storage_config(),
+            };
+            let config = Config {
+                providers: vec![ProviderFileConfig {
+                    path: inline.path,
+                    storage: inline.storage,
+                }],
+            };
+            run_providers(&config, connector, waiter, logger)
+        } else {
+            Err("specify --name <NAME>, --all, or \
+                 --path <PATH> with a storage subcommand"
+                .to_owned())
         }
-        logger.info("All providers connected. Press Ctrl+C to disconnect.");
-        waiter.wait(logger);
-        drop(providers);
-        Ok(())
     }
+
+    fn config_dir(&self) -> ConfigDir {
+        match &self.config_dir {
+            Some(p) => ConfigDir::new(p.clone()),
+            None => ConfigDir::default(),
+        }
+    }
+}
+
+struct InlineConfig {
+    path: PathBuf,
+    storage: StorageConfig,
+}
+
+/// Shared connection logic: connect providers, wait for stop signal,
+/// then clean up.
+pub(crate) fn run_providers<P, C, W, L>(
+    config: &P,
+    connector: &C,
+    waiter: &W,
+    logger: &L,
+) -> Result<(), String>
+where
+    P: ProvidersConfiguration,
+    C: ProviderConnector,
+    W: StopSignalWaiter,
+    L: Logger + 'static,
+{
+    let providers = connector.connect(config, logger)?;
+    for provider in &providers {
+        logger.info(format!(
+            "Connected to {} at {}",
+            provider.kind(),
+            provider.path().display()
+        ));
+    }
+    logger.info("All providers connected. Press Ctrl+C to disconnect.");
+    waiter.wait(logger);
+    drop(providers);
+    Ok(())
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -92,7 +163,7 @@ pub struct OneDriveStorageArgs {
 }
 
 impl ConnectStorageSubcommand {
-    fn to_storage_config(&self) -> StorageConfig {
+    pub(crate) fn to_storage_config(&self) -> StorageConfig {
         match self {
             Self::Local(args) => StorageConfig::Local {
                 root: args.root.clone(),
@@ -106,22 +177,6 @@ impl ConnectStorageSubcommand {
                 token_expiry_buffer_secs: Some(args.token_expiry_buffer_secs),
             },
         }
-    }
-}
-
-impl ProviderConfiguration for ConnectCommand {
-    fn path(&self) -> PathBuf {
-        self.path.clone()
-    }
-
-    fn storage_config(&self) -> StorageConfig {
-        self.storage.to_storage_config()
-    }
-}
-
-impl ProvidersConfiguration for ConnectCommand {
-    fn providers(&self) -> Vec<&impl ProviderConfiguration> {
-        vec![self]
     }
 }
 
@@ -198,18 +253,21 @@ mod tests {
         fn wait<L: crate::Logger>(&self, _logger: &L) {}
     }
 
-    fn connect_cmd() -> ConnectCommand {
+    fn inline_cmd() -> ConnectCommand {
         ConnectCommand {
-            path: PathBuf::from("/tmp/mount"),
-            storage: ConnectStorageSubcommand::Local(LocalStorageArgs {
+            name: None,
+            all: false,
+            path: Some(PathBuf::from("/tmp/mount")),
+            config_dir: None,
+            storage: Some(ConnectStorageSubcommand::Local(LocalStorageArgs {
                 root: PathBuf::from("/tmp/root"),
-            }),
+            })),
         }
     }
 
     #[test]
-    fn execute_returns_connector_error_without_calling_real_connector() {
-        let cmd = connect_cmd();
+    fn execute_returns_connector_error() {
+        let cmd = inline_cmd();
         let logger = NoOpLogger;
         let err = cmd
             ._execute(&FailingConnector, &NoOpWaiter, &logger)
@@ -234,10 +292,78 @@ mod tests {
     }
 
     #[test]
-    fn execute_succeeds_with_empty_connector_and_noop_waiter() {
-        let cmd = connect_cmd();
+    fn execute_succeeds_with_inline_args() {
+        let cmd = inline_cmd();
         let logger = NoOpLogger;
         let result = cmd._execute(&EmptyConnector, &NoOpWaiter, &logger);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn execute_from_config_name() {
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+        let cd = ConfigDir::new(tmp.path().to_path_buf());
+        cd.write(
+            "test",
+            &ProviderFileConfig {
+                path: PathBuf::from("/mnt/test"),
+                storage: StorageConfig::Local {
+                    root: PathBuf::from("/data"),
+                },
+            },
+        )
+        .expect("write failed");
+
+        let cmd = ConnectCommand {
+            name: Some("test".to_owned()),
+            all: false,
+            path: None,
+            config_dir: Some(tmp.path().to_path_buf()),
+            storage: None,
+        };
+        let logger = NoOpLogger;
+        let result = cmd._execute(&EmptyConnector, &NoOpWaiter, &logger);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn execute_all_from_config() {
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+        let cd = ConfigDir::new(tmp.path().to_path_buf());
+        cd.write(
+            "a",
+            &ProviderFileConfig {
+                path: PathBuf::from("/mnt/a"),
+                storage: StorageConfig::Local {
+                    root: PathBuf::from("/data/a"),
+                },
+            },
+        )
+        .expect("write failed");
+
+        let cmd = ConnectCommand {
+            name: None,
+            all: true,
+            path: None,
+            config_dir: Some(tmp.path().to_path_buf()),
+            storage: None,
+        };
+        let logger = NoOpLogger;
+        let result = cmd._execute(&EmptyConnector, &NoOpWaiter, &logger);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn execute_without_args_returns_error() {
+        let cmd = ConnectCommand {
+            name: None,
+            all: false,
+            path: None,
+            config_dir: None,
+            storage: None,
+        };
+        let logger = NoOpLogger;
+        let result = cmd._execute(&EmptyConnector, &NoOpWaiter, &logger);
+        assert!(result.is_err());
     }
 }

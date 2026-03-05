@@ -1,4 +1,5 @@
 use crate::cli::commands::auth::AuthCommand;
+use crate::cli::commands::config::ConfigCommand;
 use crate::cli::commands::connect::ConnectCommand;
 use clap::{Parser, Subcommand};
 use std::result::Result;
@@ -20,6 +21,8 @@ pub struct Cli {
 pub enum Commands {
     /// Obtain tokens for storage configuration (e.g. OneDrive).
     Auth(AuthCommand),
+    /// Manage provider configuration files.
+    Config(ConfigCommand),
     /// Connect to a storage provider
     Connect(ConnectCommand),
 }
@@ -28,6 +31,7 @@ impl Cli {
     pub fn run(self) -> Result<(), String> {
         match self.command {
             Commands::Auth(cmd) => cmd.execute(),
+            Commands::Config(cmd) => cmd.execute(),
             Commands::Connect(cmd) => cmd.execute(),
         }
     }

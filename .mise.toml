@@ -17,7 +17,9 @@ outputs = ["target/**"]
 
 # Run the app
 [tasks.cli]
+alias = "anymount"
 description = "Run the application"
 depends = ["build"]
+sources = ["target/release/anymount-cli", "target\\release\\anymount-cli.exe"]
 run = "target/release/anymount-cli"
 run_windows = "target\\release\\anymount-cli.exe"

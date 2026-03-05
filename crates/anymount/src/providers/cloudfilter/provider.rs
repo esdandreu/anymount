@@ -19,11 +19,11 @@ pub struct CloudFilterProvider<S: Storage, L: Logger> {
     pub logger: L,
 }
 
-impl<S: Storage, L: Logger + Clone> CloudFilterProvider<S, L> {
+impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
     pub fn connect(
         config: &impl ProviderConfiguration,
         storage: S,
-        parent_logger: &L,
+        logger: L,
     ) -> Result<Arc<Self>, String> {
         let security_id = SecurityId::current_user().map_err(|e| e.to_string())?;
         let path = config.path();
@@ -31,7 +31,6 @@ impl<S: Storage, L: Logger + Clone> CloudFilterProvider<S, L> {
             std::fs::create_dir(&path)
                 .map_err(|e| format!("Failed to create mount path: {}", e))?;
         }
-        let logger = parent_logger.with_context("mount_path", path.display());
         logger.info(format!("Mount path: {}", path.display()));
         let path = absolute(path)
             .map_err(|e| format!("Mount path must exist and be accessible: {}", e))?;
@@ -66,13 +65,16 @@ impl<S: Storage, L: Logger + Clone> CloudFilterProvider<S, L> {
         // Connect session
         let session = Session::new();
         let connection = session
-            .connect(&path, Callbacks::new(path.clone(), storage, logger))
+            .connect(
+                &path,
+                Callbacks::new(path.clone(), storage, logger.clone()),
+            )
             .map_err(|e| format!("Failed to connect to sync root: {}", e))?;
 
         Ok(Arc::new(Self {
             path,
             id,
-            connection,
+            connection: Some(connection),
             logger,
         }))
     }
