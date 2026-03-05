@@ -65,10 +65,7 @@ impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
         // Connect session
         let session = Session::new();
         let connection = session
-            .connect(
-                &path,
-                Callbacks::new(path.clone(), storage, logger.clone()),
-            )
+            .connect(&path, Callbacks::new(path.clone(), storage, logger.clone()))
             .map_err(|e| format!("Failed to connect to sync root: {}", e))?;
 
         Ok(Arc::new(Self {

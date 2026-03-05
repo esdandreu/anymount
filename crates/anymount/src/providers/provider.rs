@@ -67,8 +67,7 @@ pub fn connect_providers(
                 config.connect().map_err(|e| e.to_string())?
             }
         };
-        let provider =
-            CloudFilterProvider::connect(provider_config, storage, logger.clone())?;
+        let provider = CloudFilterProvider::connect(provider_config, storage, logger.clone())?;
         providers.push(Box::new(provider) as Box<dyn Provider>);
     }
     cleanup_registry(config, logger)?;
