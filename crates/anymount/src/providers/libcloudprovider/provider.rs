@@ -1,7 +1,11 @@
 //! Linux provider: FUSE mount + D-Bus org.freedesktop.CloudProviders.
 
-use super::dbus::{AccountExporter, PROVIDER_PATH, ProviderExporter, request_bus_name};
+use super::dbus::{
+    new_account_interfaces, AccountExporter, ActionMessage, PROVIDER_PATH, ProviderExporter,
+    request_bus_name,
+};
 use super::fuse::StorageFilesystem;
+use super::gtk_dbus::{ACTION_FREE_LOCAL_CACHE, ACTION_OPEN_FOLDER};
 use crate::providers::Provider;
 use crate::storages::Storage;
 use std::collections::hash_map::DefaultHasher;
@@ -46,7 +50,7 @@ fn default_cache_base_dir() -> PathBuf {
     std::env::temp_dir()
 }
 
-fn cache_root_for_mount(path: &PathBuf) -> PathBuf {
+pub(crate) fn cache_root_for_mount(path: &PathBuf) -> PathBuf {
     let mut hasher = DefaultHasher::new();
     path.to_string_lossy().hash(&mut hasher);
     let mount_hash = format!("{:016x}", hasher.finish());
@@ -85,6 +89,25 @@ pub fn mount_storage<S: Storage>(
     Ok((path, session))
 }
 
+async fn run_actions(mut rx: tokio::sync::mpsc::UnboundedReceiver<ActionMessage>) {
+    while let Some((mount_path, cache_root, action_name)) = rx.recv().await {
+        match action_name.as_str() {
+            ACTION_OPEN_FOLDER => {
+                let _ = open::that(&mount_path);
+            }
+            ACTION_FREE_LOCAL_CACHE => {
+                let cache_root = cache_root.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    let _ = std::fs::remove_dir_all(&cache_root);
+                    std::fs::create_dir_all(&cache_root).ok();
+                })
+                .await;
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Register provider and accounts on D-Bus and spawn the connection loop.
 pub async fn export_on_dbus(accounts: &[(PathBuf, AccountExporter)]) -> Result<(), String> {
     let connection = zbus::Connection::session()
@@ -93,6 +116,9 @@ pub async fn export_on_dbus(accounts: &[(PathBuf, AccountExporter)]) -> Result<(
     request_bus_name(&connection)
         .await
         .map_err(|e| format!("D-Bus request name: {}", e))?;
+
+    let (action_tx, action_rx) = tokio::sync::mpsc::unbounded_channel::<ActionMessage>();
+    tokio::spawn(run_actions(action_rx));
 
     connection
         .object_server()
@@ -105,13 +131,30 @@ pub async fn export_on_dbus(accounts: &[(PathBuf, AccountExporter)]) -> Result<(
         .await
         .map_err(|e| format!("D-Bus ObjectManager: {}", e))?;
 
-    for (i, (_path, account)) in accounts.iter().enumerate() {
+    for (i, (path, account)) in accounts.iter().enumerate() {
+        let cache_root = cache_root_for_mount(path);
+        let (cloud, actions, menus) = new_account_interfaces(
+            account.clone(),
+            path.display().to_string(),
+            cache_root,
+            action_tx.clone(),
+        );
         let object_path = format!("/org/anymount/CloudProviders/Account_{}", i);
         connection
             .object_server()
-            .at(object_path.as_str(), account.clone())
+            .at(object_path.as_str(), cloud)
             .await
             .map_err(|e| format!("D-Bus Account {}: {}", i, e))?;
+        connection
+            .object_server()
+            .at(object_path.as_str(), actions)
+            .await
+            .map_err(|e| format!("D-Bus Account {} gtk.Actions: {}", i, e))?;
+        connection
+            .object_server()
+            .at(object_path.as_str(), menus)
+            .await
+            .map_err(|e| format!("D-Bus Account {} gtk.Menus: {}", i, e))?;
     }
 
     tokio::spawn(async move {
