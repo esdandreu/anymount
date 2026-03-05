@@ -1,14 +1,17 @@
 use super::provider::ID_PREFIX;
+use crate::Logger;
 use crate::providers::{ProviderConfiguration, ProvidersConfiguration};
-use tracing::{error, info};
 use windows::{
     Foundation::Collections::IVectorView,
     Storage::Provider::{StorageProviderSyncRootInfo, StorageProviderSyncRootManager},
 };
 
 /// Cleanup the registry of any non-configured registered sync roots.
-pub fn cleanup_registry(configuration: &impl ProvidersConfiguration) -> Result<(), String> {
-    _cleanup_registry::<StorageProviderSyncRootManager>(configuration)
+pub fn cleanup_registry<L: Logger>(
+    configuration: &impl ProvidersConfiguration,
+    logger: &L,
+) -> Result<(), String> {
+    _cleanup_registry::<StorageProviderSyncRootManager, L>(configuration, logger)
 }
 
 /// Trait for a registry manager.
@@ -28,8 +31,9 @@ impl RegistryManager for StorageProviderSyncRootManager {
 }
 
 /// Cleanup the registry of any non-configured registered sync roots.
-fn _cleanup_registry<Registry: RegistryManager>(
+fn _cleanup_registry<Registry: RegistryManager, L: Logger>(
     configuration: &impl ProvidersConfiguration,
+    logger: &L,
 ) -> Result<(), String> {
     let sync_roots = Registry::get_currently_registered()?;
     for sync_root in sync_roots {
@@ -47,10 +51,10 @@ fn _cleanup_registry<Registry: RegistryManager>(
         let sync_root_path = match get_sync_root_path(&sync_root) {
             Ok(path) => path,
             Err(_) => {
-                info!(
+                logger.info(format!(
                     "Failed to get path for sync root {}, skipping",
                     id.to_string()
-                );
+                ));
                 continue;
             }
         };
@@ -61,17 +65,17 @@ fn _cleanup_registry<Registry: RegistryManager>(
         }
 
         match Registry::unregister(&id) {
-            Ok(()) => info!(
+            Ok(()) => logger.info(format!(
                 "Unregistered non-configured sync root {} at {}",
                 id.to_string(),
                 sync_root_path
-            ),
-            Err(e) => error!(
+            )),
+            Err(e) => logger.error(format!(
                 "Failed to unregister {} at {} {:?}",
                 id.to_string(),
                 sync_root_path,
                 e
-            ),
+            )),
         }
     }
 

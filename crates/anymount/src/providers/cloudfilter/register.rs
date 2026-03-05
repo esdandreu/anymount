@@ -1,8 +1,8 @@
-use crate::storages::Storage;
 use super::CloudFilterProvider;
+use crate::Logger;
+use crate::storages::Storage;
 use std::path::{Path, PathBuf};
 use std::result::Result;
-use tracing::{error, info, warn};
 use windows::Storage::Provider::*;
 use windows::Storage::StorageFolder;
 use windows::Win32::Storage::CloudFilters::{
@@ -64,12 +64,12 @@ impl Default for RegistrationConfig {
 }
 
 /// Register a sync root with Windows Cloud Filter API
-impl<S: Storage> CloudFilterProvider<S> {
-    pub fn register_sync_root(config: &RegistrationConfig) -> Result<(), crate::Error> {
-        info!(
+impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
+    pub fn register_sync_root(&self, config: &RegistrationConfig) -> Result<(), crate::Error> {
+        self.logger.info(format!(
             "Registering sync root: {} at {:?}",
             config.display_name, config.sync_root_path
-        );
+        ));
 
         // Ensure the sync root directory exists
         std::fs::create_dir_all(&config.sync_root_path)?;
@@ -168,11 +168,12 @@ impl<S: Storage> CloudFilterProvider<S> {
         // Register using WinRT API
         match StorageProviderSyncRootManager::Register(&sync_root_info) {
             Ok(_) => {
-                info!("Sync root registered successfully");
+                self.logger.info("Sync root registered successfully");
                 Ok(())
             }
             Err(e) => {
-                error!("Failed to register sync root: {:?}", e);
+                self.logger
+                    .error(format!("Failed to register sync root: {:?}", e));
                 Err(crate::Error::Platform(format!(
                     "Failed to register sync root: {:?}",
                     e
@@ -182,8 +183,9 @@ impl<S: Storage> CloudFilterProvider<S> {
     }
 
     /// Unregister a sync root
-    pub fn unregister_sync_root(sync_root_path: &Path) -> Result<(), crate::Error> {
-        info!("Unregistering sync root: {:?}", sync_root_path);
+    pub fn unregister_sync_root(&self, sync_root_path: &Path) -> Result<(), crate::Error> {
+        self.logger
+            .info(format!("Unregistering sync root: {:?}", sync_root_path));
 
         // Get the folder name as ID
         let folder_name = sync_root_path
@@ -193,7 +195,7 @@ impl<S: Storage> CloudFilterProvider<S> {
 
         match StorageProviderSyncRootManager::Unregister(&HSTRING::from(folder_name)) {
             Ok(_) => {
-                info!("Sync root unregistered successfully");
+                self.logger.info("Sync root unregistered successfully");
                 Ok(())
             }
             Err(e) => {
@@ -202,11 +204,15 @@ impl<S: Storage> CloudFilterProvider<S> {
                 // Check for specific error codes
                 if err_str.contains("0x8007017C") {
                     // ERROR_CLOUD_FILE_INVALID_REQUEST - sync root is still connected
-                    error!("Failed to unregister sync root: {:?}", e);
-                    error!("The sync root appears to have an active connection.");
-                    error!("Please ensure no applications are using the sync root and try again.");
-                    error!(
-                        "You may need to restart your computer to fully release the connection."
+                    self.logger
+                        .error(format!("Failed to unregister sync root: {:?}", e));
+                    self.logger
+                        .error("The sync root appears to have an active connection.");
+                    self.logger.error(
+                        "Please ensure no applications are using the sync root and try again.",
+                    );
+                    self.logger.error(
+                        "You may need to restart your computer to fully release the connection.",
                     );
                     Err(crate::Error::Platform(format!(
                         "Failed to unregister sync root (active connection detected): {:?}\n\
@@ -216,15 +222,18 @@ impl<S: Storage> CloudFilterProvider<S> {
                     )))
                 } else if err_str.contains("0x8007018B") {
                     // ERROR_CLOUD_FILE_ACCESS_DENIED - permission issue
-                    error!("Failed to unregister sync root: {:?}", e);
-                    error!("Access denied. Make sure you're running as Administrator.");
+                    self.logger
+                        .error(format!("Failed to unregister sync root: {:?}", e));
+                    self.logger
+                        .error("Access denied. Make sure you're running as Administrator.");
                     Err(crate::Error::Platform(format!(
                         "Failed to unregister sync root (access denied): {:?}\n\
                      Please run as Administrator.",
                         e
                     )))
                 } else {
-                    error!("Failed to unregister sync root: {:?}", e);
+                    self.logger
+                        .error(format!("Failed to unregister sync root: {:?}", e));
                     Err(crate::Error::Platform(format!(
                         "Failed to unregister sync root: {:?}",
                         e
@@ -235,7 +244,7 @@ impl<S: Storage> CloudFilterProvider<S> {
     }
 
     /// Check if a path is a registered sync root
-    pub fn is_sync_root_registered(_path: &Path) -> Result<bool, crate::Error> {
+    pub fn is_sync_root_registered(&self, _path: &Path) -> Result<bool, crate::Error> {
         let id = HSTRING::from("Anymount");
 
         match StorageProviderSyncRootManager::GetSyncRootInformationForId(&id) {
@@ -245,8 +254,12 @@ impl<S: Storage> CloudFilterProvider<S> {
     }
 
     /// Connect to an existing sync root to start receiving callbacks
-    pub fn connect_sync_root(sync_root_path: &Path) -> Result<CF_CONNECTION_KEY, crate::Error> {
-        info!("Connecting to sync root: {:?}", sync_root_path);
+    pub fn connect_sync_root(
+        &self,
+        sync_root_path: &Path,
+    ) -> Result<CF_CONNECTION_KEY, crate::Error> {
+        self.logger
+            .info(format!("Connecting to sync root: {:?}", sync_root_path));
 
         unsafe {
             let path = HSTRING::from(sync_root_path.to_string_lossy().as_ref());
@@ -254,11 +267,12 @@ impl<S: Storage> CloudFilterProvider<S> {
             // Connect to sync root (returns CF_CONNECTION_KEY directly in newer API)
             match CfConnectSyncRoot(&path, std::ptr::null(), None, CF_CONNECT_FLAGS(0)) {
                 Ok(key) => {
-                    info!("Connected to sync root successfully");
+                    self.logger.info("Connected to sync root successfully");
                     Ok(key)
                 }
                 Err(e) => {
-                    error!("Failed to connect to sync root: {:?}", e);
+                    self.logger
+                        .error(format!("Failed to connect to sync root: {:?}", e));
                     Err(crate::Error::Platform(format!(
                         "Failed to connect to sync root: {:?}",
                         e
@@ -269,17 +283,20 @@ impl<S: Storage> CloudFilterProvider<S> {
     }
 
     /// Disconnect from a sync root
-    pub fn disconnect_sync_root(connection_key: CF_CONNECTION_KEY) -> Result<(), crate::Error> {
-        info!("Disconnecting from sync root");
+    pub fn disconnect_sync_root(
+        &self,
+        connection_key: CF_CONNECTION_KEY,
+    ) -> Result<(), crate::Error> {
+        self.logger.info("Disconnecting from sync root");
 
         unsafe {
             match CfDisconnectSyncRoot(connection_key) {
                 Ok(_) => {
-                    info!("Disconnected successfully");
+                    self.logger.info("Disconnected successfully");
                     Ok(())
                 }
                 Err(e) => {
-                    warn!("Failed to disconnect: {:?}", e);
+                    self.logger.warn(format!("Failed to disconnect: {:?}", e));
                     Ok(()) // Don't fail on disconnect errors
                 }
             }

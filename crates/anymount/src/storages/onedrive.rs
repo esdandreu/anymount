@@ -1,9 +1,9 @@
 use crate::auth::onedrive::OneDriveTokenSource;
 use crate::auth::token_response::jwt_expires_at;
 use crate::error::Error;
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use std::path::{Component, PathBuf};
-use chrono::{DateTime, Utc};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::storage::{DirEntry, Storage, WriteAt};
@@ -31,11 +31,7 @@ pub trait BearerToken: Send + Sync + 'static {
 ///
 /// Returns an error string on network failure or when the response cannot be read.
 pub trait HttpGet: Send + Sync + 'static {
-    fn get(
-        &self,
-        url: &str,
-        headers: &[(&str, &str)],
-    ) -> Result<(u16, Vec<u8>), String>;
+    fn get(&self, url: &str, headers: &[(&str, &str)]) -> Result<(u16, Vec<u8>), String>;
 }
 
 /// Production HTTP GET implementation using ureq.
@@ -54,11 +50,7 @@ impl Default for UreqHttpGet {
 }
 
 impl HttpGet for UreqHttpGet {
-    fn get(
-        &self,
-        url: &str,
-        headers: &[(&str, &str)],
-    ) -> Result<(u16, Vec<u8>), String> {
+    fn get(&self, url: &str, headers: &[(&str, &str)]) -> Result<(u16, Vec<u8>), String> {
         let mut request = ureq::get(url);
         for (k, v) in headers {
             request = request.set(*k, *v);
@@ -252,8 +244,8 @@ where
             let text = String::from_utf8_lossy(&body).into_owned();
             return Err(format!("OneDrive list failed: HTTP {} {}", status, text));
         }
-        let parsed: GraphChildrenResponse =
-            serde_json::from_slice(&body).map_err(|e| format!("OneDrive list response invalid: {}", e))?;
+        let parsed: GraphChildrenResponse = serde_json::from_slice(&body)
+            .map_err(|e| format!("OneDrive list response invalid: {}", e))?;
         let entries: Vec<OneDriveDirEntry> = parsed
             .value
             .into_iter()
@@ -433,8 +425,14 @@ mod tests {
             "/Docs"
         );
         assert!(DefaultStorage::path_to_graph_segment(&PathBuf::from("a/b")).contains("a"));
-        assert!(DefaultStorage::path_to_graph_segment(&PathBuf::from("Docs\\File.pdf")).contains("Docs"));
-        assert!(DefaultStorage::path_to_graph_segment(&PathBuf::from("La Desertica.pdf")).contains("%20"));
+        assert!(
+            DefaultStorage::path_to_graph_segment(&PathBuf::from("Docs\\File.pdf"))
+                .contains("Docs")
+        );
+        assert!(
+            DefaultStorage::path_to_graph_segment(&PathBuf::from("La Desertica.pdf"))
+                .contains("%20")
+        );
         assert!(DefaultStorage::path_to_graph_segment(&PathBuf::from("a/b/c")).contains("a"));
     }
 
@@ -470,11 +468,7 @@ mod tests {
     }
 
     impl HttpGet for MockHttpGet {
-        fn get(
-            &self,
-            _url: &str,
-            _headers: &[(&str, &str)],
-        ) -> Result<(u16, Vec<u8>), String> {
+        fn get(&self, _url: &str, _headers: &[(&str, &str)]) -> Result<(u16, Vec<u8>), String> {
             Ok((self.status, self.body.clone()))
         }
     }
@@ -536,7 +530,11 @@ mod tests {
             .read_file_at(PathBuf::from("f"), &mut writer, 0..5000)
             .unwrap();
         assert_eq!(writer.total_bytes(), 5000);
-        let flat: Vec<u8> = writer.writes.iter().flat_map(|(_, b)| b.iter().copied()).collect();
+        let flat: Vec<u8> = writer
+            .writes
+            .iter()
+            .flat_map(|(_, b)| b.iter().copied())
+            .collect();
         assert_eq!(flat, body);
     }
 
@@ -547,10 +545,7 @@ mod tests {
             root: PathBuf::from("/"),
             endpoint: "https://example.com".into(),
             token: StubToken("test".into()),
-            fetch: MockHttpGet {
-                status: 206,
-                body,
-            },
+            fetch: MockHttpGet { status: 206, body },
         };
         let mut writer = RecordingWriter::new();
         storage

@@ -1,8 +1,7 @@
 use super::Storage;
-use crate::{
-    providers::cloudfilter::placeholders::{dehydrate_file, get_placeholder_info},
-    storages::{DirEntry, WriteAt},
-};
+use crate::Logger;
+use crate::providers::cloudfilter::placeholders::{dehydrate_file, get_placeholder_info};
+use crate::storages::{DirEntry, WriteAt};
 use cloud_filter::{
     error::CResult,
     filter::{Request, SyncFilter, info, ticket},
@@ -14,46 +13,47 @@ use parking_lot::Mutex;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::SystemTime;
-use tracing::{error, info, warn};
 use windows::Win32::Storage::CloudFilters::CF_PIN_STATE_UNPINNED;
 
-pub struct Callbacks<S: Storage> {
+pub struct Callbacks<S: Storage, L: Logger> {
     path: PathBuf,
     storage: S,
+    logger: L,
     pending_dehydrate: Mutex<HashSet<PathBuf>>,
 }
 
-impl<S: Storage> Callbacks<S> {
-    pub fn new(path: PathBuf, storage: S) -> Self {
+impl<S: Storage, L: Logger> Callbacks<S, L> {
+    pub fn new(path: PathBuf, storage: S, logger: L) -> Self {
         Self {
             path,
             storage,
+            logger,
             pending_dehydrate: Mutex::new(HashSet::new()),
         }
     }
 }
 
-impl<S: Storage> SyncFilter for Callbacks<S> {
+impl<S: Storage, L: Logger> SyncFilter for Callbacks<S, L> {
     fn fetch_data(
         &self,
         request: Request,
         ticket: ticket::FetchData,
         info: info::FetchData,
     ) -> CResult<()> {
-        info!(
+        self.logger.info(format!(
             "fetch_data: path={:?}, range={:?}",
             request.path(),
             info.required_file_range()
-        );
+        ));
         let full_path = request.path().to_path_buf();
         let relative = match full_path.strip_prefix(&self.path) {
             Ok(p) if p.as_os_str().is_empty() => PathBuf::new(),
             Ok(p) => p.to_path_buf(),
             Err(_) => {
-                info!(
+                self.logger.info(format!(
                     "request path {:?} is not under sync root {:?}",
                     full_path, self.path
-                );
+                ));
                 return Err(cloud_filter::error::CloudErrorKind::Unsuccessful);
             }
         };
@@ -62,7 +62,7 @@ impl<S: Storage> SyncFilter for Callbacks<S> {
         self.storage
             .read_file_at(relative, &mut writer, range.clone())
             .map_err(|e| {
-                info!("read_file_at failed: {}", e);
+                self.logger.info(format!("read_file_at failed: {}", e));
                 cloud_filter::error::CloudErrorKind::Unsuccessful
             })?;
         CResult::Ok(())
@@ -74,25 +74,25 @@ impl<S: Storage> SyncFilter for Callbacks<S> {
         ticket: ticket::FetchPlaceholders,
         info: info::FetchPlaceholders,
     ) -> CResult<()> {
-        info!(
+        self.logger.info(format!(
             "fetch_placeholders: path={:?}, pattern={:?}",
             request.path(),
             info.pattern()
-        );
+        ));
         let full_path = request.path().to_path_buf();
         let relative = match full_path.strip_prefix(&self.path) {
             Ok(p) if p.as_os_str().is_empty() => PathBuf::new(),
             Ok(p) => p.to_path_buf(),
             Err(_) => {
-                info!(
+                self.logger.info(format!(
                     "request path {:?} is not under sync root {:?}",
                     full_path, self.path
-                );
+                ));
                 return Err(cloud_filter::error::CloudErrorKind::Unsuccessful);
             }
         };
         let iter = self.storage.read_dir(relative).map_err(|e| {
-            info!("read_dir failed: {}", e);
+            self.logger.info(format!("read_dir failed: {}", e));
             cloud_filter::error::CloudErrorKind::Unsuccessful
         })?;
         let blob: Vec<u8> = request.path().into_os_string().into_encoded_bytes();
@@ -114,17 +114,22 @@ impl<S: Storage> SyncFilter for Callbacks<S> {
             })
             .collect();
         if let Err(e) = ticket.pass_with_placeholder(&mut placeholders) {
-            info!("Failed to pass placeholders: {:?}", e);
+            self.logger
+                .info(format!("Failed to pass placeholders: {:?}", e));
         }
         CResult::Ok(())
     }
 
     fn cancel_fetch_data(&self, request: Request, _info: info::CancelFetchData) {
-        info!("cancel_fetch_data: path={:?}", request.path());
+        self.logger
+            .info(format!("cancel_fetch_data: path={:?}", request.path()));
     }
 
     fn cancel_fetch_placeholders(&self, request: Request, _info: info::CancelFetchPlaceholders) {
-        info!("cancel_fetch_placeholders: path={:?}", request.path());
+        self.logger.info(format!(
+            "cancel_fetch_placeholders: path={:?}",
+            request.path()
+        ));
     }
 
     fn dehydrate(
@@ -133,32 +138,34 @@ impl<S: Storage> SyncFilter for Callbacks<S> {
         ticket: ticket::Dehydrate,
         info: info::Dehydrate,
     ) -> CResult<()> {
-        info!(
+        self.logger.info(format!(
             "dehydrate: path={:?}, reason={:?}, background={}",
             request.path(),
             info.reason(),
             info.background()
-        );
+        ));
         ticket.pass().map_err(|e| {
-            info!("dehydrate pass failed: {:?}", e);
+            self.logger.info(format!("dehydrate pass failed: {:?}", e));
             cloud_filter::error::CloudErrorKind::Unsuccessful
         })
     }
 
     fn dehydrated(&self, request: Request, _info: info::Dehydrated) {
-        info!("dehydrated: path={:?}", request.path());
+        self.logger
+            .info(format!("dehydrated: path={:?}", request.path()));
     }
 
     fn opened(&self, request: Request, _info: info::Opened) {
-        info!("opened: path={:?}", request.path());
+        self.logger
+            .info(format!("opened: path={:?}", request.path()));
     }
 
     fn closed(&self, request: Request, _info: info::Closed) {
         let path = request.path().to_path_buf();
-        info!("closed: path={:?}", path);
+        self.logger.info(format!("closed: path={:?}", path));
         if self.pending_dehydrate.lock().remove(&path) {
             if let Err(e) = dehydrate_file(&path) {
-                error!("dehydrate_file failed: {}", e);
+                self.logger.error(format!("dehydrate_file failed: {}", e));
             }
         }
     }
@@ -169,49 +176,52 @@ impl<S: Storage> SyncFilter for Callbacks<S> {
         _ticket: ticket::Delete,
         _info: info::Delete,
     ) -> CResult<()> {
-        info!("delete: path={:?}", request.path());
+        self.logger
+            .info(format!("delete: path={:?}", request.path()));
         CResult::Ok(())
     }
 
     fn deleted(&self, request: Request, _info: info::Deleted) {
-        info!("deleted: path={:?}", request.path());
+        self.logger
+            .info(format!("deleted: path={:?}", request.path()));
     }
 
     fn rename(&self, request: Request, _ticket: ticket::Rename, info: info::Rename) -> CResult<()> {
-        info!(
+        self.logger.info(format!(
             "rename: from={:?} to={:?}",
             request.path(),
             info.target_path()
-        );
+        ));
         CResult::Ok(())
     }
 
     fn renamed(&self, request: Request, info: info::Renamed) {
-        info!(
+        self.logger.info(format!(
             "renamed: from={:?} to={:?}",
             info.source_path(),
             request.path()
-        );
+        ));
     }
 
     fn state_changed(&self, changes: Vec<PathBuf>) {
         for path in changes {
-            info!("state_changed: path={:?}", path);
+            self.logger.info(format!("state_changed: path={:?}", path));
             let file_info = match get_placeholder_info(&path) {
                 Ok(info) => info,
                 Err(e) => {
-                    error!("get_placeholder_info failed: {}", e);
+                    self.logger
+                        .error(format!("get_placeholder_info failed: {}", e));
                     continue;
                 }
             };
-            info!("file_info: {:?}", file_info);
+            self.logger.info(format!("file_info: {:?}", file_info));
             if file_info.pin_state == CF_PIN_STATE_UNPINNED && file_info.on_disk_size > 0 {
                 if let Err(e) = dehydrate_file(&path) {
-                    warn!(
+                    self.logger.warn(format!(
                         "dehydrate_file on state_changed failed, \
                          flagging for pending dehydration: {}",
                         e
-                    );
+                    ));
                     self.pending_dehydrate.lock().insert(path);
                 }
             }

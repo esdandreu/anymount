@@ -3,8 +3,8 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::Path;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Storage::CloudFilters::{
-    CfDehydratePlaceholder, CfGetPlaceholderInfo, CF_DEHYDRATE_FLAG_NONE, CF_IN_SYNC_STATE,
-    CF_PIN_STATE, CF_PLACEHOLDER_INFO_STANDARD, CF_PLACEHOLDER_STANDARD_INFO,
+    CF_DEHYDRATE_FLAG_NONE, CF_IN_SYNC_STATE, CF_PIN_STATE, CF_PLACEHOLDER_INFO_STANDARD,
+    CF_PLACEHOLDER_STANDARD_INFO, CfDehydratePlaceholder, CfGetPlaceholderInfo,
 };
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
@@ -61,9 +61,9 @@ pub struct PlaceholderState {
 /// Reads placeholder metadata for the given path (file or directory).
 pub fn get_placeholder_info(path: &Path) -> Result<PlaceholderState, String> {
     let handle = open_file_handle(path, FILE_READ_ATTRIBUTES.0, true)?;
-    let info_size =
-        (std::mem::size_of::<CF_PLACEHOLDER_STANDARD_INFO>() + (FILE_ID_MAX_LENGTH as usize) - 1)
-            as u32;
+    let info_size = (std::mem::size_of::<CF_PLACEHOLDER_STANDARD_INFO>()
+        + (FILE_ID_MAX_LENGTH as usize)
+        - 1) as u32;
     let mut buffer = vec![0u8; info_size as usize];
     unsafe {
         CfGetPlaceholderInfo(
@@ -84,11 +84,7 @@ pub fn get_placeholder_info(path: &Path) -> Result<PlaceholderState, String> {
         .replace('\0', "")
         .trim()
         .to_string();
-    let uuid = placeholder_id
-        .split(':')
-        .nth(1)
-        .unwrap_or("")
-        .to_string();
+    let uuid = placeholder_id.split(':').nth(1).unwrap_or("").to_string();
     Ok(PlaceholderState {
         placeholder_id,
         uuid,

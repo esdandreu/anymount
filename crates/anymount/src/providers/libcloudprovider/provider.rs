@@ -1,18 +1,18 @@
 //! Linux provider: FUSE mount + D-Bus org.freedesktop.CloudProviders.
 
 use super::dbus::{
-    new_account_interfaces, AccountExporter, ActionMessage, PROVIDER_PATH, ProviderExporter,
+    AccountExporter, ActionMessage, PROVIDER_PATH, ProviderExporter, new_account_interfaces,
     request_bus_name,
 };
 use super::fuse::StorageFilesystem;
 use super::gtk_dbus::{ACTION_FREE_LOCAL_CACHE, ACTION_OPEN_FOLDER};
+use crate::Logger;
 use crate::providers::Provider;
 use crate::storages::Storage;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::result::Result;
-use tracing::info;
 
 /// Linux provider: FUSE mount backed by Storage + D-Bus CloudProviders advertisement.
 pub struct LibCloudProvider {
@@ -61,9 +61,10 @@ pub(crate) fn cache_root_for_mount(path: &PathBuf) -> PathBuf {
 }
 
 /// Mount storage at path with FUSE and return (path, BackgroundSession).
-pub fn mount_storage<S: Storage>(
+pub fn mount_storage<S: Storage, L: Logger + Clone + 'static>(
     path: PathBuf,
     storage: S,
+    logger: &L,
 ) -> Result<(PathBuf, fuser::BackgroundSession), String> {
     if !path.exists() {
         std::fs::create_dir_all(&path)
@@ -72,7 +73,8 @@ pub fn mount_storage<S: Storage>(
     let path = path
         .canonicalize()
         .map_err(|e| format!("Mount path: {}", e))?;
-    info!("Mount path: {}", path.display());
+    let mount_logger = logger.with_context("mount_path", path.display());
+    mount_logger.info(format!("Mount path: {}", path.display()));
     let cache_root = cache_root_for_mount(&path);
     std::fs::create_dir_all(&cache_root).map_err(|e| {
         format!(
@@ -81,15 +83,18 @@ pub fn mount_storage<S: Storage>(
             e
         )
     })?;
-    info!("Cache path: {}", cache_root.display());
+    mount_logger.info(format!("Cache path: {}", cache_root.display()));
 
-    let fs = StorageFilesystem::new(storage, cache_root)?;
+    let fs = StorageFilesystem::new(storage, cache_root, mount_logger)?;
     let session = fuser::spawn_mount2(fs, &path, &fuser::Config::default())
         .map_err(|e| format!("FUSE mount failed: {}", e))?;
     Ok((path, session))
 }
 
-async fn run_actions(mut rx: tokio::sync::mpsc::UnboundedReceiver<ActionMessage>) {
+async fn run_actions<L: Logger>(
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<ActionMessage>,
+    _logger: L,
+) {
     while let Some((mount_path, cache_root, action_name)) = rx.recv().await {
         match action_name.as_str() {
             ACTION_OPEN_FOLDER => {
@@ -109,7 +114,10 @@ async fn run_actions(mut rx: tokio::sync::mpsc::UnboundedReceiver<ActionMessage>
 }
 
 /// Register provider and accounts on D-Bus and spawn the connection loop.
-pub async fn export_on_dbus(accounts: &[(PathBuf, AccountExporter)]) -> Result<(), String> {
+pub async fn export_on_dbus<L: Logger + Clone + 'static>(
+    accounts: &[(PathBuf, AccountExporter)],
+    logger: &L,
+) -> Result<(), String> {
     let connection = zbus::Connection::session()
         .await
         .map_err(|e| format!("D-Bus connection: {}", e))?;
@@ -118,7 +126,7 @@ pub async fn export_on_dbus(accounts: &[(PathBuf, AccountExporter)]) -> Result<(
         .map_err(|e| format!("D-Bus request name: {}", e))?;
 
     let (action_tx, action_rx) = tokio::sync::mpsc::unbounded_channel::<ActionMessage>();
-    tokio::spawn(run_actions(action_rx));
+    tokio::spawn(run_actions(action_rx, logger.clone()));
 
     connection
         .object_server()

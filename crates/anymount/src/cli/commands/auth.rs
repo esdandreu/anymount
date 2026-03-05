@@ -179,9 +179,7 @@ mod tests {
                 client_id: Some("test-client".into()),
             }),
         };
-        let err = cmd
-            ._execute(FailingAuthorizer, &NoOpUrlOpener)
-            .unwrap_err();
+        let err = cmd._execute(FailingAuthorizer, &NoOpUrlOpener).unwrap_err();
         assert_eq!(err, "mock device code error");
     }
 

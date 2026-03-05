@@ -1,9 +1,4 @@
-use std::{
-    ops::Range,
-    path::PathBuf,
-    result::Result,
-    time::SystemTime,
-};
+use std::{ops::Range, path::PathBuf, result::Result, time::SystemTime};
 
 pub trait Storage: Send + Sync + 'static {
     type Entry: DirEntry;

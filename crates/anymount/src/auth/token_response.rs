@@ -1,5 +1,5 @@
-use oauth2::basic::BasicTokenResponse;
 use oauth2::TokenResponse as OAuth2TokenResponse;
+use oauth2::basic::BasicTokenResponse;
 use serde::Deserialize;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -43,7 +43,8 @@ pub(crate) fn jwt_expires_at(access_token: &str) -> Option<SystemTime> {
     struct ExpClaim {
         exp: Option<u64>,
     }
-    let token_data = jsonwebtoken::dangerous::insecure_decode::<ExpClaim>(access_token.as_bytes()).ok()?;
+    let token_data =
+        jsonwebtoken::dangerous::insecure_decode::<ExpClaim>(access_token.as_bytes()).ok()?;
     let exp = token_data.claims.exp?;
     Some(UNIX_EPOCH + Duration::from_secs(exp))
 }

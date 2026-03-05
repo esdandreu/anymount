@@ -1,5 +1,4 @@
-#[cfg(target_os = "windows")]
-use crate::storages::OneDriveStorage;
+use crate::Logger;
 use crate::storages::{LocalStorage, OneDriveConfig};
 use std::path::PathBuf;
 use std::result::Result;
@@ -35,17 +34,13 @@ pub trait Provider {
 #[cfg(target_os = "windows")]
 pub fn connect_providers(
     config: &impl ProvidersConfiguration,
+    logger: &impl Logger,
 ) -> Result<Vec<Box<dyn Provider>>, String> {
     use super::cloudfilter::{CloudFilterProvider, cleanup_registry};
     let mut providers: Vec<Box<dyn Provider>> = Vec::new();
     for provider_config in config.providers() {
-        match provider_config.storage_config() {
-            StorageConfig::Local { root } => {
-                let storage = LocalStorage::new(root);
-                let provider =
-                    CloudFilterProvider::<LocalStorage>::connect(provider_config, storage)?;
-                providers.push(Box::new(provider) as Box<dyn Provider>);
-            }
+        let storage = match provider_config.storage_config() {
+            StorageConfig::Local { root } => LocalStorage::new(root),
             StorageConfig::OneDrive {
                 root,
                 endpoint,
@@ -62,20 +57,20 @@ pub fn connect_providers(
                     client_id,
                     token_expiry_buffer_secs,
                 };
-                let storage = config.connect().map_err(|e| e.to_string())?;
-                let provider =
-                    CloudFilterProvider::<OneDriveStorage>::connect(provider_config, storage)?;
-                providers.push(Box::new(provider) as Box<dyn Provider>);
+                config.connect().map_err(|e| e.to_string())?
             }
-        }
+        };
+        let provider = CloudFilterProvider::connect(provider_config, storage, logger)?;
+        providers.push(Box::new(provider) as Box<dyn Provider>);
     }
-    cleanup_registry(config)?;
+    cleanup_registry(config, logger)?;
     Ok(providers)
 }
 
 #[cfg(target_os = "linux")]
 pub fn connect_providers(
     config: &impl ProvidersConfiguration,
+    logger: &(impl Logger + 'static),
 ) -> Result<Vec<Box<dyn Provider>>, String> {
     use super::libcloudprovider::dbus::AccountExporter;
     use super::libcloudprovider::provider::{LibCloudProvider, export_on_dbus, mount_storage};
@@ -87,7 +82,7 @@ pub fn connect_providers(
         match provider_config.storage_config() {
             StorageConfig::Local { root } => {
                 let storage = LocalStorage::new(root);
-                let (mount_path, session) = mount_storage(path, storage)?;
+                let (mount_path, session) = mount_storage(path, storage, logger)?;
                 let name = mount_path
                     .file_name()
                     .and_then(|s| s.to_str())
@@ -122,7 +117,7 @@ pub fn connect_providers(
                     token_expiry_buffer_secs,
                 };
                 let storage = one_drive_config.connect().map_err(|e| e.to_string())?;
-                let (mount_path, session) = mount_storage(path, storage)?;
+                let (mount_path, session) = mount_storage(path, storage, logger)?;
                 let name = mount_path
                     .file_name()
                     .and_then(|s| s.to_str())
@@ -142,7 +137,7 @@ pub fn connect_providers(
             }
         }
     }
-    rt.block_on(export_on_dbus(&accounts))?;
+    rt.block_on(export_on_dbus(&accounts, logger))?;
     let providers: Vec<Box<dyn Provider>> = sessions
         .into_iter()
         .map(|(path, session)| Box::new(LibCloudProvider::new(path, session)) as Box<dyn Provider>)
@@ -153,6 +148,7 @@ pub fn connect_providers(
 #[cfg(not(any(target_os = "windows", target_os = "linux")))]
 pub fn connect_providers(
     _config: &impl ProvidersConfiguration,
+    _logger: &impl Logger,
 ) -> Result<Vec<Box<dyn Provider>>, String> {
     Err(String::from("Not supported on this platform"))
 }

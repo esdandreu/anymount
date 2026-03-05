@@ -80,9 +80,7 @@ impl Storage for LocalStorage {
         for entry in std::fs::read_dir(&full_path).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;
             let meta = entry.metadata().map_err(|e| e.to_string())?;
-            let accessed = meta
-                .accessed()
-                .unwrap_or(SystemTime::UNIX_EPOCH);
+            let accessed = meta.accessed().unwrap_or(SystemTime::UNIX_EPOCH);
             entries.push(LocalDirEntry {
                 file_name: entry.file_name().to_string_lossy().into_owned(),
                 is_dir: meta.is_dir(),
@@ -135,7 +133,10 @@ mod tests {
             self.writes.iter().map(|(_, b)| b.len() as u64).sum()
         }
         fn flat_bytes(&self) -> Vec<u8> {
-            self.writes.iter().flat_map(|(_, b)| b.iter().copied()).collect()
+            self.writes
+                .iter()
+                .flat_map(|(_, b)| b.iter().copied())
+                .collect()
         }
     }
 

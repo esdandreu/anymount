@@ -1,5 +1,6 @@
 //! Read-only FUSE filesystem backed by the [`Storage`] trait.
 
+use crate::Logger;
 use crate::storages::{DirEntry, Storage, WriteAt};
 use fuser::{
     Errno, FileAttr, FileHandle, FileType, Generation, INodeNo, OpenFlags, ReplyAttr, ReplyData,
@@ -13,7 +14,6 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
-use tracing::{debug, warn};
 
 const ROOT_INO: u64 = 1;
 const TTL: Duration = Duration::from_secs(1);
@@ -249,22 +249,23 @@ impl CachePort for SparseFsCache {
 }
 
 /// Read-only FUSE filesystem that delegates to a [`Storage`] implementation.
-pub struct StorageFilesystem<S: Storage> {
+pub struct StorageFilesystem<S: Storage, L: Logger + 'static> {
     storage: Arc<S>,
     cache: Arc<dyn CachePort>,
+    logger: L,
     next_ino: AtomicU64,
     ino_to_info: RwLock<HashMap<u64, NodeInfo>>,
     path_to_ino: RwLock<HashMap<PathBuf, u64>>,
     dir_cache: RwLock<HashMap<PathBuf, CachedDir>>,
 }
 
-impl<S: Storage> StorageFilesystem<S> {
-    pub fn new(storage: S, cache_root: PathBuf) -> Result<Self, String> {
+impl<S: Storage, L: Logger + 'static> StorageFilesystem<S, L> {
+    pub fn new(storage: S, cache_root: PathBuf, logger: L) -> Result<Self, String> {
         let cache = Arc::new(SparseFsCache::new(cache_root)?);
-        Ok(Self::new_with_cache(storage, cache))
+        Ok(Self::new_with_cache(storage, cache, logger))
     }
 
-    fn new_with_cache(storage: S, cache: Arc<dyn CachePort>) -> Self {
+    fn new_with_cache(storage: S, cache: Arc<dyn CachePort>, logger: L) -> Self {
         let storage = Arc::new(storage);
         let next_ino = AtomicU64::new(2);
         let ino_to_info = RwLock::new(HashMap::new());
@@ -285,6 +286,7 @@ impl<S: Storage> StorageFilesystem<S> {
         Self {
             storage,
             cache,
+            logger,
             next_ino,
             ino_to_info,
             path_to_ino,
@@ -386,7 +388,7 @@ impl<S: Storage> StorageFilesystem<S> {
     }
 }
 
-impl<S: Storage> fuser::Filesystem for StorageFilesystem<S> {
+impl<S: Storage, L: Logger + 'static> fuser::Filesystem for StorageFilesystem<S, L> {
     fn lookup(&self, _req: &Request, parent: INodeNo, name: &std::ffi::OsStr, reply: ReplyEntry) {
         let parent_info = match self.get_info(parent.0) {
             Some(i) => i,
@@ -489,12 +491,12 @@ impl<S: Storage> fuser::Filesystem for StorageFilesystem<S> {
             return;
         }
         if let Ok(buf) = self.cache.read_range(&info.path, offset, end) {
-            debug!(
-                path = %info.path.display(),
+            self.logger.debug(format!(
+                "served read from local sparse cache path={} offset={} size={}",
+                info.path.display(),
                 offset,
-                size = end - offset,
-                "served read from local sparse cache"
-            );
+                end - offset
+            ));
             reply.data(&buf);
             return;
         }
@@ -530,11 +532,11 @@ impl<S: Storage> fuser::Filesystem for StorageFilesystem<S> {
             .cache
             .write_range(&info.path, offset, &writer.buf, info.size)
         {
-            warn!(
-                path = %info.path.display(),
-                error = %err,
-                "failed to write data cache"
-            );
+            self.logger.warn(format!(
+                "failed to write data cache path={} error={}",
+                info.path.display(),
+                err
+            ));
         }
         reply.data(&writer.buf);
     }
@@ -561,11 +563,11 @@ impl<S: Storage> fuser::Filesystem for StorageFilesystem<S> {
         let entries = match self.read_dir_entries(info.path.clone()) {
             Ok(entries) => entries,
             Err(err) => {
-                warn!(
-                    path = %info.path.display(),
-                    error = %err,
-                    "readdir failed to list storage path"
-                );
+                self.logger.warn(format!(
+                    "readdir failed to list storage path path={} error={}",
+                    info.path.display(),
+                    err
+                ));
                 reply.error(Errno::from_i32(libc::EIO));
                 return;
             }
@@ -745,17 +747,26 @@ mod tests {
 
     #[test]
     fn child_start_index_maps_special_offsets() {
-        assert_eq!(StorageFilesystem::<LocalStorage>::child_start_index(0), 0);
         assert_eq!(
-            StorageFilesystem::<LocalStorage>::child_start_index(DOT_ENTRY_OFFSET),
+            StorageFilesystem::<LocalStorage, crate::NoOpLogger>::child_start_index(0),
             0
         );
         assert_eq!(
-            StorageFilesystem::<LocalStorage>::child_start_index(DOT_DOT_ENTRY_OFFSET),
+            StorageFilesystem::<LocalStorage, crate::NoOpLogger>::child_start_index(
+                DOT_ENTRY_OFFSET
+            ),
             0
         );
         assert_eq!(
-            StorageFilesystem::<LocalStorage>::child_start_index(FIRST_CHILD_ENTRY_OFFSET),
+            StorageFilesystem::<LocalStorage, crate::NoOpLogger>::child_start_index(
+                DOT_DOT_ENTRY_OFFSET
+            ),
+            0
+        );
+        assert_eq!(
+            StorageFilesystem::<LocalStorage, crate::NoOpLogger>::child_start_index(
+                FIRST_CHILD_ENTRY_OFFSET
+            ),
             1
         );
     }
@@ -763,14 +774,17 @@ mod tests {
     #[test]
     fn child_entry_offset_is_monotonic_and_starts_after_special_entries() {
         assert_eq!(
-            StorageFilesystem::<LocalStorage>::child_entry_offset(0),
+            StorageFilesystem::<LocalStorage, crate::NoOpLogger>::child_entry_offset(0),
             FIRST_CHILD_ENTRY_OFFSET
         );
         assert_eq!(
-            StorageFilesystem::<LocalStorage>::child_entry_offset(1),
+            StorageFilesystem::<LocalStorage, crate::NoOpLogger>::child_entry_offset(1),
             FIRST_CHILD_ENTRY_OFFSET + 1
         );
-        assert_eq!(StorageFilesystem::<LocalStorage>::child_entry_offset(7), 10);
+        assert_eq!(
+            StorageFilesystem::<LocalStorage, crate::NoOpLogger>::child_entry_offset(7),
+            10
+        );
     }
 
     #[test]
@@ -782,7 +796,8 @@ mod tests {
             read_file_calls,
         };
         let cache_root = temp_cache_root();
-        let fs = StorageFilesystem::new(storage, cache_root.path().to_path_buf()).unwrap();
+        let logger = crate::NoOpLogger;
+        let fs = StorageFilesystem::new(storage, cache_root.path().to_path_buf(), logger).unwrap();
         let path = PathBuf::new();
 
         let first = fs.read_dir_entries(path.clone()).unwrap();
@@ -802,7 +817,8 @@ mod tests {
             read_file_calls,
         };
         let cache_root = temp_cache_root();
-        let fs = StorageFilesystem::new(storage, cache_root.path().to_path_buf()).unwrap();
+        let logger = crate::NoOpLogger;
+        let fs = StorageFilesystem::new(storage, cache_root.path().to_path_buf(), logger).unwrap();
 
         let entries = fs.read_dir_entries(PathBuf::new()).unwrap();
         assert_eq!(entries.len(), 1);
@@ -846,7 +862,8 @@ mod tests {
             sync_calls: Arc::clone(&sync_calls),
             data: Mutex::new(HashMap::new()),
         });
-        let fs = StorageFilesystem::new_with_cache(storage, cache);
+        let logger = crate::NoOpLogger;
+        let fs = StorageFilesystem::new_with_cache(storage, cache, logger);
 
         let entries = fs.read_dir_entries(PathBuf::new()).unwrap();
 

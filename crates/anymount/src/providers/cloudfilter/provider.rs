@@ -1,32 +1,38 @@
 use super::callbacks::Callbacks;
 use super::{Provider, ProviderConfiguration, Storage};
+use crate::Logger;
 use cloud_filter::root::{
     Connection, HydrationType, PopulationType, SecurityId, Session, SyncRootId, SyncRootIdBuilder,
     SyncRootInfo,
 };
 use std::path::{PathBuf, absolute};
 use std::sync::Arc;
-use tracing::info;
 
 pub const ID_PREFIX: &'static str = "Anymount";
 
-pub struct CloudFilterProvider<S: Storage> {
+pub struct CloudFilterProvider<S: Storage, L: Logger> {
     path: PathBuf,
     #[allow(dead_code)]
     id: SyncRootId,
     #[allow(dead_code)]
-    connection: Connection<Callbacks<S>>,
+    connection: Option<Connection<Callbacks<S, L>>>,
+    pub logger: L,
 }
 
-impl<S: Storage> CloudFilterProvider<S> {
-    pub fn connect(config: &impl ProviderConfiguration, storage: S) -> Result<Arc<Self>, String> {
+impl<S: Storage, L: Logger + Clone> CloudFilterProvider<S, L> {
+    pub fn connect(
+        config: &impl ProviderConfiguration,
+        storage: S,
+        parent_logger: &L,
+    ) -> Result<Arc<Self>, String> {
         let security_id = SecurityId::current_user().map_err(|e| e.to_string())?;
         let path = config.path();
         if !path.exists() {
             std::fs::create_dir(&path)
                 .map_err(|e| format!("Failed to create mount path: {}", e))?;
         }
-        info!("Mount path: {}", path.display());
+        let logger = parent_logger.with_context("mount_path", path.display());
+        logger.info(format!("Mount path: {}", path.display()));
         let path = absolute(path)
             .map_err(|e| format!("Mount path must exist and be accessible: {}", e))?;
         let name = path
@@ -54,29 +60,32 @@ impl<S: Storage> CloudFilterProvider<S> {
 
             id.register(sync_root_info)
                 .map_err(|e| format!("Failed to register sync root: {}", e))?;
-            info!("Sync root registered: {}", name);
+            logger.info(format!("Sync root registered: {}", name));
         }
 
         // Connect session
         let session = Session::new();
         let connection = session
-            .connect(&path, Callbacks::new(path.clone(), storage))
+            .connect(&path, Callbacks::new(path.clone(), storage, logger))
             .map_err(|e| format!("Failed to connect to sync root: {}", e))?;
 
         Ok(Arc::new(Self {
             path,
             id,
             connection,
+            logger,
         }))
     }
 }
 
-impl<S: Storage> Provider for Arc<CloudFilterProvider<S>> {
+impl<S: Storage, L: Logger> Provider for Arc<CloudFilterProvider<S, L>> {
     fn kind(&self) -> &'static str {
         "CloudFilter"
     }
 
     fn path(&self) -> &PathBuf {
-        &self.path
+        self.path
+            .as_ref()
+            .expect("CloudFilterProvider used as Provider must be connected")
     }
 }

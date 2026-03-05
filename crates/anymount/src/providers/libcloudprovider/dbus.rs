@@ -177,9 +177,7 @@ impl AccountGtkActions {
         Ok(gtk_dbus::describe_action(enabled))
     }
 
-    fn describe_all(
-        &self,
-    ) -> fdo::Result<HashMap<String, (bool, String, Vec<OwnedValue>)>> {
+    fn describe_all(&self) -> fdo::Result<HashMap<String, (bool, String, Vec<OwnedValue>)>> {
         let mut out = HashMap::new();
         for name in gtk_dbus::action_names() {
             out.insert((*name).to_string(), gtk_dbus::describe_action(true));

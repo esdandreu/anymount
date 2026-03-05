@@ -1,9 +1,11 @@
-use crate::{Provider, ProviderConfiguration, ProvidersConfiguration, StorageConfig};
+use crate::{
+    Logger, Provider, ProviderConfiguration, ProvidersConfiguration, StorageConfig, TracingLogger,
+};
 use clap::{Args, Subcommand};
 use std::path::PathBuf;
 use std::sync::mpsc;
-use tracing::{error, info};
 
+/// Connect command (CLI args). Logger is created inside [`ConnectCommand::execute`].
 #[derive(Args, Debug, Clone)]
 pub struct ConnectCommand {
     /// Path to the mount point
@@ -11,6 +13,40 @@ pub struct ConnectCommand {
     pub path: PathBuf,
     #[command(subcommand)]
     pub storage: ConnectStorageSubcommand,
+}
+
+impl ConnectCommand {
+    /// Runs with default connector and waiter. Initializes the logger inside.
+    pub fn execute(&self) -> Result<(), String> {
+        let logger = TracingLogger::new();
+        self._execute(&DefaultProviderConnector, &DefaultStopSignalWaiter, &logger)
+    }
+
+    /// Internal entry point for injection (e.g. tests). Not part of the public API.
+    pub(crate) fn _execute<C, W, L>(
+        &self,
+        connector: &C,
+        waiter: &W,
+        logger: &L,
+    ) -> Result<(), String>
+    where
+        C: ProviderConnector,
+        W: StopSignalWaiter,
+        L: Logger + 'static,
+    {
+        let providers = connector.connect(self, logger)?;
+        for provider in &providers {
+            logger.info(format!(
+                "Connected to {} at {}",
+                provider.kind(),
+                provider.path().display()
+            ));
+        }
+        logger.info("All providers connected. Press Ctrl+C to disconnect.");
+        waiter.wait(logger);
+        drop(providers);
+        Ok(())
+    }
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -89,39 +125,12 @@ impl ProvidersConfiguration for ConnectCommand {
     }
 }
 
-impl ConnectCommand {
-    /// Runs with default connector and waiter.
-    pub fn execute(&self) -> Result<(), String> {
-        self._execute(&DefaultProviderConnector, &DefaultStopSignalWaiter)
-    }
-
-    /// Internal entry point for injection (e.g. tests). Not part of the public API.
-    pub(crate) fn _execute<C, W>(&self, connector: &C, waiter: &W) -> Result<(), String>
-    where
-        C: ProviderConnector,
-        W: StopSignalWaiter,
-    {
-        let providers = connector.connect(self)?;
-        for provider in &providers {
-            info!(
-                "Connected to {} at {}",
-                provider.kind(),
-                provider.path().display()
-            );
-        }
-        info!("All providers connected. Press Ctrl+C to disconnect.");
-        waiter.wait();
-        // Keep providers alive until here
-        drop(providers);
-        Ok(())
-    }
-}
-
 /// Port for connecting to storage providers. Inject a mock in tests.
 pub trait ProviderConnector {
-    fn connect<C>(&self, config: &C) -> Result<Vec<Box<dyn Provider>>, String>
+    fn connect<C, L>(&self, config: &C, logger: &L) -> Result<Vec<Box<dyn Provider>>, String>
     where
-        C: ProvidersConfiguration;
+        C: ProvidersConfiguration,
+        L: Logger + 'static;
 }
 
 /// Default connector that uses the platform cloud filter (e.g. Windows Cloud
@@ -130,18 +139,19 @@ pub trait ProviderConnector {
 pub struct DefaultProviderConnector;
 
 impl ProviderConnector for DefaultProviderConnector {
-    fn connect<C>(&self, config: &C) -> Result<Vec<Box<dyn Provider>>, String>
+    fn connect<C, L>(&self, config: &C, logger: &L) -> Result<Vec<Box<dyn Provider>>, String>
     where
         C: ProvidersConfiguration,
+        L: Logger + 'static,
     {
-        crate::connect_providers(config)
+        crate::connect_providers(config, logger)
     }
 }
 
 /// Port for blocking until the user requests disconnect (e.g. Ctrl+C). Inject
 /// a no-op in tests.
 pub trait StopSignalWaiter {
-    fn wait(&self);
+    fn wait<L: Logger>(&self, logger: &L);
 }
 
 /// Default waiter that blocks until Ctrl+C.
@@ -149,12 +159,12 @@ pub trait StopSignalWaiter {
 pub struct DefaultStopSignalWaiter;
 
 impl StopSignalWaiter for DefaultStopSignalWaiter {
-    fn wait(&self) {
+    fn wait<L: Logger>(&self, logger: &L) {
         let (tx, rx) = mpsc::channel();
         if let Err(e) = ctrlc::set_handler(move || {
             let _ = tx.send(());
         }) {
-            error!("Error setting Ctrl-C handler: {}", e);
+            logger.error(format!("Error setting Ctrl-C handler: {}", e));
             return;
         }
         let _ = rx.recv();
@@ -164,13 +174,19 @@ impl StopSignalWaiter for DefaultStopSignalWaiter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::NoOpLogger;
 
     struct FailingConnector;
 
     impl ProviderConnector for FailingConnector {
-        fn connect<C>(&self, _config: &C) -> Result<Vec<Box<dyn crate::Provider>>, String>
+        fn connect<C, L>(
+            &self,
+            _config: &C,
+            _logger: &L,
+        ) -> Result<Vec<Box<dyn crate::Provider>>, String>
         where
             C: crate::ProvidersConfiguration,
+            L: crate::Logger + 'static,
         {
             Err("mock connect error".into())
         }
@@ -179,27 +195,39 @@ mod tests {
     struct NoOpWaiter;
 
     impl StopSignalWaiter for NoOpWaiter {
-        fn wait(&self) {}
+        fn wait<L: crate::Logger>(&self, _logger: &L) {}
     }
 
-    #[test]
-    fn execute_returns_connector_error_without_calling_real_connector() {
-        let cmd = ConnectCommand {
+    fn connect_cmd() -> ConnectCommand {
+        ConnectCommand {
             path: PathBuf::from("/tmp/mount"),
             storage: ConnectStorageSubcommand::Local(LocalStorageArgs {
                 root: PathBuf::from("/tmp/root"),
             }),
-        };
-        let err = cmd._execute(&FailingConnector, &NoOpWaiter).unwrap_err();
+        }
+    }
+
+    #[test]
+    fn execute_returns_connector_error_without_calling_real_connector() {
+        let cmd = connect_cmd();
+        let logger = NoOpLogger;
+        let err = cmd
+            ._execute(&FailingConnector, &NoOpWaiter, &logger)
+            .unwrap_err();
         assert_eq!(err, "mock connect error");
     }
 
     struct EmptyConnector;
 
     impl ProviderConnector for EmptyConnector {
-        fn connect<C>(&self, _config: &C) -> Result<Vec<Box<dyn crate::Provider>>, String>
+        fn connect<C, L>(
+            &self,
+            _config: &C,
+            _logger: &L,
+        ) -> Result<Vec<Box<dyn crate::Provider>>, String>
         where
             C: crate::ProvidersConfiguration,
+            L: crate::Logger + 'static,
         {
             Ok(vec![])
         }
@@ -207,13 +235,9 @@ mod tests {
 
     #[test]
     fn execute_succeeds_with_empty_connector_and_noop_waiter() {
-        let cmd = ConnectCommand {
-            path: PathBuf::from("/tmp/mount"),
-            storage: ConnectStorageSubcommand::Local(LocalStorageArgs {
-                root: PathBuf::from("/tmp/root"),
-            }),
-        };
-        let result = cmd._execute(&EmptyConnector, &NoOpWaiter);
+        let cmd = connect_cmd();
+        let logger = NoOpLogger;
+        let result = cmd._execute(&EmptyConnector, &NoOpWaiter, &logger);
         assert!(result.is_ok());
     }
 }
