@@ -90,7 +90,7 @@ pub fn connect_providers(
         match provider_config.storage_config() {
             StorageConfig::Local { root } => {
                 let storage = LocalStorage::new(root);
-                let (mount_path, session) = mount_storage(path, storage, logger)?;
+                let (mount_path, session) = mount_storage(path, storage, logger.clone())?;
                 let name = mount_path
                     .file_name()
                     .and_then(|s| s.to_str())
@@ -125,7 +125,7 @@ pub fn connect_providers(
                     token_expiry_buffer_secs,
                 };
                 let storage = one_drive_config.connect().map_err(|e| e.to_string())?;
-                let (mount_path, session) = mount_storage(path, storage, logger)?;
+                let (mount_path, session) = mount_storage(path, storage, logger.clone())?;
                 let name = mount_path
                     .file_name()
                     .and_then(|s| s.to_str())
