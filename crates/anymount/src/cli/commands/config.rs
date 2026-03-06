@@ -164,7 +164,7 @@ fn prompt_path() -> Result<PathBuf, String> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProviderType {
+pub(crate) enum ProviderType {
     Local,
     OneDrive,
 }
