@@ -84,7 +84,7 @@ pub fn mount_storage(
     })?;
     logger.info(format!("Cache path: {}", cache_root.display()));
 
-    let fs = StorageFilesystem::new(storage, cache_root, logger)?;
+    let fs = StorageFilesystem::new(storage, cache_root, logger.clone())?;
     let session = fuser::spawn_mount2(fs, &path, &fuser::Config::default())
         .map_err(|e| format!("FUSE mount failed: {}", e))?;
     Ok((path, session))

@@ -19,7 +19,7 @@ pub struct CloudFilterProvider<S: Storage, L: Logger> {
     pub logger: L,
 }
 
-impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
+impl<S: Storage, L: Logger + 'static> CloudFilterProvider<S, L> {
     pub fn connect(
         config: &impl ProviderConfiguration,
         storage: S,
@@ -65,10 +65,7 @@ impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
         // Connect session
         let session = Session::new();
         let connection = session
-            .connect(
-                &path,
-                Callbacks::new(path.clone(), storage, logger.clone()),
-            )
+            .connect(&path, Callbacks::new(path.clone(), storage, logger.clone()))
             .map_err(|e| format!("Failed to connect to sync root: {}", e))?;
 
         Ok(Arc::new(Self {
@@ -80,14 +77,12 @@ impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
     }
 }
 
-impl<S: Storage, L: Logger> Provider for Arc<CloudFilterProvider<S, L>> {
+impl<S: Storage, L: Logger + 'static> Provider for Arc<CloudFilterProvider<S, L>> {
     fn kind(&self) -> &'static str {
         "CloudFilter"
     }
 
     fn path(&self) -> &PathBuf {
-        self.path
-            .as_ref()
-            .expect("CloudFilterProvider used as Provider must be connected")
+        &self.path
     }
 }

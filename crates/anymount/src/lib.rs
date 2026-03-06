@@ -5,6 +5,7 @@ pub mod error;
 pub mod logger;
 pub mod providers;
 pub mod storages;
+pub mod tui;
 
 pub use cli::commands::connect::{
     DefaultProviderConnector, DefaultStopSignalWaiter, ProviderConnector, StopSignalWaiter,
