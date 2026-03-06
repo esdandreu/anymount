@@ -41,13 +41,18 @@ pub trait Provider {
 #[cfg(target_os = "windows")]
 pub fn connect_providers(
     config: &impl ProvidersConfiguration,
-    logger: &impl Logger,
+    logger: &(impl Logger + 'static),
 ) -> Result<Vec<Box<dyn Provider>>, String> {
     use super::cloudfilter::{CloudFilterProvider, cleanup_registry};
     let mut providers: Vec<Box<dyn Provider>> = Vec::new();
     for provider_config in config.providers() {
-        let storage = match provider_config.storage_config() {
-            StorageConfig::Local { root } => LocalStorage::new(root),
+        match provider_config.storage_config() {
+            StorageConfig::Local { root } => {
+                let storage = LocalStorage::new(root);
+                let provider =
+                    CloudFilterProvider::connect(provider_config, storage, logger.clone())?;
+                providers.push(Box::new(provider) as Box<dyn Provider>);
+            }
             StorageConfig::OneDrive {
                 root,
                 endpoint,
@@ -64,11 +69,12 @@ pub fn connect_providers(
                     client_id,
                     token_expiry_buffer_secs,
                 };
-                config.connect().map_err(|e| e.to_string())?
+                let storage = config.connect().map_err(|e| e.to_string())?;
+                let provider =
+                    CloudFilterProvider::connect(provider_config, storage, logger.clone())?;
+                providers.push(Box::new(provider) as Box<dyn Provider>);
             }
-        };
-        let provider = CloudFilterProvider::connect(provider_config, storage, logger.clone())?;
-        providers.push(Box::new(provider) as Box<dyn Provider>);
+        }
     }
     cleanup_registry(config, logger)?;
     Ok(providers)
