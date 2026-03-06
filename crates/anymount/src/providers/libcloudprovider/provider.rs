@@ -61,10 +61,10 @@ pub(crate) fn cache_root_for_mount(path: &PathBuf) -> PathBuf {
 }
 
 /// Mount storage at path with FUSE and return (path, BackgroundSession).
-pub fn mount_storage<S: Storage, L: Logger + Clone + 'static>(
+pub fn mount_storage(
     path: PathBuf,
-    storage: S,
-    logger: &L,
+    storage: impl Storage,
+    logger: impl Logger + 'static,
 ) -> Result<(PathBuf, fuser::BackgroundSession), String> {
     if !path.exists() {
         std::fs::create_dir_all(&path)
