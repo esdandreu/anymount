@@ -44,7 +44,7 @@ impl ConnectCommand {
         if self.all {
             let cd = self.config_dir();
             let mut failures = Vec::new();
-            for name in cd.list()? {
+            for name in cd.list().map_err(|error| error.to_string())? {
                 if let Err(error) = supervisor.ensure_running(&name, &cd, logger) {
                     failures.push(format!("{name}: {error}"));
                 }

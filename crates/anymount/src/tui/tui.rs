@@ -50,10 +50,10 @@ struct AppState {
 
 impl AppState {
     fn load(cd: &ConfigDir) -> Result<Self, String> {
-        let names = cd.list()?;
+        let names = cd.list().map_err(|error| error.to_string())?;
         let mut providers = Vec::with_capacity(names.len());
         for name in names {
-            let config = cd.read(&name)?;
+            let config = cd.read(&name).map_err(|error| error.to_string())?;
             providers.push(ProviderEntry { name, config });
         }
         Ok(Self {
@@ -1138,7 +1138,7 @@ fn handle_delete_confirm_key(
     match code {
         KeyCode::Char('y') => {
             if let Some(name) = state.selected_name().map(ToOwned::to_owned) {
-                cd.remove(&name)?;
+                cd.remove(&name).map_err(|error| error.to_string())?;
                 state.mode = UiMode::Browse;
                 state.refresh(cd)?;
                 state.status = format!("Removed provider '{name}'");
@@ -1176,10 +1176,11 @@ fn save_edit_session(cd: &ConfigDir, session: &EditSession) -> Result<String, St
     let new_name = session.draft.name.trim().to_owned();
     ensure_name_available(cd, &new_name, session.original_name.as_deref())?;
     let new_config = session.draft.to_provider_config()?;
-    cd.write(&new_name, &new_config)?;
+    cd.write(&new_name, &new_config)
+        .map_err(|error| error.to_string())?;
     if let Some(old_name) = &session.original_name {
         if old_name != &new_name {
-            cd.remove(old_name)?;
+            cd.remove(old_name).map_err(|error| error.to_string())?;
         }
     }
     Ok(new_name)
@@ -1428,7 +1429,7 @@ fn ensure_name_available(
     name: &str,
     current_name: Option<&str>,
 ) -> Result<(), String> {
-    let names = cd.list()?;
+    let names = cd.list().map_err(|error| error.to_string())?;
     if names
         .iter()
         .any(|existing| existing == name && Some(existing.as_str()) != current_name)

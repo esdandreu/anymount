@@ -1,8 +1,61 @@
 use crate::{ProviderConfiguration, ProvidersConfiguration, StorageConfig};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::result::Result;
 use std::{fs, io};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("cannot read config dir {path}: {source}")]
+    ReadDir {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("cannot read config {path}: {source}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("invalid config {path}: {source}")]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
+
+    #[error("cannot create config dir {path}: {source}")]
+    CreateDir {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("cannot write config {path}: {source}")]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("cannot remove config {path}: {source}")]
+    Remove {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("cannot serialize config: {0}")]
+    Serialize(#[from] toml::ser::Error),
+
+    #[error("non-utf8 filename: {path}")]
+    NonUtf8FileName { path: PathBuf },
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 /// Single provider entry stored as `<name>.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,28 +109,31 @@ impl ConfigDir {
 
     /// List the names of all configured providers (filenames without
     /// the `.toml` extension).
-    pub fn list(&self) -> Result<Vec<String>, String> {
+    pub fn list(&self) -> Result<Vec<String>> {
         let entries = match fs::read_dir(&self.dir) {
             Ok(e) => e,
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 return Ok(Vec::new());
             }
             Err(e) => {
-                return Err(format!(
-                    "cannot read config dir {}: {e}",
-                    self.dir.display()
-                ));
+                return Err(Error::ReadDir {
+                    path: self.dir.clone(),
+                    source: e,
+                });
             }
         };
         let mut names: Vec<String> = Vec::new();
         for entry in entries {
-            let entry = entry.map_err(|e| e.to_string())?;
+            let entry = entry.map_err(|source| Error::ReadDir {
+                path: self.dir.clone(),
+                source,
+            })?;
             let path = entry.path();
             if path.extension().is_some_and(|ext| ext == "toml") {
                 if let Some(stem) = path.file_stem() {
                     names.push(
                         stem.to_str()
-                            .ok_or_else(|| format!("non-UTF-8 filename: {}", path.display()))?
+                            .ok_or_else(|| Error::NonUtf8FileName { path: path.clone() })?
                             .to_owned(),
                     );
                 }
@@ -88,31 +144,34 @@ impl ConfigDir {
     }
 
     /// Read a single provider config by name.
-    pub fn read(&self, name: &str) -> Result<ProviderFileConfig, String> {
+    pub fn read(&self, name: &str) -> Result<ProviderFileConfig> {
         let path = self.file_path(name);
-        let contents = fs::read_to_string(&path)
-            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-        toml::from_str(&contents).map_err(|e| format!("invalid config {}: {e}", path.display()))
+        let contents = fs::read_to_string(&path).map_err(|source| Error::Read {
+            path: path.clone(),
+            source,
+        })?;
+        toml::from_str(&contents).map_err(|source| Error::Parse { path, source })
     }
 
     /// Write (create or overwrite) a provider config.
-    pub fn write(&self, name: &str, config: &ProviderFileConfig) -> Result<(), String> {
-        fs::create_dir_all(&self.dir)
-            .map_err(|e| format!("cannot create config dir {}: {e}", self.dir.display()))?;
+    pub fn write(&self, name: &str, config: &ProviderFileConfig) -> Result<()> {
+        fs::create_dir_all(&self.dir).map_err(|source| Error::CreateDir {
+            path: self.dir.clone(),
+            source,
+        })?;
         let path = self.file_path(name);
-        let contents =
-            toml::to_string_pretty(config).map_err(|e| format!("cannot serialize config: {e}"))?;
-        fs::write(&path, contents).map_err(|e| format!("cannot write {}: {e}", path.display()))
+        let contents = toml::to_string_pretty(config)?;
+        fs::write(&path, contents).map_err(|source| Error::Write { path, source })
     }
 
     /// Remove a provider config file.
-    pub fn remove(&self, name: &str) -> Result<(), String> {
+    pub fn remove(&self, name: &str) -> Result<()> {
         let path = self.file_path(name);
-        fs::remove_file(&path).map_err(|e| format!("cannot remove {}: {e}", path.display()))
+        fs::remove_file(&path).map_err(|source| Error::Remove { path, source })
     }
 
     /// Load all provider configs from the directory.
-    pub fn load_all(&self) -> Result<Config, String> {
+    pub fn load_all(&self) -> Result<Config> {
         let names = self.list()?;
         let mut providers = Vec::with_capacity(names.len());
         for name in &names {
@@ -234,6 +293,23 @@ mod tests {
     fn read_nonexistent_returns_error() {
         let (_tmp, cd) = tmp_config_dir();
         assert!(cd.read("nope").is_err());
+    }
+
+    #[test]
+    fn read_nonexistent_returns_read_error() {
+        let (_tmp, cd) = tmp_config_dir();
+        let err = cd.read("nope").expect_err("read should fail");
+
+        assert!(matches!(err, Error::Read { .. }));
+    }
+
+    #[test]
+    fn read_invalid_toml_returns_parse_error() {
+        let (_tmp, cd) = tmp_config_dir();
+        std::fs::write(cd.dir().join("broken.toml"), "path = [").expect("seed invalid toml");
+
+        let err = cd.read("broken").expect_err("read should fail");
+        assert!(matches!(err, Error::Parse { .. }));
     }
 
     #[test]

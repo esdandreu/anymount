@@ -148,7 +148,7 @@ impl ProvideCommand {
     fn resolve_request(&self) -> Result<ProvideRequest, String> {
         if let Some(name) = &self.name {
             let cd = self.config_dir();
-            let provider = cd.read(name)?;
+            let provider = cd.read(name).map_err(|error| error.to_string())?;
             return Ok(ProvideRequest {
                 provider_name: Some(name.clone()),
                 config: Config {

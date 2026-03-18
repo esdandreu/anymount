@@ -83,7 +83,7 @@ impl ConfigCommand {
 }
 
 fn execute_list(cd: &ConfigDir) -> Result<(), String> {
-    let names = cd.list()?;
+    let names = cd.list().map_err(|error| error.to_string())?;
     if names.is_empty() {
         println!("No providers configured in {}", cd.dir().display());
     } else {
@@ -95,7 +95,7 @@ fn execute_list(cd: &ConfigDir) -> Result<(), String> {
 }
 
 fn execute_show(cd: &ConfigDir, args: &ShowArgs) -> Result<(), String> {
-    let cfg = cd.read(&args.name)?;
+    let cfg = cd.read(&args.name).map_err(|error| error.to_string())?;
     let text = toml::to_string_pretty(&cfg).map_err(|e| format!("cannot serialize config: {e}"))?;
     print!("{text}");
     Ok(())
@@ -103,7 +103,7 @@ fn execute_show(cd: &ConfigDir, args: &ShowArgs) -> Result<(), String> {
 
 fn execute_add(cd: &ConfigDir, args: &AddArgs) -> Result<(), String> {
     let resolved = resolve_add_args(args)?;
-    let existing = cd.list()?;
+    let existing = cd.list().map_err(|error| error.to_string())?;
     if existing.contains(&resolved.name) {
         return Err(format!(
             "provider '{}' already exists, use 'set' to modify \
@@ -117,7 +117,8 @@ fn execute_add(cd: &ConfigDir, args: &AddArgs) -> Result<(), String> {
         path: resolved.path.clone(),
         storage,
     };
-    cd.write(&resolved.name, &cfg)?;
+    cd.write(&resolved.name, &cfg)
+        .map_err(|error| error.to_string())?;
     println!("Added provider '{}'", resolved.name);
     Ok(())
 }
@@ -243,15 +244,16 @@ fn prompt_optional(message: &str) -> Result<Option<String>, String> {
 }
 
 fn execute_remove(cd: &ConfigDir, args: &RemoveArgs) -> Result<(), String> {
-    cd.remove(&args.name)?;
+    cd.remove(&args.name).map_err(|error| error.to_string())?;
     println!("Removed provider '{}'", args.name);
     Ok(())
 }
 
 fn execute_set(cd: &ConfigDir, args: &SetArgs) -> Result<(), String> {
-    let mut cfg = cd.read(&args.name)?;
+    let mut cfg = cd.read(&args.name).map_err(|error| error.to_string())?;
     apply_set(&mut cfg, &args.key, &args.value)?;
-    cd.write(&args.name, &cfg)?;
+    cd.write(&args.name, &cfg)
+        .map_err(|error| error.to_string())?;
     println!("Updated '{}' in provider '{}'", args.key, args.name);
     Ok(())
 }
