@@ -1,4 +1,5 @@
 pub mod control;
+pub mod error;
 pub mod messages;
 pub mod paths;
 pub mod runtime;
@@ -8,3 +9,5 @@ pub mod control_unix;
 
 #[cfg(target_os = "windows")]
 pub mod control_windows;
+
+pub use error::{Error, Result};

@@ -1,10 +1,12 @@
+use crate::daemon::{Error, Result};
 use std::path::PathBuf;
 
 const APP_STATE_DIR: &str = "anymount/providers";
 
-pub fn provider_endpoint(provider_name: &str) -> Result<PathBuf, String> {
+pub fn provider_endpoint(provider_name: &str) -> Result<PathBuf> {
+    validate_provider_name(provider_name)?;
     let state_dir = daemon_state_root();
-    let file_name = format!("{}{}", sanitize(provider_name), endpoint_suffix());
+    let file_name = format!("{provider_name}{}", endpoint_suffix());
     Ok(state_dir.join(APP_STATE_DIR).join(file_name))
 }
 
@@ -14,14 +16,17 @@ fn daemon_state_root() -> PathBuf {
         .unwrap_or_else(std::env::temp_dir)
 }
 
-fn sanitize(provider_name: &str) -> String {
-    provider_name
-        .chars()
-        .map(|ch| match ch {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' => ch,
-            _ => '_',
-        })
-        .collect()
+fn validate_provider_name(provider_name: &str) -> Result<()> {
+    if provider_name.is_empty()
+        || provider_name
+            .chars()
+            .any(|ch| !matches!(ch, 'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_'))
+    {
+        return Err(Error::InvalidProviderName {
+            name: provider_name.to_owned(),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
@@ -37,6 +42,7 @@ fn endpoint_suffix() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::provider_endpoint;
+    use crate::daemon::Error;
 
     #[test]
     fn endpoint_path_is_stable_for_provider_name() {
@@ -46,12 +52,8 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_path_sanitizes_provider_name() {
-        let path = provider_endpoint("demo/provider").expect("path should build");
-        let file_name = path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .expect("file name should be utf-8");
-        assert!(file_name.starts_with("demo_provider"));
+    fn provider_endpoint_rejects_separator_in_provider_name() {
+        let err = provider_endpoint("demo/provider").expect_err("path should fail");
+        assert!(matches!(err, Error::InvalidProviderName { .. }));
     }
 }

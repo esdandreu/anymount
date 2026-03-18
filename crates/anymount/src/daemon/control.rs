@@ -1,13 +1,14 @@
 use crate::daemon::messages::ControlMessage;
+use crate::daemon::{Error, Result};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 pub trait ControlTransport {
     type Server;
 
-    fn bind(&self, provider_name: &str) -> Result<Self::Server, String>;
+    fn bind(&self, provider_name: &str) -> Result<Self::Server>;
 
-    fn send(&self, provider_name: &str, message: ControlMessage) -> Result<ControlMessage, String>;
+    fn send(&self, provider_name: &str, message: ControlMessage) -> Result<ControlMessage>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -16,14 +17,11 @@ pub struct InMemoryControlTransport {
 }
 
 impl InMemoryControlTransport {
-    pub fn serve_once<F>(&self, server: InMemoryServer, handler: F) -> Result<(), String>
+    pub fn serve_once<F>(&self, server: InMemoryServer, handler: F) -> Result<()>
     where
         F: FnOnce(ControlMessage) -> ControlMessage,
     {
-        let mut responses = self
-            .responses
-            .lock()
-            .map_err(|_| "in-memory control transport was poisoned".to_owned())?;
+        let mut responses = self.responses.lock().map_err(|_| Error::Poisoned)?;
         responses.insert(server.provider_name, vec![handler(ControlMessage::Ping)]);
         Ok(())
     }
@@ -37,28 +35,23 @@ pub struct InMemoryServer {
 impl ControlTransport for InMemoryControlTransport {
     type Server = InMemoryServer;
 
-    fn bind(&self, provider_name: &str) -> Result<Self::Server, String> {
+    fn bind(&self, provider_name: &str) -> Result<Self::Server> {
         Ok(InMemoryServer {
             provider_name: provider_name.to_owned(),
         })
     }
 
-    fn send(
-        &self,
-        provider_name: &str,
-        _message: ControlMessage,
-    ) -> Result<ControlMessage, String> {
-        let mut responses = self
-            .responses
-            .lock()
-            .map_err(|_| "in-memory control transport was poisoned".to_owned())?;
+    fn send(&self, provider_name: &str, _message: ControlMessage) -> Result<ControlMessage> {
+        let mut responses = self.responses.lock().map_err(|_| Error::Poisoned)?;
         let queue = responses
             .get_mut(provider_name)
-            .ok_or_else(|| format!("no in-memory server bound for provider {provider_name}"))?;
+            .ok_or_else(|| Error::NotBound {
+                provider_name: provider_name.to_owned(),
+            })?;
         if queue.is_empty() {
-            return Err(format!(
-                "no queued response available for provider {provider_name}"
-            ));
+            return Err(Error::NoQueuedResponse {
+                provider_name: provider_name.to_owned(),
+            });
         }
         Ok(queue.remove(0))
     }

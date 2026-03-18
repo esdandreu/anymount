@@ -132,7 +132,7 @@ impl ProvideRunner for DefaultProvideRunner {
         }
 
         let mut runtime = DaemonRuntime::new(logger.clone(), rx);
-        let result = runtime.run();
+        let result = runtime.run().map_err(|error| error.to_string());
         drop(providers);
         result
     }
@@ -206,7 +206,9 @@ fn spawn_control_server<L: Logger + 'static>(
     tx: mpsc::Sender<DaemonMessage>,
     logger: &L,
 ) -> Result<(), String> {
-    let listener = UnixControl.bind(provider_name)?;
+    let listener = UnixControl
+        .bind(provider_name)
+        .map_err(|error| error.to_string())?;
     let provider_name = provider_name.to_owned();
     let logger = logger.clone();
     std::thread::spawn(move || {
@@ -227,7 +229,7 @@ fn spawn_control_server<L: Logger + 'static>(
                 Ok(other) => ControlMessage::Error(format!(
                     "unsupported control message for {provider_name}: {other:?}"
                 )),
-                Err(error) => ControlMessage::Error(error),
+                Err(error) => ControlMessage::Error(error.to_string()),
             };
             let _ = std::io::Write::write_all(&mut stream, &reply.encode());
             if matches!(reply, ControlMessage::Ack) {
@@ -248,7 +250,9 @@ fn spawn_control_server<L: Logger>(
     _logger: &L,
 ) -> Result<(), String> {
     let _ = provider_name;
-    let _ = WindowsControl.bind(provider_name)?;
+    let _ = WindowsControl
+        .bind(provider_name)
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 

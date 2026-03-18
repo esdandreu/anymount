@@ -1,3 +1,4 @@
+use crate::daemon::Result;
 use crate::daemon::messages::DaemonMessage;
 use crate::logger::Logger;
 use std::sync::mpsc::Receiver;
@@ -12,9 +13,9 @@ impl<L: Logger> DaemonRuntime<L> {
         Self { logger, rx }
     }
 
-    pub fn run(&mut self) -> Result<(), String> {
+    pub fn run(&mut self) -> Result<()> {
         loop {
-            match self.rx.recv().map_err(|error| error.to_string())? {
+            match self.rx.recv()? {
                 DaemonMessage::Telemetry(message) => self.logger.info(message),
                 DaemonMessage::Shutdown => break,
             }

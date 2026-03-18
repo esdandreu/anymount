@@ -1,3 +1,5 @@
+use crate::daemon::{Error, Result};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlMessage {
     Ping,
@@ -19,9 +21,8 @@ impl ControlMessage {
         value.into_bytes()
     }
 
-    pub fn decode(bytes: &[u8]) -> Result<Self, String> {
-        let value = std::str::from_utf8(bytes)
-            .map_err(|error| format!("control message was not valid UTF-8: {error}"))?;
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let value = std::str::from_utf8(bytes)?;
 
         match value {
             "ping" => Ok(Self::Ping),
@@ -31,7 +32,9 @@ impl ControlMessage {
             _ => value
                 .strip_prefix("error:")
                 .map(|message| Self::Error(message.to_owned()))
-                .ok_or_else(|| format!("unknown control message: {value}")),
+                .ok_or_else(|| Error::UnknownControlMessage {
+                    value: value.to_owned(),
+                }),
         }
     }
 }
@@ -45,11 +48,18 @@ pub enum DaemonMessage {
 #[cfg(test)]
 mod tests {
     use super::ControlMessage;
+    use crate::daemon::Error;
 
     #[test]
     fn control_message_round_trips() {
         let encoded = ControlMessage::Ping.encode();
         let decoded = ControlMessage::decode(&encoded).expect("decode should work");
         assert_eq!(decoded, ControlMessage::Ping);
+    }
+
+    #[test]
+    fn decode_invalid_utf8_returns_decode_error() {
+        let err = ControlMessage::decode(&[0xff]).expect_err("decode should fail");
+        assert!(matches!(err, Error::DecodeUtf8(_)));
     }
 }
