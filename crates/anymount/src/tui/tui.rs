@@ -654,10 +654,11 @@ fn longest_common_prefix(values: &[String]) -> String {
 
 fn complete_filesystem_path(input: &str) -> Result<PathCompletion, String> {
     let expanded = expand_tilde(input);
-    let (dir_text, prefix) = if expanded.ends_with('/') {
+    let (dir_text, prefix) = if expanded.chars().last().is_some_and(std::path::is_separator) {
         (expanded.clone(), String::new())
-    } else if let Some((dir, file)) = expanded.rsplit_once('/') {
-        (format!("{dir}/"), file.to_owned())
+    } else if let Some(index) = expanded.rfind(std::path::is_separator) {
+        let (dir, file) = expanded.split_at(index + 1);
+        (dir.to_owned(), file.to_owned())
     } else {
         (String::new(), expanded.clone())
     };
@@ -681,7 +682,7 @@ fn complete_filesystem_path(input: &str) -> Result<PathCompletion, String> {
         }
         let mut candidate = format!("{dir_text}{name}");
         if entry.path().is_dir() {
-            candidate.push('/');
+            candidate.push(std::path::MAIN_SEPARATOR);
         }
         candidates.push(candidate);
     }
@@ -1657,7 +1658,7 @@ mod tests {
         std::fs::create_dir(&dir).expect("failed to create dir");
         let input = tmp.path().join("a").display().to_string();
         let output = complete_filesystem_path(&input).expect("completion failed");
-        let expected = format!("{}/", dir.display());
+        let expected = format!("{}{}", dir.display(), std::path::MAIN_SEPARATOR);
         match output {
             PathCompletion::Updated { value, exact, .. } => {
                 assert_eq!(value, expected);

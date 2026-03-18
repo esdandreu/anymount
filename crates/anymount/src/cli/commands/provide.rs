@@ -1,5 +1,5 @@
 use crate::config::ConfigDir;
-use crate::daemon::messages::{ControlMessage, DaemonMessage};
+use crate::daemon::messages::DaemonMessage;
 use crate::daemon::runtime::DaemonRuntime;
 use crate::{Config, Logger, Provider, ProviderFileConfig, StorageConfig, TracingLogger};
 use clap::{Args, Subcommand};
@@ -8,6 +8,8 @@ use std::sync::mpsc;
 
 #[cfg(unix)]
 use crate::daemon::control_unix::UnixControl;
+#[cfg(unix)]
+use crate::daemon::messages::ControlMessage;
 
 #[cfg(target_os = "windows")]
 use crate::daemon::control_windows::WindowsControl;

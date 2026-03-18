@@ -3,10 +3,15 @@ use std::path::PathBuf;
 const APP_STATE_DIR: &str = "anymount/providers";
 
 pub fn provider_endpoint(provider_name: &str) -> Result<PathBuf, String> {
-    let state_dir = dirs::state_dir()
-        .ok_or_else(|| "could not resolve state directory for daemon endpoints".to_owned())?;
+    let state_dir = daemon_state_root();
     let file_name = format!("{}{}", sanitize(provider_name), endpoint_suffix());
     Ok(state_dir.join(APP_STATE_DIR).join(file_name))
+}
+
+fn daemon_state_root() -> PathBuf {
+    dirs::state_dir()
+        .or_else(dirs::data_local_dir)
+        .unwrap_or_else(std::env::temp_dir)
 }
 
 fn sanitize(provider_name: &str) -> String {
