@@ -1,9 +1,9 @@
+use super::Result;
 use crate::Logger;
 use crate::daemon::messages::DaemonMessage;
 use crate::storages::{LocalStorage, OneDriveConfig};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::result::Result;
 use std::sync::mpsc::Sender;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,7 +44,7 @@ pub trait Provider {
 pub fn connect_providers(
     config: &impl ProvidersConfiguration,
     logger: &(impl Logger + 'static),
-) -> Result<Vec<Box<dyn Provider>>, String> {
+) -> Result<Vec<Box<dyn Provider>>> {
     connect_providers_with_telemetry(config, logger, None)
 }
 
@@ -53,7 +53,7 @@ pub fn connect_providers_with_telemetry(
     config: &impl ProvidersConfiguration,
     logger: &(impl Logger + 'static),
     daemon_tx: Option<Sender<DaemonMessage>>,
-) -> Result<Vec<Box<dyn Provider>>, String> {
+) -> Result<Vec<Box<dyn Provider>>> {
     use super::cloudfilter::{CloudFilterProvider, cleanup_registry};
     let mut providers: Vec<Box<dyn Provider>> = Vec::new();
     for provider_config in config.providers() {
@@ -65,8 +65,7 @@ pub fn connect_providers_with_telemetry(
                     storage,
                     logger.clone(),
                     daemon_tx.clone(),
-                )
-                .map_err(|error| error.to_string())?;
+                )?;
                 providers.push(Box::new(provider) as Box<dyn Provider>);
             }
             StorageConfig::OneDrive {
@@ -85,19 +84,18 @@ pub fn connect_providers_with_telemetry(
                     client_id,
                     token_expiry_buffer_secs,
                 };
-                let storage = config.connect().map_err(|e| e.to_string())?;
+                let storage = config.connect()?;
                 let provider = CloudFilterProvider::connect(
                     provider_config,
                     storage,
                     logger.clone(),
                     daemon_tx.clone(),
-                )
-                .map_err(|error| error.to_string())?;
+                )?;
                 providers.push(Box::new(provider) as Box<dyn Provider>);
             }
         }
     }
-    cleanup_registry(config, logger).map_err(|error| error.to_string())?;
+    cleanup_registry(config, logger)?;
     Ok(providers)
 }
 
@@ -105,7 +103,7 @@ pub fn connect_providers_with_telemetry(
 pub fn connect_providers(
     config: &impl ProvidersConfiguration,
     logger: &(impl Logger + 'static),
-) -> Result<Vec<Box<dyn Provider>>, String> {
+) -> Result<Vec<Box<dyn Provider>>> {
     connect_providers_with_telemetry(config, logger, None)
 }
 
@@ -114,10 +112,12 @@ pub fn connect_providers_with_telemetry(
     config: &impl ProvidersConfiguration,
     logger: &(impl Logger + 'static),
     _daemon_tx: Option<Sender<DaemonMessage>>,
-) -> Result<Vec<Box<dyn Provider>>, String> {
+) -> Result<Vec<Box<dyn Provider>>> {
     use super::libcloudprovider::dbus::AccountExporter;
-    use super::libcloudprovider::provider::{LibCloudProvider, export_on_dbus, mount_storage};
-    let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    use super::libcloudprovider::provider::{
+        LibCloudProvider, export_on_dbus, mount_storage, new_runtime,
+    };
+    let rt = new_runtime()?;
     let mut accounts: Vec<(std::path::PathBuf, AccountExporter)> = Vec::new();
     let mut sessions: Vec<(std::path::PathBuf, fuser::BackgroundSession)> = Vec::new();
     for provider_config in config.providers() {
@@ -159,7 +159,7 @@ pub fn connect_providers_with_telemetry(
                     client_id,
                     token_expiry_buffer_secs,
                 };
-                let storage = one_drive_config.connect().map_err(|e| e.to_string())?;
+                let storage = one_drive_config.connect()?;
                 let (mount_path, session) = mount_storage(path, storage, logger.clone())?;
                 let name = mount_path
                     .file_name()
@@ -192,7 +192,7 @@ pub fn connect_providers_with_telemetry(
 pub fn connect_providers(
     _config: &impl ProvidersConfiguration,
     _logger: &impl Logger,
-) -> Result<Vec<Box<dyn Provider>>, String> {
+) -> Result<Vec<Box<dyn Provider>>> {
     connect_providers_with_telemetry(_config, _logger, None)
 }
 
@@ -201,6 +201,62 @@ pub fn connect_providers_with_telemetry(
     _config: &impl ProvidersConfiguration,
     _logger: &impl Logger,
     _daemon_tx: Option<Sender<DaemonMessage>>,
-) -> Result<Vec<Box<dyn Provider>>, String> {
-    Err(String::from("Not supported on this platform"))
+) -> Result<Vec<Box<dyn Provider>>> {
+    Err(super::Error::NotSupported)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::NoOpLogger;
+
+    #[derive(Clone)]
+    struct TestProviderConfig {
+        path: PathBuf,
+        storage: StorageConfig,
+    }
+
+    impl ProviderConfiguration for TestProviderConfig {
+        fn path(&self) -> PathBuf {
+            self.path.clone()
+        }
+
+        fn storage_config(&self) -> StorageConfig {
+            self.storage.clone()
+        }
+    }
+
+    struct TestProvidersConfig {
+        providers: Vec<TestProviderConfig>,
+    }
+
+    impl ProvidersConfiguration for TestProvidersConfig {
+        fn providers(&self) -> Vec<&impl ProviderConfiguration> {
+            self.providers.iter().collect::<Vec<_>>()
+        }
+    }
+
+    #[test]
+    fn connect_providers_invalid_onedrive_config_returns_storage_error() {
+        let config = TestProvidersConfig {
+            providers: vec![TestProviderConfig {
+                path: PathBuf::from("test-mount"),
+                storage: StorageConfig::OneDrive {
+                    root: PathBuf::from("/"),
+                    endpoint: "https://graph.microsoft.com/v1.0".to_string(),
+                    access_token: None,
+                    refresh_token: None,
+                    client_id: None,
+                    token_expiry_buffer_secs: None,
+                },
+            }],
+        };
+
+        let err = match connect_providers(&config, &NoOpLogger) {
+            Ok(_) => panic!("connect should fail"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(err, crate::providers::Error::Storage(_)));
+    }
 }

@@ -4,15 +4,14 @@ use super::dbus::{
     AccountExporter, ActionMessage, PROVIDER_PATH, ProviderExporter, new_account_interfaces,
     request_bus_name,
 };
-use super::fuse::StorageFilesystem;
 use super::gtk_dbus::{ACTION_FREE_LOCAL_CACHE, ACTION_OPEN_FOLDER};
+use super::{Error, Result, StorageFilesystem};
 use crate::Logger;
 use crate::providers::Provider;
 use crate::storages::Storage;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
-use std::result::Result;
 
 /// Linux provider: FUSE mount backed by Storage + D-Bus CloudProviders advertisement.
 pub struct LibCloudProvider {
@@ -65,29 +64,35 @@ pub fn mount_storage(
     path: PathBuf,
     storage: impl Storage,
     logger: impl Logger + 'static,
-) -> Result<(PathBuf, fuser::BackgroundSession), String> {
+) -> Result<(PathBuf, fuser::BackgroundSession)> {
     if !path.exists() {
-        std::fs::create_dir_all(&path)
-            .map_err(|e| format!("Failed to create mount path: {}", e))?;
+        std::fs::create_dir_all(&path).map_err(|source| Error::MountIo {
+            operation: "create mount path",
+            path: path.clone(),
+            source,
+        })?;
     }
-    let path = path
-        .canonicalize()
-        .map_err(|e| format!("Mount path: {}", e))?;
+    let path = path.canonicalize().map_err(|source| Error::MountIo {
+        operation: "canonicalize mount path",
+        path: path.clone(),
+        source,
+    })?;
     logger.info(format!("Mount path: {}", path.display()));
     let cache_root = cache_root_for_mount(&path);
-    std::fs::create_dir_all(&cache_root).map_err(|e| {
-        format!(
-            "Failed to create cache directory {}: {}",
-            cache_root.display(),
-            e
-        )
-    })?;
     logger.info(format!("Cache path: {}", cache_root.display()));
 
     let fs = StorageFilesystem::new(storage, cache_root, logger.clone())?;
-    let session = fuser::spawn_mount2(fs, &path, &fuser::Config::default())
-        .map_err(|e| format!("FUSE mount failed: {}", e))?;
+    let session = fuser::spawn_mount2(fs, &path, &fuser::Config::default()).map_err(|source| {
+        Error::FuseMount {
+            path: path.clone(),
+            source,
+        }
+    })?;
     Ok((path, session))
+}
+
+pub fn new_runtime() -> Result<tokio::runtime::Runtime> {
+    tokio::runtime::Runtime::new().map_err(|source| Error::RuntimeInit { source })
 }
 
 async fn run_actions<L: Logger>(
@@ -116,13 +121,19 @@ async fn run_actions<L: Logger>(
 pub async fn export_on_dbus<L: Logger + Clone + 'static>(
     accounts: &[(PathBuf, AccountExporter)],
     logger: &L,
-) -> Result<(), String> {
+) -> Result<()> {
     let connection = zbus::Connection::session()
         .await
-        .map_err(|e| format!("D-Bus connection: {}", e))?;
+        .map_err(|source| Error::Dbus {
+            operation: "open session bus",
+            source,
+        })?;
     request_bus_name(&connection)
         .await
-        .map_err(|e| format!("D-Bus request name: {}", e))?;
+        .map_err(|source| Error::Dbus {
+            operation: "request bus name",
+            source,
+        })?;
 
     let (action_tx, action_rx) = tokio::sync::mpsc::unbounded_channel::<ActionMessage>();
     tokio::spawn(run_actions(action_rx, logger.clone()));
@@ -131,12 +142,20 @@ pub async fn export_on_dbus<L: Logger + Clone + 'static>(
         .object_server()
         .at(PROVIDER_PATH, ProviderExporter::default())
         .await
-        .map_err(|e| format!("D-Bus Provider: {}", e))?;
+        .map_err(|source| Error::DbusObject {
+            operation: "register provider interface",
+            object_path: PROVIDER_PATH.to_string(),
+            source,
+        })?;
     connection
         .object_server()
         .at(PROVIDER_PATH, zbus::fdo::ObjectManager)
         .await
-        .map_err(|e| format!("D-Bus ObjectManager: {}", e))?;
+        .map_err(|source| Error::DbusObject {
+            operation: "register object manager",
+            object_path: PROVIDER_PATH.to_string(),
+            source,
+        })?;
 
     for (i, (path, account)) in accounts.iter().enumerate() {
         let cache_root = cache_root_for_mount(path);
@@ -151,17 +170,29 @@ pub async fn export_on_dbus<L: Logger + Clone + 'static>(
             .object_server()
             .at(object_path.as_str(), cloud)
             .await
-            .map_err(|e| format!("D-Bus Account {}: {}", i, e))?;
+            .map_err(|source| Error::DbusObject {
+                operation: "register cloud account interface",
+                object_path: object_path.clone(),
+                source,
+            })?;
         connection
             .object_server()
             .at(object_path.as_str(), actions)
             .await
-            .map_err(|e| format!("D-Bus Account {} gtk.Actions: {}", i, e))?;
+            .map_err(|source| Error::DbusObject {
+                operation: "register gtk actions interface",
+                object_path: object_path.clone(),
+                source,
+            })?;
         connection
             .object_server()
             .at(object_path.as_str(), menus)
             .await
-            .map_err(|e| format!("D-Bus Account {} gtk.Menus: {}", i, e))?;
+            .map_err(|source| Error::DbusObject {
+                operation: "register gtk menus interface",
+                object_path: object_path.clone(),
+                source,
+            })?;
     }
 
     tokio::spawn(async move {
