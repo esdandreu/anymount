@@ -368,7 +368,8 @@ impl<S: Storage, L: Logger + 'static> StorageFilesystem<S, L> {
         }
         let entries: Vec<CachedDirEntry> = self
             .storage
-            .read_dir(path.clone())?
+            .read_dir(path.clone())
+            .map_err(|error| error.to_string())?
             .map(|entry| CachedDirEntry {
                 file_name: entry.file_name(),
                 is_dir: entry.is_dir(),
@@ -506,7 +507,7 @@ impl<S: Storage, L: Logger + 'static> fuser::Filesystem for StorageFilesystem<S,
             range_start: u64,
         }
         impl WriteAt for VecWriter {
-            fn write_at(&mut self, buf: &[u8], at: u64) -> Result<(), String> {
+            fn write_at(&mut self, buf: &[u8], at: u64) -> crate::storages::Result<()> {
                 let start = (at.saturating_sub(self.range_start)) as usize;
                 let end = start + buf.len();
                 if end > self.buf.len() {
@@ -678,7 +679,7 @@ mod tests {
         type Entry = TestDirEntry;
         type Iter = std::vec::IntoIter<TestDirEntry>;
 
-        fn read_dir(&self, _path: PathBuf) -> Result<Self::Iter, String> {
+        fn read_dir(&self, _path: PathBuf) -> crate::storages::Result<Self::Iter> {
             self.read_dir_calls.fetch_add(1, Ordering::SeqCst);
             Ok(vec![TestDirEntry {
                 file_name: "alpha.txt".to_string(),
@@ -694,7 +695,7 @@ mod tests {
             _path: PathBuf,
             _writer: &mut impl WriteAt,
             _range: std::ops::Range<u64>,
-        ) -> Result<(), String> {
+        ) -> crate::storages::Result<()> {
             self.read_file_calls.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }

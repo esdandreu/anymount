@@ -1,9 +1,23 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use super::storage::{DirEntry, Storage, WriteAt};
+use super::{Error, Result};
 
 pub const DEFAULT_LOCAL_CHUNK_SIZE: usize = 65536;
+
+fn io_error(path: &Path, source: std::io::Error) -> Error {
+    if source.kind() == std::io::ErrorKind::UnexpectedEof {
+        Error::UnexpectedEof {
+            path: path.to_path_buf(),
+        }
+    } else {
+        Error::Io {
+            path: path.to_path_buf(),
+            source,
+        }
+    }
+}
 
 fn read_exact_at(file: &std::fs::File, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
     #[cfg(unix)]
@@ -74,12 +88,14 @@ impl Storage for LocalStorage {
     type Entry = LocalDirEntry;
     type Iter = std::vec::IntoIter<LocalDirEntry>;
 
-    fn read_dir(&self, path: PathBuf) -> std::result::Result<Self::Iter, String> {
+    fn read_dir(&self, path: PathBuf) -> Result<Self::Iter> {
         let full_path = self.root.join(path);
         let mut entries = Vec::new();
-        for entry in std::fs::read_dir(&full_path).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let meta = entry.metadata().map_err(|e| e.to_string())?;
+        for entry in std::fs::read_dir(&full_path).map_err(|source| io_error(&full_path, source))? {
+            let entry = entry.map_err(|source| io_error(&full_path, source))?;
+            let meta = entry
+                .metadata()
+                .map_err(|source| io_error(&entry.path(), source))?;
             let accessed = meta.accessed().unwrap_or(SystemTime::UNIX_EPOCH);
             entries.push(LocalDirEntry {
                 file_name: entry.file_name().to_string_lossy().into_owned(),
@@ -96,9 +112,10 @@ impl Storage for LocalStorage {
         path: PathBuf,
         writer: &mut impl WriteAt,
         range: std::ops::Range<u64>,
-    ) -> std::result::Result<(), String> {
+    ) -> Result<()> {
         let full_path = self.root.join(path);
-        let file = std::fs::File::open(&full_path).map_err(|e| e.to_string())?;
+        let file =
+            std::fs::File::open(&full_path).map_err(|source| io_error(&full_path, source))?;
         let len = (range.end - range.start) as usize;
         let chunk_size = self.chunk_size.min(len);
         let mut buf = vec![0u8; chunk_size];
@@ -106,10 +123,9 @@ impl Storage for LocalStorage {
         let end = range.end;
         while pos < end {
             let to_read = (end - pos).min(buf.len() as u64) as usize;
-            read_exact_at(&file, &mut buf[..to_read], pos).map_err(|e| e.to_string())?;
-            writer
-                .write_at(&buf[..to_read], pos)
-                .map_err(|e| e.to_string())?;
+            read_exact_at(&file, &mut buf[..to_read], pos)
+                .map_err(|source| io_error(&full_path, source))?;
+            writer.write_at(&buf[..to_read], pos)?;
             pos += to_read as u64;
         }
         Ok(())
@@ -141,7 +157,7 @@ mod tests {
     }
 
     impl WriteAt for RecordingWriter {
-        fn write_at(&mut self, buf: &[u8], offset: u64) -> Result<(), String> {
+        fn write_at(&mut self, buf: &[u8], offset: u64) -> Result<()> {
             self.writes.push((offset, buf.to_vec()));
             Ok(())
         }

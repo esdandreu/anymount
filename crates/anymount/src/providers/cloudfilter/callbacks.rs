@@ -2,7 +2,7 @@ use super::Storage;
 use crate::Logger;
 use crate::daemon::messages::DaemonMessage;
 use crate::providers::cloudfilter::placeholders::{dehydrate_file, get_placeholder_info};
-use crate::storages::{DirEntry, WriteAt};
+use crate::storages::{DirEntry, Error as StorageError, WriteAt};
 use cloud_filter::{
     error::CResult,
     filter::{Request, SyncFilter, info, ticket},
@@ -261,38 +261,51 @@ impl FetchDataWriter {
         }
     }
 
-    fn flush_chunks(&mut self) -> Result<(), String> {
+    fn flush_chunks(&mut self) -> crate::storages::Result<()> {
         while self.buffer.len() >= CF_TRANSFER_CHUNK
             && self.next_offset + CF_TRANSFER_CHUNK as u64 <= self.range_end
         {
             let offset = self.next_offset;
             let chunk: Vec<u8> = self.buffer.drain(..CF_TRANSFER_CHUNK).collect();
-            CfWriteAt::write_at(&self.ticket, &chunk, offset).map_err(|e| e.to_string())?;
+            CfWriteAt::write_at(&self.ticket, &chunk, offset).map_err(|error| {
+                StorageError::WriteAt {
+                    offset,
+                    message: error.to_string(),
+                }
+            })?;
             self.next_offset += CF_TRANSFER_CHUNK as u64;
         }
         Ok(())
     }
 
-    fn flush_final(&mut self) -> Result<(), String> {
+    fn flush_final(&mut self) -> crate::storages::Result<()> {
         if !self.buffer.is_empty() {
             let offset = self.range_end - self.buffer.len() as u64;
             let chunk = std::mem::take(&mut self.buffer);
-            CfWriteAt::write_at(&self.ticket, &chunk, offset).map_err(|e| e.to_string())?;
+            CfWriteAt::write_at(&self.ticket, &chunk, offset).map_err(|error| {
+                StorageError::WriteAt {
+                    offset,
+                    message: error.to_string(),
+                }
+            })?;
         }
         Ok(())
     }
 }
 
 impl WriteAt for FetchDataWriter {
-    fn write_at(&mut self, buf: &[u8], offset: u64) -> Result<(), String> {
+    fn write_at(&mut self, buf: &[u8], offset: u64) -> crate::storages::Result<()> {
         if buf.is_empty() {
             return Ok(());
         }
         if self.next_offset != offset {
-            return Err(format!(
-                "fetch_data: non-contiguous write at {} (expected {})",
-                offset, self.next_offset
-            ));
+            return Err(StorageError::WriteAt {
+                offset,
+                message: format!(
+                    "fetch_data: non-contiguous write at {} (expected {})",
+                    offset, self.next_offset
+                ),
+            });
         }
         self.buffer.extend_from_slice(buf);
         self.next_offset += buf.len() as u64;
