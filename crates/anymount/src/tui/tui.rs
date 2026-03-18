@@ -729,7 +729,7 @@ fn authenticate_onedrive(draft: &mut EditDraft) -> Result<String, String> {
     })?;
 
     draft.apply_onedrive_auth_tokens(tokens)?;
-    Ok("OneDrive authentication completed; refresh token populated".to_owned())
+    Ok("OneDrive authentication completed; refresh token populated. Press s to save.".to_owned())
 }
 
 pub fn run() -> Result<(), String> {
@@ -1064,7 +1064,7 @@ fn handle_edit_key(
                 let saved_name = save_edit_session(cd, session)?;
                 Ok(EditAction::Saved(saved_name))
             }
-            KeyCode::Char('o') => {
+            _ if is_onedrive_auth_key(code) => {
                 let message = authenticate_onedrive(&mut session.draft)?;
                 Ok(EditAction::Message(message))
             }
@@ -1295,9 +1295,17 @@ fn help_lines(state: &AppState) -> Vec<Line<'static>> {
             Line::from("Keys: j/k or arrows move, a add, e edit, d remove"),
             Line::from("      c connect selected, C connect all, r refresh, q quit"),
         ],
-        UiMode::Edit(_) => vec![Line::from(
-            "Edit: Enter edit/select, Tab complete path, s save, Esc close editor",
-        )],
+        UiMode::Edit(ref session) => {
+            let mut lines = vec![Line::from(
+                "Edit: Enter edit/select, Tab complete path, s save, Esc close editor",
+            )];
+            if matches!(session.draft.storage_type, ProviderType::OneDrive) {
+                lines.push(Line::from(
+                    "      l/o sign in to OneDrive and fill refresh token",
+                ));
+            }
+            lines
+        }
         UiMode::ConfirmDelete => vec![
             Line::from("Delete confirmation: y remove selected provider"),
             Line::from("                     n/Esc cancel"),
@@ -1320,8 +1328,23 @@ fn editor_context_lines(session: &EditSession) -> Vec<Line<'static>> {
         ),
         Line::styled(session.context_line(), Style::default().fg(COLOR_CONTEXT)),
     ];
+    if matches!(session.draft.storage_type, ProviderType::OneDrive)
+        && matches!(session.mode, EditMode::Navigate)
+    {
+        lines.push(Line::styled(
+            "Action: l or o signs in to OneDrive and fills storage.onedrive.refresh_token",
+            Style::default().fg(COLOR_CONTEXT),
+        ));
+    }
     lines.extend(session.choice_lines());
     lines
+}
+
+fn is_onedrive_auth_key(code: KeyCode) -> bool {
+    matches!(
+        code,
+        KeyCode::Char('l') | KeyCode::Char('L') | KeyCode::Char('o') | KeyCode::Char('O')
+    )
 }
 
 fn provider_details(entry: Option<&ProviderEntry>) -> Vec<Line<'static>> {
@@ -1613,6 +1636,60 @@ mod tests {
             .expect("should apply token response");
 
         assert_eq!(draft.onedrive_refresh_token, "rt");
+    }
+
+    #[test]
+    fn onedrive_auth_shortcuts_include_login_key() {
+        assert!(is_onedrive_auth_key(KeyCode::Char('l')));
+        assert!(is_onedrive_auth_key(KeyCode::Char('o')));
+        assert!(!is_onedrive_auth_key(KeyCode::Char('s')));
+    }
+
+    #[test]
+    fn edit_help_mentions_onedrive_login_when_editing_onedrive() {
+        let session = EditSession {
+            original_name: None,
+            draft: EditDraft {
+                storage_type: ProviderType::OneDrive,
+                ..EditDraft::new_empty("new-provider".to_owned())
+            },
+            selected_field: EditField::Name,
+            mode: EditMode::Navigate,
+        };
+        let state = AppState {
+            providers: Vec::new(),
+            selected: 0,
+            status: String::new(),
+            mode: UiMode::Edit(session),
+        };
+
+        let rendered: Vec<String> = help_lines(&state)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect();
+
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("l/o sign in to OneDrive"))
+        );
+    }
+
+    #[test]
+    fn editor_context_mentions_onedrive_login_action() {
+        let mut session = EditSession::new_for_add("new-provider".to_owned());
+        session.draft.storage_type = ProviderType::OneDrive;
+
+        let rendered: Vec<String> = editor_context_lines(&session)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect();
+
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("Action: l or o signs in to OneDrive"))
+        );
     }
 
     #[test]

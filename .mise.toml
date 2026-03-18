@@ -12,6 +12,7 @@ run = "cargo llvm-cov --all-features"
 # Build Rust components
 [tasks.build]
 description = "Build platform-specific Rust components"
+sources = ["crates"]
 run = "cargo build -p anymount --release"
 outputs = ["target/**"]
 
@@ -20,7 +21,6 @@ outputs = ["target/**"]
 alias = "anymount"
 description = "Run the application"
 depends = ["build"]
-sources = ["target/release/anymount-cli", "target\\release\\anymount-cli.exe"]
 usage = 'arg "[args]" var=#true double_dash="required" help="Arguments and flags forwarded to anymount-cli (use -- before flags)"'
 run = "target/release/anymount-cli ${usage_args-}"
 run_windows = "target\\release\\anymount-cli.exe %usage_args%"
@@ -28,6 +28,5 @@ run_windows = "target\\release\\anymount-cli.exe %usage_args%"
 [tasks.tui]
 description = "Run the terminal user interface"
 depends = ["build"]
-sources = ["target/release/anymount-cli", "target\\release\\anymount-cli.exe"]
 run = "target/release/anymount-cli"
 run_windows = "target\\release\\anymount-cli.exe"
