@@ -1,3 +1,4 @@
+use super::{Error, Result};
 use crate::auth::{OneDriveAuthorizer, TokenResponse};
 use crate::cli::commands::config::ProviderType;
 use crate::cli::commands::connect::{ConnectCommand, DefaultProviderProcessSupervisor};
@@ -49,11 +50,11 @@ struct AppState {
 }
 
 impl AppState {
-    fn load(cd: &ConfigDir) -> Result<Self, String> {
-        let names = cd.list().map_err(|error| error.to_string())?;
+    fn load(cd: &ConfigDir) -> Result<Self> {
+        let names = cd.list()?;
         let mut providers = Vec::with_capacity(names.len());
         for name in names {
-            let config = cd.read(&name).map_err(|error| error.to_string())?;
+            let config = cd.read(&name)?;
             providers.push(ProviderEntry { name, config });
         }
         Ok(Self {
@@ -64,7 +65,7 @@ impl AppState {
         })
     }
 
-    fn refresh(&mut self, cd: &ConfigDir) -> Result<(), String> {
+    fn refresh(&mut self, cd: &ConfigDir) -> Result<()> {
         let selected_name = self.selected_name().map(ToOwned::to_owned);
         let refreshed = Self::load(cd)?;
         self.providers = refreshed.providers;
@@ -335,27 +336,33 @@ impl EditDraft {
             .collect()
     }
 
-    fn apply_onedrive_auth_tokens(&mut self, tokens: TokenResponse) -> Result<(), String> {
+    fn apply_onedrive_auth_tokens(&mut self, tokens: TokenResponse) -> Result<()> {
         let refresh_token = tokens
             .refresh_token
             .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| "OneDrive auth did not return a refresh token".to_owned())?;
+            .ok_or_else(|| {
+                Error::Validation("OneDrive auth did not return a refresh token".to_owned())
+            })?;
         self.onedrive_refresh_token = refresh_token;
         Ok(())
     }
 
-    fn to_provider_config(&self) -> Result<ProviderFileConfig, String> {
+    fn to_provider_config(&self) -> Result<ProviderFileConfig> {
         if self.name.trim().is_empty() {
-            return Err("provider.name cannot be empty".to_owned());
+            return Err(Error::Validation(
+                "provider.name cannot be empty".to_owned(),
+            ));
         }
         if self.path.trim().is_empty() {
-            return Err("path cannot be empty".to_owned());
+            return Err(Error::Validation("path cannot be empty".to_owned()));
         }
 
         let storage = match self.storage_type {
             ProviderType::Local => {
                 if self.local_root.trim().is_empty() {
-                    return Err("storage.local.root cannot be empty".to_owned());
+                    return Err(Error::Validation(
+                        "storage.local.root cannot be empty".to_owned(),
+                    ));
                 }
                 StorageConfig::Local {
                     root: PathBuf::from(self.local_root.trim()),
@@ -363,10 +370,14 @@ impl EditDraft {
             }
             ProviderType::OneDrive => {
                 if self.onedrive_root.trim().is_empty() {
-                    return Err("storage.onedrive.root cannot be empty".to_owned());
+                    return Err(Error::Validation(
+                        "storage.onedrive.root cannot be empty".to_owned(),
+                    ));
                 }
                 if self.onedrive_endpoint.trim().is_empty() {
-                    return Err("storage.onedrive.endpoint cannot be empty".to_owned());
+                    return Err(Error::Validation(
+                        "storage.onedrive.endpoint cannot be empty".to_owned(),
+                    ));
                 }
                 let token_expiry_buffer_secs = optional_u64(
                     &self.onedrive_token_expiry_buffer_secs,
@@ -509,7 +520,7 @@ impl EditSession {
         }
     }
 
-    fn complete_selected_path(&mut self) -> Result<Option<String>, String> {
+    fn complete_selected_path(&mut self) -> Result<Option<String>> {
         let field = self.selected_field();
         if !matches!(field, EditField::Path | EditField::LocalRoot) {
             return Ok(None);
@@ -611,14 +622,18 @@ fn optional_trimmed(value: &str) -> Option<String> {
     }
 }
 
-fn optional_u64(value: &str, key: &str) -> Result<Option<u64>, String> {
+fn optional_u64(value: &str, key: &str) -> Result<Option<u64>> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Ok(None);
     }
     let parsed = trimmed
         .parse::<u64>()
-        .map_err(|e| format!("{key} must be a number: {e}"))?;
+        .map_err(|source| Error::InvalidNumber {
+            key: key.to_owned(),
+            value: trimmed.to_owned(),
+            source,
+        })?;
     Ok(Some(parsed))
 }
 
@@ -652,7 +667,7 @@ fn longest_common_prefix(values: &[String]) -> String {
     prefix
 }
 
-fn complete_filesystem_path(input: &str) -> Result<PathCompletion, String> {
+fn complete_filesystem_path(input: &str) -> Result<PathCompletion> {
     let expanded = expand_tilde(input);
     let (dir_text, prefix) = if expanded.chars().last().is_some_and(std::path::is_separator) {
         (expanded.clone(), String::new())
@@ -667,16 +682,20 @@ fn complete_filesystem_path(input: &str) -> Result<PathCompletion, String> {
     } else {
         Path::new(&dir_text)
     };
-    let entries = fs::read_dir(dir_path)
-        .map_err(|e| format!("cannot read directory {}: {e}", dir_path.display()))?;
+    let entries = fs::read_dir(dir_path).map_err(|error| {
+        Error::Validation(format!(
+            "cannot read directory {}: {error}",
+            dir_path.display()
+        ))
+    })?;
 
     let mut candidates: Vec<String> = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|e| e.to_string())?;
+        let entry = entry.map_err(|error| Error::Validation(error.to_string()))?;
         let name = entry.file_name();
-        let name = name
-            .to_str()
-            .ok_or_else(|| format!("non-UTF-8 path in {}", dir_path.display()))?;
+        let name = name.to_str().ok_or_else(|| {
+            Error::Validation(format!("non-UTF-8 path in {}", dir_path.display()))
+        })?;
         if !name.starts_with(&prefix) {
             continue;
         }
@@ -710,31 +729,36 @@ fn complete_filesystem_path(input: &str) -> Result<PathCompletion, String> {
     Ok(PathCompletion::NoMatch)
 }
 
-fn authenticate_onedrive(draft: &mut EditDraft) -> Result<String, String> {
+fn authenticate_onedrive(draft: &mut EditDraft) -> Result<String> {
     if !matches!(draft.storage_type, ProviderType::OneDrive) {
-        return Err("OneDrive auth is only available for storage.type=onedrive".to_owned());
+        return Err(Error::Validation(
+            "OneDrive auth is only available for storage.type=onedrive".to_owned(),
+        ));
     }
 
     let client_id = optional_trimmed(&draft.onedrive_client_id);
     let tokens = suspend_terminal(|| {
-        let authorizer = OneDriveAuthorizer::new(client_id).map_err(|error| error.to_string())?;
+        let authorizer = OneDriveAuthorizer::new(client_id).map_err(crate::auth::Error::from)?;
         let started = authorizer
             .start_authorization()
-            .map_err(|error| error.to_string())?;
+            .map_err(crate::auth::Error::from)?;
         eprintln!("{}", started.message());
         if open::that(started.verification_uri()).is_err() {
             eprintln!("(Could not open browser; open the URL above manually.)");
         }
         eprintln!();
         eprintln!("Waiting for you to sign in...");
-        started.wait().map_err(|error| error.to_string())
+        started
+            .wait()
+            .map_err(crate::auth::Error::from)
+            .map_err(Error::from)
     })?;
 
     draft.apply_onedrive_auth_tokens(tokens)?;
     Ok("OneDrive authentication completed; refresh token populated. Press s to save.".to_owned())
 }
 
-pub fn run() -> Result<(), String> {
+pub fn run() -> Result<()> {
     let cd = ConfigDir::default();
     let mut state = AppState::load(&cd)?;
 
@@ -745,30 +769,34 @@ pub fn run() -> Result<(), String> {
     match (loop_result, restore_result) {
         (Err(loop_err), Ok(())) => Err(loop_err),
         (Ok(()), Err(restore_err)) => Err(restore_err),
-        (Err(loop_err), Err(restore_err)) => Err(format!(
-            "tui session error: {loop_err}; terminal restore error: {restore_err}"
-        )),
+        (Err(loop_err), Err(restore_err)) => Err(Error::SessionRestore {
+            session: loop_err.to_string(),
+            restore: restore_err.to_string(),
+        }),
         (Ok(()), Ok(())) => Ok(()),
     }
 }
 
-fn run_loop(
-    terminal: &mut DefaultTerminal,
-    cd: &ConfigDir,
-    state: &mut AppState,
-) -> Result<(), String> {
+fn run_loop(terminal: &mut DefaultTerminal, cd: &ConfigDir, state: &mut AppState) -> Result<()> {
     loop {
         terminal
             .draw(|frame| draw_ui(frame, cd, state))
-            .map_err(|e| format!("failed to render UI: {e}"))?;
+            .map_err(|source| Error::Terminal {
+                operation: "render UI",
+                source,
+            })?;
 
-        if !event::poll(Duration::from_millis(150))
-            .map_err(|e| format!("event poll failed: {e}"))?
-        {
+        if !event::poll(Duration::from_millis(150)).map_err(|source| Error::Terminal {
+            operation: "poll terminal events",
+            source,
+        })? {
             continue;
         }
 
-        let event = event::read().map_err(|e| format!("event read failed: {e}"))?;
+        let event = event::read().map_err(|source| Error::Terminal {
+            operation: "read terminal event",
+            source,
+        })?;
         match event {
             Event::Key(key) => {
                 if key.kind != KeyEventKind::Press {
@@ -899,10 +927,11 @@ fn handle_mouse_event(
     terminal: &mut DefaultTerminal,
     state: &mut AppState,
     mouse: MouseEvent,
-) -> Result<(), String> {
-    let size = terminal
-        .size()
-        .map_err(|e| format!("terminal size read failed: {e}"))?;
+) -> Result<()> {
+    let size = terminal.size().map_err(|source| Error::Terminal {
+        operation: "read terminal size",
+        source,
+    })?;
     let area = Rect::new(0, 0, size.width, size.height);
     let rects = ui_rects(area, &state.mode);
 
@@ -974,7 +1003,7 @@ fn handle_mouse_event(
     Ok(())
 }
 
-fn handle_browse_key(code: KeyCode, cd: &ConfigDir, state: &mut AppState) -> Result<bool, String> {
+fn handle_browse_key(code: KeyCode, cd: &ConfigDir, state: &mut AppState) -> Result<bool> {
     match code {
         KeyCode::Char('q') | KeyCode::Esc => Ok(true),
         KeyCode::Down | KeyCode::Char('j') => {
@@ -1036,11 +1065,7 @@ fn handle_browse_key(code: KeyCode, cd: &ConfigDir, state: &mut AppState) -> Res
     }
 }
 
-fn handle_edit_key(
-    code: KeyCode,
-    cd: &ConfigDir,
-    session: &mut EditSession,
-) -> Result<EditAction, String> {
+fn handle_edit_key(code: KeyCode, cd: &ConfigDir, session: &mut EditSession) -> Result<EditAction> {
     match session.mode {
         EditMode::Navigate => match code {
             KeyCode::Esc => Ok(EditAction::Cancel),
@@ -1132,15 +1157,11 @@ fn handle_edit_key(
     }
 }
 
-fn handle_delete_confirm_key(
-    code: KeyCode,
-    cd: &ConfigDir,
-    state: &mut AppState,
-) -> Result<bool, String> {
+fn handle_delete_confirm_key(code: KeyCode, cd: &ConfigDir, state: &mut AppState) -> Result<bool> {
     match code {
         KeyCode::Char('y') => {
             if let Some(name) = state.selected_name().map(ToOwned::to_owned) {
-                cd.remove(&name).map_err(|error| error.to_string())?;
+                cd.remove(&name)?;
                 state.mode = UiMode::Browse;
                 state.refresh(cd)?;
                 state.status = format!("Removed provider '{name}'");
@@ -1174,15 +1195,14 @@ fn suggest_new_provider_name(state: &AppState) -> String {
     }
 }
 
-fn save_edit_session(cd: &ConfigDir, session: &EditSession) -> Result<String, String> {
+fn save_edit_session(cd: &ConfigDir, session: &EditSession) -> Result<String> {
     let new_name = session.draft.name.trim().to_owned();
     ensure_name_available(cd, &new_name, session.original_name.as_deref())?;
     let new_config = session.draft.to_provider_config()?;
-    cd.write(&new_name, &new_config)
-        .map_err(|error| error.to_string())?;
+    cd.write(&new_name, &new_config)?;
     if let Some(old_name) = &session.original_name {
         if old_name != &new_name {
-            cd.remove(old_name).map_err(|error| error.to_string())?;
+            cd.remove(old_name)?;
         }
     }
     Ok(new_name)
@@ -1401,7 +1421,7 @@ fn mask_option(value: Option<&str>) -> String {
     }
 }
 
-fn connect_selected_provider(cd: &ConfigDir, state: &AppState) -> Result<Option<String>, String> {
+fn connect_selected_provider(cd: &ConfigDir, state: &AppState) -> Result<Option<String>> {
     let Some(name) = state.selected_name() else {
         return Ok(None);
     };
@@ -1412,11 +1432,11 @@ fn connect_selected_provider(cd: &ConfigDir, state: &AppState) -> Result<Option<
     })
 }
 
-fn connect_all_providers(cd: &ConfigDir) -> Result<(), String> {
+fn connect_all_providers(cd: &ConfigDir) -> Result<()> {
     suspend_terminal(|| run_connect(None, true, cd))
 }
 
-fn run_connect(name: Option<String>, all: bool, cd: &ConfigDir) -> Result<(), String> {
+fn run_connect(name: Option<String>, all: bool, cd: &ConfigDir) -> Result<()> {
     let cmd = ConnectCommand {
         name,
         all,
@@ -1424,57 +1444,85 @@ fn run_connect(name: Option<String>, all: bool, cd: &ConfigDir) -> Result<(), St
     };
     let logger = TracingLogger::new();
     cmd._execute(&DefaultProviderProcessSupervisor, &logger)
-        .map_err(|error| error.to_string())
+        .map_err(Error::from)
 }
 
-fn ensure_name_available(
-    cd: &ConfigDir,
-    name: &str,
-    current_name: Option<&str>,
-) -> Result<(), String> {
-    let names = cd.list().map_err(|error| error.to_string())?;
+fn ensure_name_available(cd: &ConfigDir, name: &str, current_name: Option<&str>) -> Result<()> {
+    let names = cd.list()?;
     if names
         .iter()
         .any(|existing| existing == name && Some(existing.as_str()) != current_name)
     {
-        return Err(format!("provider '{name}' already exists"));
+        return Err(Error::Validation(format!(
+            "provider '{name}' already exists"
+        )));
     }
     Ok(())
 }
 
-fn enter_terminal() -> Result<DefaultTerminal, String> {
-    enable_raw_mode().map_err(|e| format!("failed to enable raw mode: {e}"))?;
+fn enter_terminal() -> Result<DefaultTerminal> {
+    enable_raw_mode().map_err(|source| Error::Terminal {
+        operation: "enable raw mode",
+        source,
+    })?;
     let mut out = stdout();
-    execute!(out, EnterAlternateScreen, cursor::Hide, EnableMouseCapture)
-        .map_err(|e| format!("failed to enter alternate screen: {e}"))?;
+    execute!(out, EnterAlternateScreen, cursor::Hide, EnableMouseCapture).map_err(|source| {
+        Error::Terminal {
+            operation: "enter alternate screen",
+            source,
+        }
+    })?;
     Ok(ratatui::init())
 }
 
-fn leave_terminal() -> Result<(), String> {
+fn leave_terminal() -> Result<()> {
     let mut out = stdout();
-    execute!(out, DisableMouseCapture, LeaveAlternateScreen, cursor::Show)
-        .map_err(|e| format!("failed to leave alternate screen: {e}"))?;
-    disable_raw_mode().map_err(|e| format!("failed to disable raw mode: {e}"))?;
+    execute!(out, DisableMouseCapture, LeaveAlternateScreen, cursor::Show).map_err(|source| {
+        Error::Terminal {
+            operation: "leave alternate screen",
+            source,
+        }
+    })?;
+    disable_raw_mode().map_err(|source| Error::Terminal {
+        operation: "disable raw mode",
+        source,
+    })?;
     ratatui::restore();
     Ok(())
 }
 
-fn suspend_terminal<T, F>(op: F) -> Result<T, String>
+fn suspend_terminal<T, F>(op: F) -> Result<T>
 where
-    F: FnOnce() -> Result<T, String>,
+    F: FnOnce() -> Result<T>,
 {
     let mut out = stdout();
-    execute!(out, DisableMouseCapture, LeaveAlternateScreen, cursor::Show)
-        .map_err(|e| format!("failed to suspend terminal UI: {e}"))?;
-    disable_raw_mode().map_err(|e| format!("failed to disable raw mode: {e}"))?;
+    execute!(out, DisableMouseCapture, LeaveAlternateScreen, cursor::Show).map_err(|source| {
+        Error::Terminal {
+            operation: "suspend terminal UI",
+            source,
+        }
+    })?;
+    disable_raw_mode().map_err(|source| Error::Terminal {
+        operation: "disable raw mode",
+        source,
+    })?;
 
     let result = op();
 
-    enable_raw_mode().map_err(|e| format!("failed to enable raw mode: {e}"))?;
-    execute!(out, EnterAlternateScreen, cursor::Hide, EnableMouseCapture)
-        .map_err(|e| format!("failed to resume terminal UI: {e}"))?;
-    out.flush()
-        .map_err(|e| format!("failed to flush terminal output: {e}"))?;
+    enable_raw_mode().map_err(|source| Error::Terminal {
+        operation: "re-enable raw mode",
+        source,
+    })?;
+    execute!(out, EnterAlternateScreen, cursor::Hide, EnableMouseCapture).map_err(|source| {
+        Error::Terminal {
+            operation: "resume terminal UI",
+            source,
+        }
+    })?;
+    out.flush().map_err(|source| Error::Terminal {
+        operation: "flush terminal output",
+        source,
+    })?;
     result
 }
 
@@ -1487,6 +1535,25 @@ mod tests {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
         let cd = ConfigDir::new(tmp.path().to_path_buf());
         (tmp, cd)
+    }
+
+    #[test]
+    fn optional_u64_invalid_returns_invalid_number_error() {
+        let err = optional_u64("abc", "storage.onedrive.token_expiry_buffer_secs")
+            .expect_err("parse should fail");
+
+        assert!(matches!(err, crate::tui::Error::InvalidNumber { .. }));
+    }
+
+    #[test]
+    fn app_state_load_wraps_config_error() {
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+        let path = tmp.path().join("not-a-directory");
+        std::fs::write(&path, "oops").expect("seed file should succeed");
+        let cd = ConfigDir::new(path);
+        let err = AppState::load(&cd).expect_err("load should fail");
+
+        assert!(matches!(err, crate::tui::Error::Config(_)));
     }
 
     fn local_provider(name: &str) -> ProviderEntry {
