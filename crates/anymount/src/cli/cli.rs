@@ -53,16 +53,29 @@ mod tests {
             .expect("parse should succeed");
 
         match cli.command.expect("command should exist") {
-            Commands::Provide(cmd) => assert_eq!(cmd.name, "demo"),
+            Commands::Provide(cmd) => assert_eq!(cmd.name.as_deref(), Some("demo")),
             other => panic!("unexpected command: {other:?}"),
         }
     }
 
     #[test]
-    fn provide_requires_name() {
-        let err = Cli::try_parse_from(["anymount", "provide"])
-            .expect_err("parse should fail without --name");
-        let rendered = err.to_string();
-        assert!(rendered.contains("--name"));
+    fn parse_provide_inline_command() {
+        let cli = Cli::try_parse_from([
+            "anymount",
+            "provide",
+            "--path",
+            "/tmp/demo",
+            "local",
+            "/data/demo",
+        ])
+        .expect("parse should succeed");
+
+        match cli.command.expect("command should exist") {
+            Commands::Provide(cmd) => {
+                assert!(cmd.name.is_none());
+                assert_eq!(cmd.path.as_deref(), Some(std::path::Path::new("/tmp/demo")));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 }

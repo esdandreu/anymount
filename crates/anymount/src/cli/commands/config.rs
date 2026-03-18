@@ -1,6 +1,6 @@
 use crate::StorageConfig;
-use crate::cli::commands::connect::{
-    ConnectStorageSubcommand, LocalStorageArgs, OneDriveStorageArgs,
+use crate::cli::commands::provide::{
+    LocalStorageArgs, OneDriveStorageArgs, ProvideStorageSubcommand,
 };
 use crate::config::{ConfigDir, ProviderFileConfig};
 use clap::{Args, Subcommand};
@@ -45,7 +45,7 @@ pub struct AddArgs {
     #[arg(long)]
     pub path: Option<PathBuf>,
     #[command(subcommand)]
-    pub storage: Option<ConnectStorageSubcommand>,
+    pub storage: Option<ProvideStorageSubcommand>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -125,7 +125,7 @@ fn execute_add(cd: &ConfigDir, args: &AddArgs) -> Result<(), String> {
 struct ResolvedAddArgs {
     name: String,
     path: PathBuf,
-    storage: ConnectStorageSubcommand,
+    storage: ProvideStorageSubcommand,
 }
 
 fn resolve_add_args(args: &AddArgs) -> Result<ResolvedAddArgs, String> {
@@ -178,7 +178,7 @@ impl std::fmt::Display for ProviderType {
     }
 }
 
-fn prompt_storage() -> Result<ConnectStorageSubcommand, String> {
+fn prompt_storage() -> Result<ProvideStorageSubcommand, String> {
     let options = vec![ProviderType::Local, ProviderType::OneDrive];
     let selected = Select::new("Select provider type:", options)
         .prompt()
@@ -190,16 +190,16 @@ fn prompt_storage() -> Result<ConnectStorageSubcommand, String> {
     }
 }
 
-fn prompt_local_storage() -> Result<ConnectStorageSubcommand, String> {
+fn prompt_local_storage() -> Result<ProvideStorageSubcommand, String> {
     let root = Text::new("Root directory to expose:")
         .prompt()
         .map_err(|e| format!("failed to read root directory: {e}"))?;
-    Ok(ConnectStorageSubcommand::Local(LocalStorageArgs {
+    Ok(ProvideStorageSubcommand::Local(LocalStorageArgs {
         root: PathBuf::from(root),
     }))
 }
 
-fn prompt_onedrive_storage() -> Result<ConnectStorageSubcommand, String> {
+fn prompt_onedrive_storage() -> Result<ProvideStorageSubcommand, String> {
     let root = Text::new("OneDrive path to use as root:")
         .with_default("/")
         .prompt()
@@ -221,7 +221,7 @@ fn prompt_onedrive_storage() -> Result<ConnectStorageSubcommand, String> {
         .parse::<u64>()
         .map_err(|e| format!("invalid number: {e}"))?;
 
-    Ok(ConnectStorageSubcommand::OneDrive(OneDriveStorageArgs {
+    Ok(ProvideStorageSubcommand::OneDrive(OneDriveStorageArgs {
         root: PathBuf::from(root),
         endpoint,
         access_token,
@@ -256,12 +256,12 @@ fn execute_set(cd: &ConfigDir, args: &SetArgs) -> Result<(), String> {
     Ok(())
 }
 
-fn storage_config_from_subcommand(sub: &ConnectStorageSubcommand) -> StorageConfig {
+fn storage_config_from_subcommand(sub: &ProvideStorageSubcommand) -> StorageConfig {
     match sub {
-        ConnectStorageSubcommand::Local(a) => StorageConfig::Local {
+        ProvideStorageSubcommand::Local(a) => StorageConfig::Local {
             root: a.root.clone(),
         },
-        ConnectStorageSubcommand::OneDrive(a) => StorageConfig::OneDrive {
+        ProvideStorageSubcommand::OneDrive(a) => StorageConfig::OneDrive {
             root: a.root.clone(),
             endpoint: a.endpoint.clone(),
             access_token: a.access_token.clone(),
@@ -354,7 +354,7 @@ fn apply_set(cfg: &mut ProviderFileConfig, key: &str, value: &str) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::commands::connect::LocalStorageArgs;
+    use crate::cli::commands::provide::{LocalStorageArgs, ProvideStorageSubcommand};
 
     fn local_config() -> ProviderFileConfig {
         ProviderFileConfig {
@@ -461,7 +461,7 @@ mod tests {
         let args = AddArgs {
             name: Some("dup".to_owned()),
             path: Some(PathBuf::from("/mnt/x")),
-            storage: Some(ConnectStorageSubcommand::Local(LocalStorageArgs {
+            storage: Some(ProvideStorageSubcommand::Local(LocalStorageArgs {
                 root: PathBuf::from("/x"),
             })),
         };
@@ -476,7 +476,7 @@ mod tests {
         let args = AddArgs {
             name: Some("test".to_owned()),
             path: Some(PathBuf::from("/mnt/test")),
-            storage: Some(ConnectStorageSubcommand::Local(LocalStorageArgs {
+            storage: Some(ProvideStorageSubcommand::Local(LocalStorageArgs {
                 root: PathBuf::from("/test/root"),
             })),
         };
@@ -521,7 +521,7 @@ mod tests {
         let args = AddArgs {
             name: Some("my-provider".to_owned()),
             path: Some(PathBuf::from("/mnt/test")),
-            storage: Some(ConnectStorageSubcommand::Local(LocalStorageArgs {
+            storage: Some(ProvideStorageSubcommand::Local(LocalStorageArgs {
                 root: PathBuf::from("/data"),
             })),
         };

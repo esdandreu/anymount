@@ -1,12 +1,13 @@
 use super::callbacks::Callbacks;
 use super::{Provider, ProviderConfiguration, Storage};
 use crate::Logger;
+use crate::daemon::messages::DaemonMessage;
 use cloud_filter::root::{
     Connection, HydrationType, PopulationType, SecurityId, Session, SyncRootId, SyncRootIdBuilder,
     SyncRootInfo,
 };
 use std::path::{PathBuf, absolute};
-use std::sync::Arc;
+use std::sync::{Arc, mpsc::Sender};
 
 pub const ID_PREFIX: &'static str = "Anymount";
 
@@ -24,6 +25,7 @@ impl<S: Storage, L: Logger + 'static> CloudFilterProvider<S, L> {
         config: &impl ProviderConfiguration,
         storage: S,
         logger: L,
+        daemon_tx: Option<Sender<DaemonMessage>>,
     ) -> Result<Arc<Self>, String> {
         let security_id = SecurityId::current_user().map_err(|e| e.to_string())?;
         let path = config.path();
@@ -65,7 +67,10 @@ impl<S: Storage, L: Logger + 'static> CloudFilterProvider<S, L> {
         // Connect session
         let session = Session::new();
         let connection = session
-            .connect(&path, Callbacks::new(path.clone(), storage, logger.clone()))
+            .connect(
+                &path,
+                Callbacks::new(path.clone(), storage, logger.clone(), daemon_tx),
+            )
             .map_err(|e| format!("Failed to connect to sync root: {}", e))?;
 
         Ok(Arc::new(Self {

@@ -1,8 +1,8 @@
 use crate::auth::{OneDriveAuthorizer, TokenResponse};
 use crate::cli::commands::config::ProviderType;
-use crate::cli::commands::connect::{ConnectCommand, DefaultProviderConnector, StopSignalWaiter};
+use crate::cli::commands::connect::{ConnectCommand, DefaultProviderProcessSupervisor};
 use crate::config::ConfigDir;
-use crate::{Logger, ProviderFileConfig, StorageConfig, TracingLogger};
+use crate::{ProviderFileConfig, StorageConfig, TracingLogger};
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
     MouseEvent, MouseEventKind,
@@ -1393,16 +1393,10 @@ fn run_connect(name: Option<String>, all: bool, cd: &ConfigDir) -> Result<(), St
     let cmd = ConnectCommand {
         name,
         all,
-        path: None,
         config_dir: Some(cd.dir().to_path_buf()),
-        storage: None,
     };
     let logger = TracingLogger::new();
-    cmd._execute(
-        &DefaultProviderConnector,
-        &InteractiveStopSignalWaiter,
-        &logger,
-    )
+    cmd._execute(&DefaultProviderProcessSupervisor, &logger)
 }
 
 fn ensure_name_available(
@@ -1454,16 +1448,6 @@ where
     out.flush()
         .map_err(|e| format!("failed to flush terminal output: {e}"))?;
     result
-}
-
-struct InteractiveStopSignalWaiter;
-
-impl StopSignalWaiter for InteractiveStopSignalWaiter {
-    fn wait<L: Logger>(&self, logger: &L) {
-        logger.info("Press Enter to disconnect and return to the UI.");
-        let mut input = String::new();
-        let _ = std::io::stdin().read_line(&mut input);
-    }
 }
 
 #[cfg(test)]
