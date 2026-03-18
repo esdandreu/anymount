@@ -1,81 +1,67 @@
+use crate::Logger;
+use crate::TracingLogger;
 use crate::config::ConfigDir;
-use crate::{
-    Config, Logger, Provider, ProviderFileConfig, ProvidersConfiguration, StorageConfig,
-    TracingLogger,
-};
-use clap::{Args, Subcommand};
-use std::path::PathBuf;
-use std::sync::mpsc;
+use crate::daemon::messages::ControlMessage;
+use clap::Args;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::thread;
+use std::time::{Duration, Instant};
 
-/// Connect command. Providers can come from config files
-/// (`--name` / `--all`) or inline CLI args (`--path` + storage
-/// subcommand).
+#[cfg(unix)]
+use crate::daemon::control_unix::UnixControl;
+
+#[cfg(target_os = "windows")]
+use crate::daemon::control_windows::WindowsControl;
+
+/// Connect command ensures configured provider processes are running.
 #[derive(Args, Debug, Clone)]
 pub struct ConnectCommand {
     /// Connect a named provider from config.
-    #[arg(long, conflicts_with_all = ["all", "path"])]
+    #[arg(long, conflicts_with = "all")]
     pub name: Option<String>,
 
     /// Connect all configured providers.
-    #[arg(long, conflicts_with_all = ["name", "path"])]
+    #[arg(long, conflicts_with = "name")]
     pub all: bool,
-
-    /// Path to the mount point (inline mode).
-    #[arg(long, conflicts_with_all = ["name", "all"])]
-    pub path: Option<PathBuf>,
 
     /// Config directory override.
     #[arg(long)]
     pub config_dir: Option<PathBuf>,
-
-    #[command(subcommand)]
-    pub storage: Option<ConnectStorageSubcommand>,
 }
 
 impl ConnectCommand {
     pub fn execute(&self) -> Result<(), String> {
         let logger = TracingLogger::new();
-        self._execute(&DefaultProviderConnector, &DefaultStopSignalWaiter, &logger)
+        self._execute(&DefaultProviderProcessSupervisor, &logger)
     }
 
-    pub(crate) fn _execute<C, W, L>(
-        &self,
-        connector: &C,
-        waiter: &W,
-        logger: &L,
-    ) -> Result<(), String>
+    pub(crate) fn _execute<S, L>(&self, supervisor: &S, logger: &L) -> Result<(), String>
     where
-        C: ProviderConnector,
-        W: StopSignalWaiter,
+        S: ProviderProcessSupervisor,
         L: Logger + 'static,
     {
         if self.all {
             let cd = self.config_dir();
-            let config = cd.load_all()?;
-            run_providers(&config, connector, waiter, logger)
+            let mut failures = Vec::new();
+            for name in cd.list()? {
+                if let Err(error) = supervisor.ensure_running(&name, &cd, logger) {
+                    failures.push(format!("{name}: {error}"));
+                }
+            }
+            if failures.is_empty() {
+                Ok(())
+            } else {
+                Err(format!(
+                    "failed to connect providers: {}",
+                    failures.join(", ")
+                ))
+            }
         } else if let Some(name) = &self.name {
             let cd = self.config_dir();
-            let provider = cd.read(name)?;
-            let config = Config {
-                providers: vec![provider],
-            };
-            run_providers(&config, connector, waiter, logger)
-        } else if let (Some(path), Some(storage)) = (&self.path, &self.storage) {
-            let inline = InlineConfig {
-                path: path.clone(),
-                storage: storage.to_storage_config(),
-            };
-            let config = Config {
-                providers: vec![ProviderFileConfig {
-                    path: inline.path,
-                    storage: inline.storage,
-                }],
-            };
-            run_providers(&config, connector, waiter, logger)
+            supervisor.ensure_running(name, &cd, logger)
         } else {
-            Err("specify --name <NAME>, --all, or \
-                 --path <PATH> with a storage subcommand"
-                .to_owned())
+            Err("specify --name <NAME> or --all".to_owned())
         }
     }
 
@@ -87,216 +73,220 @@ impl ConnectCommand {
     }
 }
 
-struct InlineConfig {
-    path: PathBuf,
-    storage: StorageConfig,
-}
-
-/// Shared connection logic: connect providers, wait for stop signal,
-/// then clean up.
-pub(crate) fn run_providers<P, C, W, L>(
-    config: &P,
-    connector: &C,
-    waiter: &W,
-    logger: &L,
-) -> Result<(), String>
-where
-    P: ProvidersConfiguration,
-    C: ProviderConnector,
-    W: StopSignalWaiter,
-    L: Logger + 'static,
-{
-    let providers = connector.connect(config, logger)?;
-    for provider in &providers {
-        logger.info(format!(
-            "Connected to {} at {}",
-            provider.kind(),
-            provider.path().display()
-        ));
-    }
-    logger.info("All providers connected. Press Ctrl+C to disconnect.");
-    waiter.wait(logger);
-    drop(providers);
-    Ok(())
-}
-
-#[derive(Subcommand, Debug, Clone)]
-pub enum ConnectStorageSubcommand {
-    /// Local directory as storage backend
-    Local(LocalStorageArgs),
-    /// OneDrive (Microsoft Graph) as storage backend
-    #[command(name = "onedrive")]
-    OneDrive(OneDriveStorageArgs),
-}
-
-#[derive(Args, Debug, Clone)]
-pub struct LocalStorageArgs {
-    /// Root directory to expose
-    #[arg(value_name = "ROOT")]
-    pub root: PathBuf,
-}
-
-#[derive(Args, Debug, Clone)]
-pub struct OneDriveStorageArgs {
-    /// OneDrive path to use as root (e.g. / or /Documents)
-    #[arg(long, default_value = "/", value_name = "PATH")]
-    pub root: PathBuf,
-    /// Graph API endpoint (e.g. https://graph.microsoft.com/v1.0)
-    #[arg(
-        long,
-        default_value = "https://graph.microsoft.com/v1.0",
-        value_name = "URL"
-    )]
-    pub endpoint: String,
-    /// Access token (optional if refresh_token and client_id are set)
-    #[arg(long, value_name = "TOKEN")]
-    pub access_token: Option<String>,
-    /// Refresh token (required if access_token is missing or may expire)
-    #[arg(long, value_name = "TOKEN")]
-    pub refresh_token: Option<String>,
-    /// OAuth client_id (required when refresh_token is set)
-    #[arg(long, value_name = "ID")]
-    pub client_id: Option<String>,
-    /// Seconds before token expiry to trigger refresh (default: 60)
-    #[arg(long, default_value = "60", value_name = "SECS")]
-    pub token_expiry_buffer_secs: u64,
-}
-
-impl ConnectStorageSubcommand {
-    pub(crate) fn to_storage_config(&self) -> StorageConfig {
-        match self {
-            Self::Local(args) => StorageConfig::Local {
-                root: args.root.clone(),
-            },
-            Self::OneDrive(args) => StorageConfig::OneDrive {
-                root: args.root.clone(),
-                endpoint: args.endpoint.clone(),
-                access_token: args.access_token.clone(),
-                refresh_token: args.refresh_token.clone(),
-                client_id: args.client_id.clone(),
-                token_expiry_buffer_secs: Some(args.token_expiry_buffer_secs),
-            },
-        }
-    }
-}
-
-/// Port for connecting to storage providers. Inject a mock in tests.
-pub trait ProviderConnector {
-    fn connect<C, L>(&self, config: &C, logger: &L) -> Result<Vec<Box<dyn Provider>>, String>
+pub trait ProviderProcessSupervisor {
+    fn ensure_running<L>(
+        &self,
+        provider_name: &str,
+        config_dir: &ConfigDir,
+        logger: &L,
+    ) -> Result<(), String>
     where
-        C: ProvidersConfiguration,
         L: Logger + 'static;
 }
 
-/// Default connector that uses the platform cloud filter (e.g. Windows Cloud
-/// Filter API).
 #[derive(Debug, Clone, Copy, Default)]
-pub struct DefaultProviderConnector;
+pub struct DefaultProviderProcessSupervisor;
 
-impl ProviderConnector for DefaultProviderConnector {
-    fn connect<C, L>(&self, config: &C, logger: &L) -> Result<Vec<Box<dyn Provider>>, String>
+impl ProviderProcessSupervisor for DefaultProviderProcessSupervisor {
+    fn ensure_running<L>(
+        &self,
+        provider_name: &str,
+        config_dir: &ConfigDir,
+        logger: &L,
+    ) -> Result<(), String>
     where
-        C: ProvidersConfiguration,
         L: Logger + 'static,
     {
-        crate::connect_providers(config, logger)
-    }
-}
-
-/// Port for blocking until the user requests disconnect (e.g. Ctrl+C). Inject
-/// a no-op in tests.
-pub trait StopSignalWaiter {
-    fn wait<L: Logger>(&self, logger: &L);
-}
-
-/// Default waiter that blocks until Ctrl+C.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct DefaultStopSignalWaiter;
-
-impl StopSignalWaiter for DefaultStopSignalWaiter {
-    fn wait<L: Logger>(&self, logger: &L) {
-        let (tx, rx) = mpsc::channel();
-        if let Err(e) = ctrlc::set_handler(move || {
-            let _ = tx.send(());
-        }) {
-            logger.error(format!("Error setting Ctrl-C handler: {}", e));
-            return;
+        if is_provider_running(provider_name)? {
+            logger.info(format!("Provider {provider_name} is already running"));
+            return Ok(());
         }
-        let _ = rx.recv();
+
+        let mut child = spawn_provider_process(provider_name, config_dir.dir())?;
+        wait_until_ready(provider_name, &mut child, logger)
     }
+}
+
+#[cfg(unix)]
+fn is_provider_running(provider_name: &str) -> Result<bool, String> {
+    match UnixControl.send(provider_name, ControlMessage::Ping) {
+        Ok(ControlMessage::Ready) => Ok(true),
+        Ok(_) => Ok(false),
+        Err(_) => Ok(false),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn is_provider_running(provider_name: &str) -> Result<bool, String> {
+    match WindowsControl.send(provider_name, ControlMessage::Ping) {
+        Ok(ControlMessage::Ready) => Ok(true),
+        Ok(_) => Ok(false),
+        Err(_) => Ok(false),
+    }
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+fn is_provider_running(_provider_name: &str) -> Result<bool, String> {
+    Ok(false)
+}
+
+fn spawn_provider_process(
+    provider_name: &str,
+    config_dir: &Path,
+) -> Result<std::process::Child, String> {
+    let current_exe =
+        std::env::current_exe().map_err(|error| format!("resolve current executable: {error}"))?;
+    Command::new(current_exe)
+        .arg("provide")
+        .arg("--name")
+        .arg(provider_name)
+        .arg("--config-dir")
+        .arg(config_dir)
+        .spawn()
+        .map_err(|error| format!("spawn provider process for {provider_name}: {error}"))
+}
+
+/// Poll frequently enough to make `connect` feel immediate while still giving
+/// the spawned process time to bind its control endpoint and mount storage.
+const READY_TIMEOUT: Duration = Duration::from_secs(5);
+const READY_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+fn wait_until_ready<L: Logger>(
+    provider_name: &str,
+    child: &mut std::process::Child,
+    logger: &L,
+) -> Result<(), String> {
+    let deadline = Instant::now() + READY_TIMEOUT;
+    loop {
+        let child_status = child
+            .try_wait()
+            .map(|status| status.map(|value| value.to_string()))
+            .map_err(|error| format!("wait for provider process {provider_name}: {error}"))?;
+
+        match next_ready_action(
+            provider_name,
+            is_provider_running(provider_name)?,
+            child_status,
+            Instant::now() >= deadline,
+        ) {
+            Ok(ReadyAction::Ready) => {
+                logger.info(format!("Provider {provider_name} is ready"));
+                return Ok(());
+            }
+            Ok(ReadyAction::Wait) => {}
+            Err(error) => return Err(error),
+        }
+
+        thread::sleep(READY_POLL_INTERVAL);
+    }
+}
+
+#[derive(Debug)]
+enum ReadyAction {
+    Ready,
+    Wait,
+}
+
+fn next_ready_action(
+    provider_name: &str,
+    is_running: bool,
+    child_status: Option<String>,
+    deadline_expired: bool,
+) -> Result<ReadyAction, String> {
+    if is_running {
+        return Ok(ReadyAction::Ready);
+    }
+
+    if let Some(status) = child_status {
+        return Err(format!(
+            "provider process {provider_name} exited before ready with status {status}"
+        ));
+    }
+
+    if deadline_expired {
+        return Err(format!(
+            "provider process {provider_name} did not become ready"
+        ));
+    }
+
+    Ok(ReadyAction::Wait)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::NoOpLogger;
+    use crate::{ProviderFileConfig, StorageConfig};
+    use std::collections::{HashMap, HashSet};
+    use std::sync::{Arc, Mutex};
 
-    struct FailingConnector;
+    #[derive(Clone, Default)]
+    struct RecordingSupervisor {
+        running: Arc<Mutex<HashSet<String>>>,
+        failures: Arc<Mutex<HashMap<String, String>>>,
+        ensured: Arc<Mutex<Vec<String>>>,
+    }
 
-    impl ProviderConnector for FailingConnector {
-        fn connect<C, L>(
+    impl RecordingSupervisor {
+        fn with_running(provider_name: &str) -> Self {
+            let supervisor = Self::default();
+            supervisor
+                .running
+                .lock()
+                .expect("running providers lock should not be poisoned")
+                .insert(provider_name.to_owned());
+            supervisor
+        }
+
+        fn with_failure(provider_name: &str, error: &str) -> Self {
+            let supervisor = Self::default();
+            supervisor
+                .failures
+                .lock()
+                .expect("failure map lock should not be poisoned")
+                .insert(provider_name.to_owned(), error.to_owned());
+            supervisor
+        }
+
+        fn ensured(&self) -> Vec<String> {
+            self.ensured
+                .lock()
+                .expect("ensure log lock should not be poisoned")
+                .clone()
+        }
+    }
+
+    impl ProviderProcessSupervisor for RecordingSupervisor {
+        fn ensure_running<L>(
             &self,
-            _config: &C,
+            provider_name: &str,
+            _config_dir: &ConfigDir,
             _logger: &L,
-        ) -> Result<Vec<Box<dyn crate::Provider>>, String>
+        ) -> Result<(), String>
         where
-            C: crate::ProvidersConfiguration,
-            L: crate::Logger + 'static,
+            L: Logger + 'static,
         {
-            Err("mock connect error".into())
+            self.ensured
+                .lock()
+                .expect("ensure log lock should not be poisoned")
+                .push(provider_name.to_owned());
+
+            if let Some(error) = self
+                .failures
+                .lock()
+                .expect("failure map lock should not be poisoned")
+                .get(provider_name)
+                .cloned()
+            {
+                return Err(error);
+            }
+
+            self.running
+                .lock()
+                .expect("running providers lock should not be poisoned")
+                .insert(provider_name.to_owned());
+            Ok(())
         }
-    }
-
-    struct NoOpWaiter;
-
-    impl StopSignalWaiter for NoOpWaiter {
-        fn wait<L: crate::Logger>(&self, _logger: &L) {}
-    }
-
-    fn inline_cmd() -> ConnectCommand {
-        ConnectCommand {
-            name: None,
-            all: false,
-            path: Some(PathBuf::from("/tmp/mount")),
-            config_dir: None,
-            storage: Some(ConnectStorageSubcommand::Local(LocalStorageArgs {
-                root: PathBuf::from("/tmp/root"),
-            })),
-        }
-    }
-
-    #[test]
-    fn execute_returns_connector_error() {
-        let cmd = inline_cmd();
-        let logger = NoOpLogger;
-        let err = cmd
-            ._execute(&FailingConnector, &NoOpWaiter, &logger)
-            .unwrap_err();
-        assert_eq!(err, "mock connect error");
-    }
-
-    struct EmptyConnector;
-
-    impl ProviderConnector for EmptyConnector {
-        fn connect<C, L>(
-            &self,
-            _config: &C,
-            _logger: &L,
-        ) -> Result<Vec<Box<dyn crate::Provider>>, String>
-        where
-            C: crate::ProvidersConfiguration,
-            L: crate::Logger + 'static,
-        {
-            Ok(vec![])
-        }
-    }
-
-    #[test]
-    fn execute_succeeds_with_inline_args() {
-        let cmd = inline_cmd();
-        let logger = NoOpLogger;
-        let result = cmd._execute(&EmptyConnector, &NoOpWaiter, &logger);
-        assert!(result.is_ok());
     }
 
     #[test]
@@ -317,13 +307,13 @@ mod tests {
         let cmd = ConnectCommand {
             name: Some("test".to_owned()),
             all: false,
-            path: None,
             config_dir: Some(tmp.path().to_path_buf()),
-            storage: None,
         };
         let logger = NoOpLogger;
-        let result = cmd._execute(&EmptyConnector, &NoOpWaiter, &logger);
+        let supervisor = RecordingSupervisor::default();
+        let result = cmd._execute(&supervisor, &logger);
         assert!(result.is_ok());
+        assert_eq!(supervisor.ensured(), vec!["test"]);
     }
 
     #[test]
@@ -344,13 +334,13 @@ mod tests {
         let cmd = ConnectCommand {
             name: None,
             all: true,
-            path: None,
             config_dir: Some(tmp.path().to_path_buf()),
-            storage: None,
         };
         let logger = NoOpLogger;
-        let result = cmd._execute(&EmptyConnector, &NoOpWaiter, &logger);
+        let supervisor = RecordingSupervisor::default();
+        let result = cmd._execute(&supervisor, &logger);
         assert!(result.is_ok());
+        assert_eq!(supervisor.ensured(), vec!["a"]);
     }
 
     #[test]
@@ -358,12 +348,85 @@ mod tests {
         let cmd = ConnectCommand {
             name: None,
             all: false,
-            path: None,
             config_dir: None,
-            storage: None,
         };
         let logger = NoOpLogger;
-        let result = cmd._execute(&EmptyConnector, &NoOpWaiter, &logger);
+        let result = cmd._execute(&RecordingSupervisor::default(), &logger);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn execute_reuses_running_provider_daemon() {
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+        let cd = ConfigDir::new(tmp.path().to_path_buf());
+        cd.write(
+            "demo",
+            &crate::ProviderFileConfig {
+                path: PathBuf::from("/mnt/demo"),
+                storage: crate::StorageConfig::Local {
+                    root: PathBuf::from("/data/demo"),
+                },
+            },
+        )
+        .expect("write failed");
+
+        let cmd = ConnectCommand {
+            name: Some("demo".to_owned()),
+            all: false,
+            config_dir: Some(tmp.path().to_path_buf()),
+        };
+        let supervisor = RecordingSupervisor::with_running("demo");
+        cmd._execute(&supervisor, &NoOpLogger)
+            .expect("connect should succeed");
+
+        assert_eq!(supervisor.ensured(), vec!["demo"]);
+    }
+
+    #[test]
+    fn execute_returns_error_when_one_provider_fails_during_all() {
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+        let cd = ConfigDir::new(tmp.path().to_path_buf());
+        for (name, path) in [("healthy", "/mnt/healthy"), ("broken", "/mnt/broken")] {
+            cd.write(
+                name,
+                &crate::ProviderFileConfig {
+                    path: PathBuf::from(path),
+                    storage: crate::StorageConfig::Local {
+                        root: PathBuf::from(format!("/data/{name}")),
+                    },
+                },
+            )
+            .expect("write failed");
+        }
+
+        let cmd = ConnectCommand {
+            name: None,
+            all: true,
+            config_dir: Some(tmp.path().to_path_buf()),
+        };
+        let supervisor = RecordingSupervisor::with_failure("broken", "startup failed");
+
+        let err = cmd
+            ._execute(&supervisor, &NoOpLogger)
+            .expect_err("connect all should fail");
+
+        assert!(err.contains("broken"));
+        assert!(supervisor.ensured().contains(&"healthy".to_owned()));
+    }
+
+    #[test]
+    fn ready_check_reports_exited_process_before_ready() {
+        let outcome = next_ready_action("demo", false, Some("exit status 1".to_owned()), false)
+            .expect_err("exited child should fail");
+
+        assert!(outcome.contains("exited before ready"));
+    }
+
+    #[test]
+    fn ready_check_reports_timeout_when_deadline_passes() {
+        let outcome =
+            next_ready_action("demo", false, None, true).expect_err("expired deadline should fail");
+
+        assert!(outcome.contains("did not become ready"));
     }
 }

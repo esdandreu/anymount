@@ -1,8 +1,10 @@
 use crate::Logger;
+use crate::daemon::messages::DaemonMessage;
 use crate::storages::{LocalStorage, OneDriveConfig};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::result::Result;
+use std::sync::mpsc::Sender;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -43,14 +45,27 @@ pub fn connect_providers(
     config: &impl ProvidersConfiguration,
     logger: &(impl Logger + 'static),
 ) -> Result<Vec<Box<dyn Provider>>, String> {
+    connect_providers_with_telemetry(config, logger, None)
+}
+
+#[cfg(target_os = "windows")]
+pub fn connect_providers_with_telemetry(
+    config: &impl ProvidersConfiguration,
+    logger: &(impl Logger + 'static),
+    daemon_tx: Option<Sender<DaemonMessage>>,
+) -> Result<Vec<Box<dyn Provider>>, String> {
     use super::cloudfilter::{CloudFilterProvider, cleanup_registry};
     let mut providers: Vec<Box<dyn Provider>> = Vec::new();
     for provider_config in config.providers() {
         match provider_config.storage_config() {
             StorageConfig::Local { root } => {
                 let storage = LocalStorage::new(root);
-                let provider =
-                    CloudFilterProvider::connect(provider_config, storage, logger.clone())?;
+                let provider = CloudFilterProvider::connect(
+                    provider_config,
+                    storage,
+                    logger.clone(),
+                    daemon_tx.clone(),
+                )?;
                 providers.push(Box::new(provider) as Box<dyn Provider>);
             }
             StorageConfig::OneDrive {
@@ -70,8 +85,12 @@ pub fn connect_providers(
                     token_expiry_buffer_secs,
                 };
                 let storage = config.connect().map_err(|e| e.to_string())?;
-                let provider =
-                    CloudFilterProvider::connect(provider_config, storage, logger.clone())?;
+                let provider = CloudFilterProvider::connect(
+                    provider_config,
+                    storage,
+                    logger.clone(),
+                    daemon_tx.clone(),
+                )?;
                 providers.push(Box::new(provider) as Box<dyn Provider>);
             }
         }
@@ -84,6 +103,15 @@ pub fn connect_providers(
 pub fn connect_providers(
     config: &impl ProvidersConfiguration,
     logger: &(impl Logger + 'static),
+) -> Result<Vec<Box<dyn Provider>>, String> {
+    connect_providers_with_telemetry(config, logger, None)
+}
+
+#[cfg(target_os = "linux")]
+pub fn connect_providers_with_telemetry(
+    config: &impl ProvidersConfiguration,
+    logger: &(impl Logger + 'static),
+    _daemon_tx: Option<Sender<DaemonMessage>>,
 ) -> Result<Vec<Box<dyn Provider>>, String> {
     use super::libcloudprovider::dbus::AccountExporter;
     use super::libcloudprovider::provider::{LibCloudProvider, export_on_dbus, mount_storage};
@@ -162,6 +190,15 @@ pub fn connect_providers(
 pub fn connect_providers(
     _config: &impl ProvidersConfiguration,
     _logger: &impl Logger,
+) -> Result<Vec<Box<dyn Provider>>, String> {
+    connect_providers_with_telemetry(_config, _logger, None)
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+pub fn connect_providers_with_telemetry(
+    _config: &impl ProvidersConfiguration,
+    _logger: &impl Logger,
+    _daemon_tx: Option<Sender<DaemonMessage>>,
 ) -> Result<Vec<Box<dyn Provider>>, String> {
     Err(String::from("Not supported on this platform"))
 }

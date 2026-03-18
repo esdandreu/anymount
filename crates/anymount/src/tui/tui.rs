@@ -1,8 +1,8 @@
 use crate::auth::{OneDriveAuthorizer, TokenResponse};
 use crate::cli::commands::config::ProviderType;
-use crate::cli::commands::connect::{ConnectCommand, DefaultProviderConnector, StopSignalWaiter};
+use crate::cli::commands::connect::{ConnectCommand, DefaultProviderProcessSupervisor};
 use crate::config::ConfigDir;
-use crate::{Logger, ProviderFileConfig, StorageConfig, TracingLogger};
+use crate::{ProviderFileConfig, StorageConfig, TracingLogger};
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
     MouseEvent, MouseEventKind,
@@ -654,10 +654,11 @@ fn longest_common_prefix(values: &[String]) -> String {
 
 fn complete_filesystem_path(input: &str) -> Result<PathCompletion, String> {
     let expanded = expand_tilde(input);
-    let (dir_text, prefix) = if expanded.ends_with('/') {
+    let (dir_text, prefix) = if expanded.chars().last().is_some_and(std::path::is_separator) {
         (expanded.clone(), String::new())
-    } else if let Some((dir, file)) = expanded.rsplit_once('/') {
-        (format!("{dir}/"), file.to_owned())
+    } else if let Some(index) = expanded.rfind(std::path::is_separator) {
+        let (dir, file) = expanded.split_at(index + 1);
+        (dir.to_owned(), file.to_owned())
     } else {
         (String::new(), expanded.clone())
     };
@@ -681,7 +682,7 @@ fn complete_filesystem_path(input: &str) -> Result<PathCompletion, String> {
         }
         let mut candidate = format!("{dir_text}{name}");
         if entry.path().is_dir() {
-            candidate.push('/');
+            candidate.push(std::path::MAIN_SEPARATOR);
         }
         candidates.push(candidate);
     }
@@ -1393,16 +1394,10 @@ fn run_connect(name: Option<String>, all: bool, cd: &ConfigDir) -> Result<(), St
     let cmd = ConnectCommand {
         name,
         all,
-        path: None,
         config_dir: Some(cd.dir().to_path_buf()),
-        storage: None,
     };
     let logger = TracingLogger::new();
-    cmd._execute(
-        &DefaultProviderConnector,
-        &InteractiveStopSignalWaiter,
-        &logger,
-    )
+    cmd._execute(&DefaultProviderProcessSupervisor, &logger)
 }
 
 fn ensure_name_available(
@@ -1454,16 +1449,6 @@ where
     out.flush()
         .map_err(|e| format!("failed to flush terminal output: {e}"))?;
     result
-}
-
-struct InteractiveStopSignalWaiter;
-
-impl StopSignalWaiter for InteractiveStopSignalWaiter {
-    fn wait<L: Logger>(&self, logger: &L) {
-        logger.info("Press Enter to disconnect and return to the UI.");
-        let mut input = String::new();
-        let _ = std::io::stdin().read_line(&mut input);
-    }
 }
 
 #[cfg(test)]
@@ -1673,7 +1658,7 @@ mod tests {
         std::fs::create_dir(&dir).expect("failed to create dir");
         let input = tmp.path().join("a").display().to_string();
         let output = complete_filesystem_path(&input).expect("completion failed");
-        let expected = format!("{}/", dir.display());
+        let expected = format!("{}{}", dir.display(), std::path::MAIN_SEPARATOR);
         match output {
             PathCompletion::Updated { value, exact, .. } => {
                 assert_eq!(value, expected);
@@ -1702,6 +1687,15 @@ mod tests {
             }
             PathCompletion::NoMatch => panic!("expected prefix expansion"),
         }
+    }
+
+    #[test]
+    fn path_completion_returns_no_match_when_directory_has_no_matches() {
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+        std::fs::create_dir(tmp.path().join("alpha")).expect("failed to create alpha");
+        let input = tmp.path().join("z").display().to_string();
+        let output = complete_filesystem_path(&input).expect("completion failed");
+        assert!(matches!(output, PathCompletion::NoMatch));
     }
 
     #[test]

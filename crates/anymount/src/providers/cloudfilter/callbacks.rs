@@ -1,5 +1,6 @@
 use super::Storage;
 use crate::Logger;
+use crate::daemon::messages::DaemonMessage;
 use crate::providers::cloudfilter::placeholders::{dehydrate_file, get_placeholder_info};
 use crate::storages::{DirEntry, WriteAt};
 use cloud_filter::{
@@ -12,6 +13,7 @@ use cloud_filter::{
 use parking_lot::Mutex;
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::mpsc::Sender;
 use std::time::SystemTime;
 use windows::Win32::Storage::CloudFilters::CF_PIN_STATE_UNPINNED;
 
@@ -19,17 +21,31 @@ pub struct Callbacks<S: Storage, L: Logger> {
     path: PathBuf,
     storage: S,
     logger: L,
+    daemon_tx: Option<Sender<DaemonMessage>>,
     pending_dehydrate: Mutex<HashSet<PathBuf>>,
 }
 
 impl<S: Storage, L: Logger> Callbacks<S, L> {
-    pub fn new(path: PathBuf, storage: S, logger: L) -> Self {
+    pub fn new(
+        path: PathBuf,
+        storage: S,
+        logger: L,
+        daemon_tx: Option<Sender<DaemonMessage>>,
+    ) -> Self {
         Self {
             path,
             storage,
             logger,
+            daemon_tx,
             pending_dehydrate: Mutex::new(HashSet::new()),
         }
+    }
+
+    fn emit_telemetry(&self, message: String) {
+        if let Some(tx) = &self.daemon_tx {
+            let _ = tx.send(DaemonMessage::Telemetry(message.clone()));
+        }
+        self.logger.info(message);
     }
 }
 
@@ -40,7 +56,7 @@ impl<S: Storage, L: Logger> SyncFilter for Callbacks<S, L> {
         ticket: ticket::FetchData,
         info: info::FetchData,
     ) -> CResult<()> {
-        self.logger.info(format!(
+        self.emit_telemetry(format!(
             "fetch_data: path={:?}, range={:?}",
             request.path(),
             info.required_file_range()
@@ -50,7 +66,7 @@ impl<S: Storage, L: Logger> SyncFilter for Callbacks<S, L> {
             Ok(p) if p.as_os_str().is_empty() => PathBuf::new(),
             Ok(p) => p.to_path_buf(),
             Err(_) => {
-                self.logger.info(format!(
+                self.emit_telemetry(format!(
                     "request path {:?} is not under sync root {:?}",
                     full_path, self.path
                 ));
@@ -62,7 +78,7 @@ impl<S: Storage, L: Logger> SyncFilter for Callbacks<S, L> {
         self.storage
             .read_file_at(relative, &mut writer, range.clone())
             .map_err(|e| {
-                self.logger.info(format!("read_file_at failed: {}", e));
+                self.emit_telemetry(format!("read_file_at failed: {}", e));
                 cloud_filter::error::CloudErrorKind::Unsuccessful
             })?;
         CResult::Ok(())
@@ -74,7 +90,7 @@ impl<S: Storage, L: Logger> SyncFilter for Callbacks<S, L> {
         ticket: ticket::FetchPlaceholders,
         info: info::FetchPlaceholders,
     ) -> CResult<()> {
-        self.logger.info(format!(
+        self.emit_telemetry(format!(
             "fetch_placeholders: path={:?}, pattern={:?}",
             request.path(),
             info.pattern()
@@ -84,7 +100,7 @@ impl<S: Storage, L: Logger> SyncFilter for Callbacks<S, L> {
             Ok(p) if p.as_os_str().is_empty() => PathBuf::new(),
             Ok(p) => p.to_path_buf(),
             Err(_) => {
-                self.logger.info(format!(
+                self.emit_telemetry(format!(
                     "request path {:?} is not under sync root {:?}",
                     full_path, self.path
                 ));
@@ -92,7 +108,7 @@ impl<S: Storage, L: Logger> SyncFilter for Callbacks<S, L> {
             }
         };
         let iter = self.storage.read_dir(relative).map_err(|e| {
-            self.logger.info(format!("read_dir failed: {}", e));
+            self.emit_telemetry(format!("read_dir failed: {}", e));
             cloud_filter::error::CloudErrorKind::Unsuccessful
         })?;
         let blob: Vec<u8> = request.path().into_os_string().into_encoded_bytes();
@@ -114,19 +130,17 @@ impl<S: Storage, L: Logger> SyncFilter for Callbacks<S, L> {
             })
             .collect();
         if let Err(e) = ticket.pass_with_placeholder(&mut placeholders) {
-            self.logger
-                .info(format!("Failed to pass placeholders: {:?}", e));
+            self.emit_telemetry(format!("Failed to pass placeholders: {:?}", e));
         }
         CResult::Ok(())
     }
 
     fn cancel_fetch_data(&self, request: Request, _info: info::CancelFetchData) {
-        self.logger
-            .info(format!("cancel_fetch_data: path={:?}", request.path()));
+        self.emit_telemetry(format!("cancel_fetch_data: path={:?}", request.path()));
     }
 
     fn cancel_fetch_placeholders(&self, request: Request, _info: info::CancelFetchPlaceholders) {
-        self.logger.info(format!(
+        self.emit_telemetry(format!(
             "cancel_fetch_placeholders: path={:?}",
             request.path()
         ));
@@ -138,31 +152,29 @@ impl<S: Storage, L: Logger> SyncFilter for Callbacks<S, L> {
         ticket: ticket::Dehydrate,
         info: info::Dehydrate,
     ) -> CResult<()> {
-        self.logger.info(format!(
+        self.emit_telemetry(format!(
             "dehydrate: path={:?}, reason={:?}, background={}",
             request.path(),
             info.reason(),
             info.background()
         ));
         ticket.pass().map_err(|e| {
-            self.logger.info(format!("dehydrate pass failed: {:?}", e));
+            self.emit_telemetry(format!("dehydrate pass failed: {:?}", e));
             cloud_filter::error::CloudErrorKind::Unsuccessful
         })
     }
 
     fn dehydrated(&self, request: Request, _info: info::Dehydrated) {
-        self.logger
-            .info(format!("dehydrated: path={:?}", request.path()));
+        self.emit_telemetry(format!("dehydrated: path={:?}", request.path()));
     }
 
     fn opened(&self, request: Request, _info: info::Opened) {
-        self.logger
-            .info(format!("opened: path={:?}", request.path()));
+        self.emit_telemetry(format!("opened: path={:?}", request.path()));
     }
 
     fn closed(&self, request: Request, _info: info::Closed) {
         let path = request.path().to_path_buf();
-        self.logger.info(format!("closed: path={:?}", path));
+        self.emit_telemetry(format!("closed: path={:?}", path));
         if self.pending_dehydrate.lock().remove(&path) {
             if let Err(e) = dehydrate_file(&path) {
                 self.logger.error(format!("dehydrate_file failed: {}", e));
@@ -176,18 +188,16 @@ impl<S: Storage, L: Logger> SyncFilter for Callbacks<S, L> {
         _ticket: ticket::Delete,
         _info: info::Delete,
     ) -> CResult<()> {
-        self.logger
-            .info(format!("delete: path={:?}", request.path()));
+        self.emit_telemetry(format!("delete: path={:?}", request.path()));
         CResult::Ok(())
     }
 
     fn deleted(&self, request: Request, _info: info::Deleted) {
-        self.logger
-            .info(format!("deleted: path={:?}", request.path()));
+        self.emit_telemetry(format!("deleted: path={:?}", request.path()));
     }
 
     fn rename(&self, request: Request, _ticket: ticket::Rename, info: info::Rename) -> CResult<()> {
-        self.logger.info(format!(
+        self.emit_telemetry(format!(
             "rename: from={:?} to={:?}",
             request.path(),
             info.target_path()
@@ -196,7 +206,7 @@ impl<S: Storage, L: Logger> SyncFilter for Callbacks<S, L> {
     }
 
     fn renamed(&self, request: Request, info: info::Renamed) {
-        self.logger.info(format!(
+        self.emit_telemetry(format!(
             "renamed: from={:?} to={:?}",
             info.source_path(),
             request.path()
@@ -205,7 +215,7 @@ impl<S: Storage, L: Logger> SyncFilter for Callbacks<S, L> {
 
     fn state_changed(&self, changes: Vec<PathBuf>) {
         for path in changes {
-            self.logger.info(format!("state_changed: path={:?}", path));
+            self.emit_telemetry(format!("state_changed: path={:?}", path));
             let file_info = match get_placeholder_info(&path) {
                 Ok(info) => info,
                 Err(e) => {
@@ -214,7 +224,7 @@ impl<S: Storage, L: Logger> SyncFilter for Callbacks<S, L> {
                     continue;
                 }
             };
-            self.logger.info(format!("file_info: {:?}", file_info));
+            self.emit_telemetry(format!("file_info: {:?}", file_info));
             if file_info.pin_state == CF_PIN_STATE_UNPINNED && file_info.on_disk_size > 0 {
                 if let Err(e) = dehydrate_file(&path) {
                     self.logger.warn(format!(

@@ -8,4 +8,5 @@ pub mod provider;
 
 pub use provider::{
     Provider, ProviderConfiguration, ProvidersConfiguration, StorageConfig, connect_providers,
+    connect_providers_with_telemetry,
 };
