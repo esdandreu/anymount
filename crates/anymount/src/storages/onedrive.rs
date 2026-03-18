@@ -69,7 +69,7 @@ impl HttpGet for UreqHttpGet {
 
 impl BearerToken for OneDriveTokenSource {
     fn access_token(&self) -> Result<String, String> {
-        OneDriveTokenSource::access_token(self)
+        OneDriveTokenSource::access_token(self).map_err(|error| error.to_string())
     }
 }
 
@@ -129,7 +129,7 @@ impl OneDriveConfig {
             self.client_id.clone(),
             self.token_expiry_buffer_secs,
         )
-        .map_err(Error::InvalidConfig)?;
+        .map_err(|error| Error::InvalidConfig(error.to_string()))?;
         Ok(OneDriveStorage {
             root: self.root,
             endpoint,

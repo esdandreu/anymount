@@ -1,10 +1,9 @@
-use crate::auth::{OneDriveAuthorizer, OneDriveStartedAuthorization, TokenResponse};
+use crate::auth::{self, OneDriveAuthorizer, OneDriveStartedAuthorization, TokenResponse};
 use clap::Subcommand;
-use std::result::Result;
 
 /// Value returned from [`Authorizer::start_authorization`]; use [`message`](StartedAuthorization::message) and [`verification_uri`](StartedAuthorization::verification_uri) for the user, then [`wait`](StartedAuthorization::wait) to obtain tokens.
 pub trait StartedAuthorization {
-    fn wait(&self) -> Result<TokenResponse, String>;
+    fn wait(&self) -> auth::Result<TokenResponse>;
     fn message(&self) -> String;
     fn verification_uri(&self) -> String;
 }
@@ -12,12 +11,12 @@ pub trait StartedAuthorization {
 /// Starts an authorization flow; returns a [`StartedAuthorization`] to display
 /// instructions and wait for completion.
 pub trait Authorizer {
-    fn start_authorization(self) -> Result<impl StartedAuthorization, String>;
+    fn start_authorization(self) -> auth::Result<impl StartedAuthorization>;
 }
 
 impl StartedAuthorization for OneDriveStartedAuthorization {
-    fn wait(&self) -> Result<TokenResponse, String> {
-        self.wait()
+    fn wait(&self) -> auth::Result<TokenResponse> {
+        self.wait().map_err(auth::Error::from)
     }
 
     fn message(&self) -> String {
@@ -30,8 +29,8 @@ impl StartedAuthorization for OneDriveStartedAuthorization {
 }
 
 impl Authorizer for OneDriveAuthorizer {
-    fn start_authorization(self) -> Result<impl StartedAuthorization, String> {
-        OneDriveAuthorizer::start_authorization(self)
+    fn start_authorization(self) -> auth::Result<impl StartedAuthorization> {
+        OneDriveAuthorizer::start_authorization(self).map_err(auth::Error::from)
     }
 }
 
@@ -52,9 +51,11 @@ pub struct AuthOneDrive {
 }
 
 impl AuthSubcommand {
-    fn authorizer(&self) -> Result<impl Authorizer, String> {
+    fn authorizer(&self) -> auth::Result<impl Authorizer> {
         match self {
-            AuthSubcommand::OneDrive(args) => OneDriveAuthorizer::new(args.client_id.clone()),
+            AuthSubcommand::OneDrive(args) => {
+                OneDriveAuthorizer::new(args.client_id.clone()).map_err(auth::Error::from)
+            }
         }
     }
 }
@@ -74,7 +75,10 @@ impl AuthCommand {
     /// Returns an error if the device-code request fails, the user does not
     /// complete sign-in, or the token response is invalid.
     pub fn execute(&self) -> Result<(), String> {
-        let authorizer = self.subcommand.authorizer()?;
+        let authorizer = self
+            .subcommand
+            .authorizer()
+            .map_err(|error| error.to_string())?;
         self._execute(authorizer, &DefaultUrlOpener)
     }
 
@@ -85,14 +89,16 @@ impl AuthCommand {
         A: Authorizer,
         U: UrlOpener,
     {
-        let started = authorizer.start_authorization()?;
+        let started = authorizer
+            .start_authorization()
+            .map_err(|error| error.to_string())?;
         print_instructions(&started.message());
         if url_opener.open(&started.verification_uri()).is_err() {
             eprintln!("(Could not open browser; open the URL above manually.)");
         }
         eprintln!();
         eprintln!("Waiting for you to sign in...");
-        let tokens = started.wait()?;
+        let tokens = started.wait().map_err(|error| error.to_string())?;
         print_tokens(&tokens);
         Ok(())
     }
@@ -131,7 +137,7 @@ mod tests {
     struct MockStarted;
 
     impl StartedAuthorization for MockStarted {
-        fn wait(&self) -> Result<TokenResponse, String> {
+        fn wait(&self) -> auth::Result<TokenResponse> {
             Ok(TokenResponse {
                 access_token: "at".into(),
                 refresh_token: Some("rt".into()),
@@ -151,15 +157,17 @@ mod tests {
     struct FailingAuthorizer;
 
     impl Authorizer for FailingAuthorizer {
-        fn start_authorization(self) -> Result<impl StartedAuthorization, String> {
-            Err::<MockStarted, _>("mock device code error".into())
+        fn start_authorization(self) -> auth::Result<impl StartedAuthorization> {
+            Err::<MockStarted, _>(auth::Error::OneDrive(
+                crate::auth::onedrive::Error::DeviceCodeExpired,
+            ))
         }
     }
 
     struct SuccessAuthorizer;
 
     impl Authorizer for SuccessAuthorizer {
-        fn start_authorization(self) -> Result<impl StartedAuthorization, String> {
+        fn start_authorization(self) -> auth::Result<impl StartedAuthorization> {
             Ok(MockStarted)
         }
     }
@@ -180,7 +188,7 @@ mod tests {
             }),
         };
         let err = cmd._execute(FailingAuthorizer, &NoOpUrlOpener).unwrap_err();
-        assert_eq!(err, "mock device code error");
+        assert_eq!(err, "device code expired");
     }
 
     #[test]

@@ -717,15 +717,17 @@ fn authenticate_onedrive(draft: &mut EditDraft) -> Result<String, String> {
 
     let client_id = optional_trimmed(&draft.onedrive_client_id);
     let tokens = suspend_terminal(|| {
-        let authorizer = OneDriveAuthorizer::new(client_id)?;
-        let started = authorizer.start_authorization()?;
+        let authorizer = OneDriveAuthorizer::new(client_id).map_err(|error| error.to_string())?;
+        let started = authorizer
+            .start_authorization()
+            .map_err(|error| error.to_string())?;
         eprintln!("{}", started.message());
         if open::that(started.verification_uri()).is_err() {
             eprintln!("(Could not open browser; open the URL above manually.)");
         }
         eprintln!();
         eprintln!("Waiting for you to sign in...");
-        started.wait()
+        started.wait().map_err(|error| error.to_string())
     })?;
 
     draft.apply_onedrive_auth_tokens(tokens)?;
