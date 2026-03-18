@@ -1,5 +1,3 @@
-use std::result::Result;
-
-fn main() -> Result<(), String> {
+fn main() -> anymount::cli::Result<()> {
     anymount::cli::run()
 }

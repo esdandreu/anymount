@@ -66,7 +66,7 @@ pub struct SetArgs {
 }
 
 impl ConfigCommand {
-    pub fn execute(&self) -> Result<(), String> {
+    pub fn execute(&self) -> crate::cli::Result<()> {
         let cd = match &self.config_dir {
             Some(p) => ConfigDir::new(p.clone()),
             None => ConfigDir::default(),
@@ -82,8 +82,8 @@ impl ConfigCommand {
     }
 }
 
-fn execute_list(cd: &ConfigDir) -> Result<(), String> {
-    let names = cd.list().map_err(|error| error.to_string())?;
+fn execute_list(cd: &ConfigDir) -> crate::cli::Result<()> {
+    let names = cd.list()?;
     if names.is_empty() {
         println!("No providers configured in {}", cd.dir().display());
     } else {
@@ -94,22 +94,23 @@ fn execute_list(cd: &ConfigDir) -> Result<(), String> {
     Ok(())
 }
 
-fn execute_show(cd: &ConfigDir, args: &ShowArgs) -> Result<(), String> {
-    let cfg = cd.read(&args.name).map_err(|error| error.to_string())?;
-    let text = toml::to_string_pretty(&cfg).map_err(|e| format!("cannot serialize config: {e}"))?;
+fn execute_show(cd: &ConfigDir, args: &ShowArgs) -> crate::cli::Result<()> {
+    let cfg = cd.read(&args.name)?;
+    let text = toml::to_string_pretty(&cfg)
+        .map_err(|source| crate::cli::Error::SerializeConfig { source })?;
     print!("{text}");
     Ok(())
 }
 
-fn execute_add(cd: &ConfigDir, args: &AddArgs) -> Result<(), String> {
+fn execute_add(cd: &ConfigDir, args: &AddArgs) -> crate::cli::Result<()> {
     let resolved = resolve_add_args(args)?;
-    let existing = cd.list().map_err(|error| error.to_string())?;
+    let existing = cd.list()?;
     if existing.contains(&resolved.name) {
-        return Err(format!(
+        return Err(crate::cli::Error::Validation(format!(
             "provider '{}' already exists, use 'set' to modify \
              or 'remove' first",
             resolved.name
-        ));
+        )));
     }
 
     let storage = storage_config_from_subcommand(&resolved.storage);
@@ -117,8 +118,7 @@ fn execute_add(cd: &ConfigDir, args: &AddArgs) -> Result<(), String> {
         path: resolved.path.clone(),
         storage,
     };
-    cd.write(&resolved.name, &cfg)
-        .map_err(|error| error.to_string())?;
+    cd.write(&resolved.name, &cfg)?;
     println!("Added provider '{}'", resolved.name);
     Ok(())
 }
@@ -129,7 +129,7 @@ struct ResolvedAddArgs {
     storage: ProvideStorageSubcommand,
 }
 
-fn resolve_add_args(args: &AddArgs) -> Result<ResolvedAddArgs, String> {
+fn resolve_add_args(args: &AddArgs) -> crate::cli::Result<ResolvedAddArgs> {
     let name = match &args.name {
         Some(n) => n.clone(),
         None => prompt_name()?,
@@ -149,18 +149,22 @@ fn resolve_add_args(args: &AddArgs) -> Result<ResolvedAddArgs, String> {
     })
 }
 
-fn prompt_name() -> Result<String, String> {
+fn prompt_name() -> crate::cli::Result<String> {
     Text::new("Provider name:")
         .with_help_message("This becomes <name>.toml in your config directory")
         .prompt()
-        .map_err(|e| format!("failed to read provider name: {e}"))
+        .map_err(|error| {
+            crate::cli::Error::Prompt(format!("failed to read provider name: {error}"))
+        })
 }
 
-fn prompt_path() -> Result<PathBuf, String> {
+fn prompt_path() -> crate::cli::Result<PathBuf> {
     let input = Text::new("Mount-point path:")
         .with_help_message("The local path where the provider will be mounted")
         .prompt()
-        .map_err(|e| format!("failed to read mount path: {e}"))?;
+        .map_err(|error| {
+            crate::cli::Error::Prompt(format!("failed to read mount path: {error}"))
+        })?;
     Ok(PathBuf::from(input))
 }
 
@@ -179,11 +183,13 @@ impl std::fmt::Display for ProviderType {
     }
 }
 
-fn prompt_storage() -> Result<ProvideStorageSubcommand, String> {
+fn prompt_storage() -> crate::cli::Result<ProvideStorageSubcommand> {
     let options = vec![ProviderType::Local, ProviderType::OneDrive];
     let selected = Select::new("Select provider type:", options)
         .prompt()
-        .map_err(|e| format!("failed to select provider type: {e}"))?;
+        .map_err(|error| {
+            crate::cli::Error::Prompt(format!("failed to select provider type: {error}"))
+        })?;
 
     match selected {
         ProviderType::Local => prompt_local_storage(),
@@ -191,25 +197,29 @@ fn prompt_storage() -> Result<ProvideStorageSubcommand, String> {
     }
 }
 
-fn prompt_local_storage() -> Result<ProvideStorageSubcommand, String> {
+fn prompt_local_storage() -> crate::cli::Result<ProvideStorageSubcommand> {
     let root = Text::new("Root directory to expose:")
         .prompt()
-        .map_err(|e| format!("failed to read root directory: {e}"))?;
+        .map_err(|error| {
+            crate::cli::Error::Prompt(format!("failed to read root directory: {error}"))
+        })?;
     Ok(ProvideStorageSubcommand::Local(LocalStorageArgs {
         root: PathBuf::from(root),
     }))
 }
 
-fn prompt_onedrive_storage() -> Result<ProvideStorageSubcommand, String> {
+fn prompt_onedrive_storage() -> crate::cli::Result<ProvideStorageSubcommand> {
     let root = Text::new("OneDrive path to use as root:")
         .with_default("/")
         .prompt()
-        .map_err(|e| format!("failed to read OneDrive root: {e}"))?;
+        .map_err(|error| {
+            crate::cli::Error::Prompt(format!("failed to read OneDrive root: {error}"))
+        })?;
 
     let endpoint = Text::new("Graph API endpoint:")
         .with_default("https://graph.microsoft.com/v1.0")
         .prompt()
-        .map_err(|e| format!("failed to read endpoint: {e}"))?;
+        .map_err(|error| crate::cli::Error::Prompt(format!("failed to read endpoint: {error}")))?;
 
     let access_token = prompt_optional("Access token (optional):")?;
     let refresh_token = prompt_optional("Refresh token (optional):")?;
@@ -218,9 +228,10 @@ fn prompt_onedrive_storage() -> Result<ProvideStorageSubcommand, String> {
     let token_expiry_buffer_secs = Text::new("Token expiry buffer (seconds):")
         .with_default("60")
         .prompt()
-        .map_err(|e| format!("failed to read token expiry buffer: {e}"))?
-        .parse::<u64>()
-        .map_err(|e| format!("invalid number: {e}"))?;
+        .map_err(|error| {
+            crate::cli::Error::Prompt(format!("failed to read token expiry buffer: {error}"))
+        })?;
+    let token_expiry_buffer_secs = parse_u64(token_expiry_buffer_secs)?;
 
     Ok(ProvideStorageSubcommand::OneDrive(OneDriveStorageArgs {
         root: PathBuf::from(root),
@@ -232,10 +243,10 @@ fn prompt_onedrive_storage() -> Result<ProvideStorageSubcommand, String> {
     }))
 }
 
-fn prompt_optional(message: &str) -> Result<Option<String>, String> {
+fn prompt_optional(message: &str) -> crate::cli::Result<Option<String>> {
     let input = Text::new(message)
         .prompt()
-        .map_err(|e| format!("failed to read input: {e}"))?;
+        .map_err(|error| crate::cli::Error::Prompt(format!("failed to read input: {error}")))?;
     if input.is_empty() {
         Ok(None)
     } else {
@@ -243,19 +254,24 @@ fn prompt_optional(message: &str) -> Result<Option<String>, String> {
     }
 }
 
-fn execute_remove(cd: &ConfigDir, args: &RemoveArgs) -> Result<(), String> {
-    cd.remove(&args.name).map_err(|error| error.to_string())?;
+fn execute_remove(cd: &ConfigDir, args: &RemoveArgs) -> crate::cli::Result<()> {
+    cd.remove(&args.name)?;
     println!("Removed provider '{}'", args.name);
     Ok(())
 }
 
-fn execute_set(cd: &ConfigDir, args: &SetArgs) -> Result<(), String> {
-    let mut cfg = cd.read(&args.name).map_err(|error| error.to_string())?;
+fn execute_set(cd: &ConfigDir, args: &SetArgs) -> crate::cli::Result<()> {
+    let mut cfg = cd.read(&args.name)?;
     apply_set(&mut cfg, &args.key, &args.value)?;
-    cd.write(&args.name, &cfg)
-        .map_err(|error| error.to_string())?;
+    cd.write(&args.name, &cfg)?;
     println!("Updated '{}' in provider '{}'", args.key, args.name);
     Ok(())
+}
+
+fn parse_u64(value: String) -> crate::cli::Result<u64> {
+    value
+        .parse::<u64>()
+        .map_err(|source| crate::cli::Error::ParseInteger { value, source })
 }
 
 fn storage_config_from_subcommand(sub: &ProvideStorageSubcommand) -> StorageConfig {
@@ -274,7 +290,7 @@ fn storage_config_from_subcommand(sub: &ProvideStorageSubcommand) -> StorageConf
     }
 }
 
-fn apply_set(cfg: &mut ProviderFileConfig, key: &str, value: &str) -> Result<(), String> {
+fn apply_set(cfg: &mut ProviderFileConfig, key: &str, value: &str) -> crate::cli::Result<()> {
     match key {
         "path" => {
             cfg.path = PathBuf::from(value);
@@ -289,9 +305,9 @@ fn apply_set(cfg: &mut ProviderFileConfig, key: &str, value: &str) -> Result<(),
                 *endpoint = value.to_owned();
             }
             _ => {
-                return Err("'storage.endpoint' only applies to \
-                     onedrive storage"
-                    .to_owned());
+                return Err(crate::cli::Error::Validation(
+                    "'storage.endpoint' only applies to onedrive storage".to_owned(),
+                ));
             }
         },
         "storage.access_token" => match &mut cfg.storage {
@@ -299,9 +315,9 @@ fn apply_set(cfg: &mut ProviderFileConfig, key: &str, value: &str) -> Result<(),
                 *access_token = Some(value.to_owned());
             }
             _ => {
-                return Err("'storage.access_token' only applies to \
-                     onedrive storage"
-                    .to_owned());
+                return Err(crate::cli::Error::Validation(
+                    "'storage.access_token' only applies to onedrive storage".to_owned(),
+                ));
             }
         },
         "storage.refresh_token" => match &mut cfg.storage {
@@ -309,9 +325,9 @@ fn apply_set(cfg: &mut ProviderFileConfig, key: &str, value: &str) -> Result<(),
                 *refresh_token = Some(value.to_owned());
             }
             _ => {
-                return Err("'storage.refresh_token' only applies to \
-                     onedrive storage"
-                    .to_owned());
+                return Err(crate::cli::Error::Validation(
+                    "'storage.refresh_token' only applies to onedrive storage".to_owned(),
+                ));
             }
         },
         "storage.client_id" => match &mut cfg.storage {
@@ -319,9 +335,9 @@ fn apply_set(cfg: &mut ProviderFileConfig, key: &str, value: &str) -> Result<(),
                 *client_id = Some(value.to_owned());
             }
             _ => {
-                return Err("'storage.client_id' only applies to \
-                     onedrive storage"
-                    .to_owned());
+                return Err(crate::cli::Error::Validation(
+                    "'storage.client_id' only applies to onedrive storage".to_owned(),
+                ));
             }
         },
         "storage.token_expiry_buffer_secs" => match &mut cfg.storage {
@@ -329,25 +345,24 @@ fn apply_set(cfg: &mut ProviderFileConfig, key: &str, value: &str) -> Result<(),
                 token_expiry_buffer_secs,
                 ..
             } => {
-                let secs: u64 = value
-                    .parse()
-                    .map_err(|_| format!("invalid u64 value: '{value}'"))?;
+                let secs = parse_u64(value.to_owned())?;
                 *token_expiry_buffer_secs = Some(secs);
             }
             _ => {
-                return Err("'storage.token_expiry_buffer_secs' \
-                         only applies to onedrive storage"
-                    .to_owned());
+                return Err(crate::cli::Error::Validation(
+                    "'storage.token_expiry_buffer_secs' only applies to onedrive storage"
+                        .to_owned(),
+                ));
             }
         },
         _ => {
-            return Err(format!(
+            return Err(crate::cli::Error::Validation(format!(
                 "unknown key '{key}'. Valid keys: path, \
                  storage.root, storage.endpoint, \
                  storage.access_token, \
                  storage.refresh_token, storage.client_id, \
                  storage.token_expiry_buffer_secs"
-            ));
+            )));
         }
     }
     Ok(())

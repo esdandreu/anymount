@@ -2,7 +2,7 @@ use super::Cli;
 use clap::Parser;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-pub fn run() -> Result<(), String> {
+pub fn run() -> super::Result<()> {
     let cli = Cli::parse();
 
     // Initialize logging

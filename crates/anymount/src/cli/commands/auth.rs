@@ -74,31 +74,26 @@ impl AuthCommand {
     ///
     /// Returns an error if the device-code request fails, the user does not
     /// complete sign-in, or the token response is invalid.
-    pub fn execute(&self) -> Result<(), String> {
-        let authorizer = self
-            .subcommand
-            .authorizer()
-            .map_err(|error| error.to_string())?;
+    pub fn execute(&self) -> crate::cli::Result<()> {
+        let authorizer = self.subcommand.authorizer()?;
         self._execute(authorizer, &DefaultUrlOpener)
     }
 
     /// Internal entry point for injection (e.g. tests). Not part of the public
     /// API.
-    pub(crate) fn _execute<A, U>(&self, authorizer: A, url_opener: &U) -> Result<(), String>
+    pub(crate) fn _execute<A, U>(&self, authorizer: A, url_opener: &U) -> crate::cli::Result<()>
     where
         A: Authorizer,
         U: UrlOpener,
     {
-        let started = authorizer
-            .start_authorization()
-            .map_err(|error| error.to_string())?;
+        let started = authorizer.start_authorization()?;
         print_instructions(&started.message());
         if url_opener.open(&started.verification_uri()).is_err() {
             eprintln!("(Could not open browser; open the URL above manually.)");
         }
         eprintln!();
         eprintln!("Waiting for you to sign in...");
-        let tokens = started.wait().map_err(|error| error.to_string())?;
+        let tokens = started.wait()?;
         print_tokens(&tokens);
         Ok(())
     }
@@ -181,14 +176,14 @@ mod tests {
     }
 
     #[test]
-    fn execute_returns_authorizer_error_without_real_auth() {
+    fn auth_execute_wraps_auth_error() {
         let cmd = AuthCommand {
             subcommand: AuthSubcommand::OneDrive(AuthOneDrive {
                 client_id: Some("test-client".into()),
             }),
         };
         let err = cmd._execute(FailingAuthorizer, &NoOpUrlOpener).unwrap_err();
-        assert_eq!(err, "device code expired");
+        assert!(matches!(err, crate::cli::Error::Auth(_)));
     }
 
     #[test]

@@ -4,7 +4,6 @@ use crate::cli::commands::connect::ConnectCommand;
 use crate::cli::commands::provide::ProvideCommand;
 use crate::tui;
 use clap::{Parser, Subcommand};
-use std::result::Result;
 
 #[derive(Debug, Parser)]
 #[command(name = "anymount")]
@@ -32,13 +31,13 @@ pub enum Commands {
 }
 
 impl Cli {
-    pub fn run(self) -> Result<(), String> {
+    pub fn run(self) -> super::Result<()> {
         match self.command {
             Some(Commands::Auth(cmd)) => cmd.execute(),
             Some(Commands::Config(cmd)) => cmd.execute(),
             Some(Commands::Connect(cmd)) => cmd.execute(),
             Some(Commands::Provide(cmd)) => cmd.execute(),
-            None => tui::run(),
+            None => tui::run().map_err(|error| super::Error::Validation(error.to_string())),
         }
     }
 }

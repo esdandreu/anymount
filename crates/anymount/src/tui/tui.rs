@@ -1424,6 +1424,7 @@ fn run_connect(name: Option<String>, all: bool, cd: &ConfigDir) -> Result<(), St
     };
     let logger = TracingLogger::new();
     cmd._execute(&DefaultProviderProcessSupervisor, &logger)
+        .map_err(|error| error.to_string())
 }
 
 fn ensure_name_available(

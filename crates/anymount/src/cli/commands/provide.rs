@@ -30,11 +30,11 @@ pub struct ProvideCommand {
 }
 
 impl ProvideCommand {
-    pub fn execute(&self) -> Result<(), String> {
+    pub fn execute(&self) -> crate::cli::Result<()> {
         self.run_with(&DefaultProvideRunner)
     }
 
-    pub(crate) fn run_with<R>(&self, runner: &R) -> Result<(), String>
+    pub(crate) fn run_with<R>(&self, runner: &R) -> crate::cli::Result<()>
     where
         R: ProvideRunner,
     {
@@ -43,7 +43,11 @@ impl ProvideCommand {
 }
 
 pub trait ProvideRunner {
-    fn run<L: Logger + 'static>(&self, command: &ProvideCommand, logger: &L) -> Result<(), String>;
+    fn run<L: Logger + 'static>(
+        &self,
+        command: &ProvideCommand,
+        logger: &L,
+    ) -> crate::cli::Result<()>;
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -110,14 +114,17 @@ impl ProvideStorageSubcommand {
 pub struct DefaultProvideRunner;
 
 impl ProvideRunner for DefaultProvideRunner {
-    fn run<L: Logger + 'static>(&self, command: &ProvideCommand, logger: &L) -> Result<(), String> {
+    fn run<L: Logger + 'static>(
+        &self,
+        command: &ProvideCommand,
+        logger: &L,
+    ) -> crate::cli::Result<()> {
         let request = command.resolve_request()?;
         let (tx, rx) = mpsc::channel();
         install_ctrlc_handler(tx.clone(), logger)?;
 
         let providers: Vec<Box<dyn Provider>> =
-            crate::connect_providers_with_telemetry(&request.config, logger, Some(tx.clone()))
-                .map_err(|error| format!("startup failed: {error}"))?;
+            crate::connect_providers_with_telemetry(&request.config, logger, Some(tx.clone()))?;
 
         for provider in &providers {
             logger.info(format!(
@@ -132,7 +139,7 @@ impl ProvideRunner for DefaultProvideRunner {
         }
 
         let mut runtime = DaemonRuntime::new(logger.clone(), rx);
-        let result = runtime.run().map_err(|error| error.to_string());
+        let result = runtime.run().map_err(crate::cli::Error::from);
         drop(providers);
         result
     }
@@ -145,10 +152,10 @@ struct ProvideRequest {
 }
 
 impl ProvideCommand {
-    fn resolve_request(&self) -> Result<ProvideRequest, String> {
+    fn resolve_request(&self) -> crate::cli::Result<ProvideRequest> {
         if let Some(name) = &self.name {
             let cd = self.config_dir();
-            let provider = cd.read(name).map_err(|error| error.to_string())?;
+            let provider = cd.read(name)?;
             return Ok(ProvideRequest {
                 provider_name: Some(name.clone()),
                 config: Config {
@@ -158,14 +165,10 @@ impl ProvideCommand {
         }
 
         let Some(path) = &self.path else {
-            return Err(
-                "specify --name <NAME> or --path <PATH> with a storage subcommand".to_owned(),
-            );
+            return Err(crate::cli::Error::MissingProvideTarget);
         };
         let Some(storage) = &self.storage else {
-            return Err(
-                "specify --name <NAME> or --path <PATH> with a storage subcommand".to_owned(),
-            );
+            return Err(crate::cli::Error::MissingProvideTarget);
         };
 
         Ok(ProvideRequest {
@@ -190,13 +193,13 @@ impl ProvideCommand {
 fn install_ctrlc_handler<L: Logger>(
     tx: mpsc::Sender<DaemonMessage>,
     logger: &L,
-) -> Result<(), String> {
+) -> crate::cli::Result<()> {
     ctrlc::set_handler(move || {
         let _ = tx.send(DaemonMessage::Shutdown);
     })
-    .map_err(|error| {
-        logger.error(format!("Error setting Ctrl-C handler: {error}"));
-        format!("failed to install Ctrl-C handler: {error}")
+    .map_err(|source| {
+        logger.error(format!("Error setting Ctrl-C handler: {source}"));
+        crate::cli::Error::InstallCtrlC { source }
     })
 }
 
@@ -205,10 +208,8 @@ fn spawn_control_server<L: Logger + 'static>(
     provider_name: &str,
     tx: mpsc::Sender<DaemonMessage>,
     logger: &L,
-) -> Result<(), String> {
-    let listener = UnixControl
-        .bind(provider_name)
-        .map_err(|error| error.to_string())?;
+) -> crate::cli::Result<()> {
+    let listener = UnixControl.bind(provider_name)?;
     let provider_name = provider_name.to_owned();
     let logger = logger.clone();
     std::thread::spawn(move || {
@@ -248,11 +249,9 @@ fn spawn_control_server<L: Logger>(
     provider_name: &str,
     _tx: mpsc::Sender<DaemonMessage>,
     _logger: &L,
-) -> Result<(), String> {
+) -> crate::cli::Result<()> {
     let _ = provider_name;
-    let _ = WindowsControl
-        .bind(provider_name)
-        .map_err(|error| error.to_string())?;
+    let _ = WindowsControl.bind(provider_name)?;
     Ok(())
 }
 
@@ -261,8 +260,10 @@ fn spawn_control_server<L: Logger>(
     _provider_name: &str,
     _tx: mpsc::Sender<DaemonMessage>,
     _logger: &L,
-) -> Result<(), String> {
-    Err("named provider control transport is not supported on this platform".to_owned())
+) -> crate::cli::Result<()> {
+    Err(crate::cli::Error::Validation(
+        "named provider control transport is not supported on this platform".to_owned(),
+    ))
 }
 
 #[cfg(test)]
@@ -278,8 +279,10 @@ mod tests {
             &self,
             _command: &ProvideCommand,
             _logger: &L,
-        ) -> Result<(), String> {
-            Err("startup failed".to_owned())
+        ) -> crate::cli::Result<()> {
+            Err(crate::cli::Error::Providers(
+                crate::providers::Error::NotSupported,
+            ))
         }
     }
 
@@ -295,7 +298,10 @@ mod tests {
         let err = command
             .run_with(&FailingProvideRunner)
             .expect_err("startup should fail");
-        assert!(err.contains("startup"));
+        assert!(matches!(
+            err,
+            crate::cli::Error::Providers(crate::providers::Error::NotSupported)
+        ));
     }
 
     #[test]
@@ -310,7 +316,10 @@ mod tests {
         let err = DefaultProvideRunner
             .run(&command, &logger)
             .expect_err("named provider is not configured in test");
-        assert!(err.contains("cannot read"));
+        assert!(matches!(
+            err,
+            crate::cli::Error::Config(crate::config::Error::Read { .. })
+        ));
     }
 
     #[test]
@@ -343,7 +352,7 @@ mod tests {
         let err = command
             .resolve_request()
             .expect_err("request without target should fail");
-        assert!(err.contains("specify --name <NAME> or --path <PATH>"));
+        assert!(matches!(err, crate::cli::Error::MissingProvideTarget));
     }
 
     #[test]
@@ -358,6 +367,6 @@ mod tests {
         let err = command
             .resolve_request()
             .expect_err("inline path without storage should fail");
-        assert!(err.contains("specify --name <NAME> or --path <PATH>"));
+        assert!(matches!(err, crate::cli::Error::MissingProvideTarget));
     }
 }

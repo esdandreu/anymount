@@ -31,12 +31,12 @@ pub struct ConnectCommand {
 }
 
 impl ConnectCommand {
-    pub fn execute(&self) -> Result<(), String> {
+    pub fn execute(&self) -> crate::cli::Result<()> {
         let logger = TracingLogger::new();
         self._execute(&DefaultProviderProcessSupervisor, &logger)
     }
 
-    pub(crate) fn _execute<S, L>(&self, supervisor: &S, logger: &L) -> Result<(), String>
+    pub(crate) fn _execute<S, L>(&self, supervisor: &S, logger: &L) -> crate::cli::Result<()>
     where
         S: ProviderProcessSupervisor,
         L: Logger + 'static,
@@ -44,7 +44,7 @@ impl ConnectCommand {
         if self.all {
             let cd = self.config_dir();
             let mut failures = Vec::new();
-            for name in cd.list().map_err(|error| error.to_string())? {
+            for name in cd.list()? {
                 if let Err(error) = supervisor.ensure_running(&name, &cd, logger) {
                     failures.push(format!("{name}: {error}"));
                 }
@@ -52,16 +52,15 @@ impl ConnectCommand {
             if failures.is_empty() {
                 Ok(())
             } else {
-                Err(format!(
-                    "failed to connect providers: {}",
-                    failures.join(", ")
-                ))
+                Err(crate::cli::Error::ConnectFailures {
+                    failures: failures.join(", "),
+                })
             }
         } else if let Some(name) = &self.name {
             let cd = self.config_dir();
             supervisor.ensure_running(name, &cd, logger)
         } else {
-            Err("specify --name <NAME> or --all".to_owned())
+            Err(crate::cli::Error::MissingConnectTarget)
         }
     }
 
@@ -79,7 +78,7 @@ pub trait ProviderProcessSupervisor {
         provider_name: &str,
         config_dir: &ConfigDir,
         logger: &L,
-    ) -> Result<(), String>
+    ) -> crate::cli::Result<()>
     where
         L: Logger + 'static;
 }
@@ -93,7 +92,7 @@ impl ProviderProcessSupervisor for DefaultProviderProcessSupervisor {
         provider_name: &str,
         config_dir: &ConfigDir,
         logger: &L,
-    ) -> Result<(), String>
+    ) -> crate::cli::Result<()>
     where
         L: Logger + 'static,
     {
@@ -108,7 +107,7 @@ impl ProviderProcessSupervisor for DefaultProviderProcessSupervisor {
 }
 
 #[cfg(unix)]
-fn is_provider_running(provider_name: &str) -> Result<bool, String> {
+fn is_provider_running(provider_name: &str) -> crate::cli::Result<bool> {
     match UnixControl.send(provider_name, ControlMessage::Ping) {
         Ok(ControlMessage::Ready) => Ok(true),
         Ok(_) => Ok(false),
@@ -117,7 +116,7 @@ fn is_provider_running(provider_name: &str) -> Result<bool, String> {
 }
 
 #[cfg(target_os = "windows")]
-fn is_provider_running(provider_name: &str) -> Result<bool, String> {
+fn is_provider_running(provider_name: &str) -> crate::cli::Result<bool> {
     match WindowsControl.send(provider_name, ControlMessage::Ping) {
         Ok(ControlMessage::Ready) => Ok(true),
         Ok(_) => Ok(false),
@@ -126,16 +125,16 @@ fn is_provider_running(provider_name: &str) -> Result<bool, String> {
 }
 
 #[cfg(not(any(unix, target_os = "windows")))]
-fn is_provider_running(_provider_name: &str) -> Result<bool, String> {
+fn is_provider_running(_provider_name: &str) -> crate::cli::Result<bool> {
     Ok(false)
 }
 
 fn spawn_provider_process(
     provider_name: &str,
     config_dir: &Path,
-) -> Result<std::process::Child, String> {
-    let current_exe =
-        std::env::current_exe().map_err(|error| format!("resolve current executable: {error}"))?;
+) -> crate::cli::Result<std::process::Child> {
+    let current_exe = std::env::current_exe()
+        .map_err(|source| crate::cli::Error::ResolveCurrentExecutable { source })?;
     Command::new(current_exe)
         .arg("provide")
         .arg("--name")
@@ -143,7 +142,10 @@ fn spawn_provider_process(
         .arg("--config-dir")
         .arg(config_dir)
         .spawn()
-        .map_err(|error| format!("spawn provider process for {provider_name}: {error}"))
+        .map_err(|source| crate::cli::Error::SpawnProvider {
+            provider_name: provider_name.to_owned(),
+            source,
+        })
 }
 
 /// Poll frequently enough to make `connect` feel immediate while still giving
@@ -155,13 +157,16 @@ fn wait_until_ready<L: Logger>(
     provider_name: &str,
     child: &mut std::process::Child,
     logger: &L,
-) -> Result<(), String> {
+) -> crate::cli::Result<()> {
     let deadline = Instant::now() + READY_TIMEOUT;
     loop {
         let child_status = child
             .try_wait()
             .map(|status| status.map(|value| value.to_string()))
-            .map_err(|error| format!("wait for provider process {provider_name}: {error}"))?;
+            .map_err(|source| crate::cli::Error::WaitForProvider {
+                provider_name: provider_name.to_owned(),
+                source,
+            })?;
 
         match next_ready_action(
             provider_name,
@@ -192,21 +197,22 @@ fn next_ready_action(
     is_running: bool,
     child_status: Option<String>,
     deadline_expired: bool,
-) -> Result<ReadyAction, String> {
+) -> crate::cli::Result<ReadyAction> {
     if is_running {
         return Ok(ReadyAction::Ready);
     }
 
     if let Some(status) = child_status {
-        return Err(format!(
-            "provider process {provider_name} exited before ready with status {status}"
-        ));
+        return Err(crate::cli::Error::ProviderExitedBeforeReady {
+            provider_name: provider_name.to_owned(),
+            status,
+        });
     }
 
     if deadline_expired {
-        return Err(format!(
-            "provider process {provider_name} did not become ready"
-        ));
+        return Err(crate::cli::Error::ProviderDidNotBecomeReady {
+            provider_name: provider_name.to_owned(),
+        });
     }
 
     Ok(ReadyAction::Wait)
@@ -262,7 +268,7 @@ mod tests {
             provider_name: &str,
             _config_dir: &ConfigDir,
             _logger: &L,
-        ) -> Result<(), String>
+        ) -> crate::cli::Result<()>
         where
             L: Logger + 'static,
         {
@@ -278,7 +284,7 @@ mod tests {
                 .get(provider_name)
                 .cloned()
             {
-                return Err(error);
+                return Err(crate::cli::Error::Validation(error));
             }
 
             self.running
@@ -344,15 +350,17 @@ mod tests {
     }
 
     #[test]
-    fn execute_without_args_returns_error() {
+    fn connect_without_args_returns_missing_target_error() {
         let cmd = ConnectCommand {
             name: None,
             all: false,
             config_dir: None,
         };
         let logger = NoOpLogger;
-        let result = cmd._execute(&RecordingSupervisor::default(), &logger);
-        assert!(result.is_err());
+        let err = cmd
+            ._execute(&RecordingSupervisor::default(), &logger)
+            .expect_err("connect should fail");
+        assert!(matches!(err, crate::cli::Error::MissingConnectTarget));
     }
 
     #[test]
@@ -410,7 +418,7 @@ mod tests {
             ._execute(&supervisor, &NoOpLogger)
             .expect_err("connect all should fail");
 
-        assert!(err.contains("broken"));
+        assert!(matches!(err, crate::cli::Error::ConnectFailures { .. }));
         assert!(supervisor.ensured().contains(&"healthy".to_owned()));
     }
 
@@ -419,7 +427,10 @@ mod tests {
         let outcome = next_ready_action("demo", false, Some("exit status 1".to_owned()), false)
             .expect_err("exited child should fail");
 
-        assert!(outcome.contains("exited before ready"));
+        assert!(matches!(
+            outcome,
+            crate::cli::Error::ProviderExitedBeforeReady { .. }
+        ));
     }
 
     #[test]
@@ -427,6 +438,9 @@ mod tests {
         let outcome =
             next_ready_action("demo", false, None, true).expect_err("expired deadline should fail");
 
-        assert!(outcome.contains("did not become ready"));
+        assert!(matches!(
+            outcome,
+            crate::cli::Error::ProviderDidNotBecomeReady { .. }
+        ));
     }
 }
