@@ -42,3 +42,36 @@ impl UnixControl {
         ControlMessage::decode(&bytes)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::UnixControl;
+    use crate::daemon::messages::ControlMessage;
+    use std::io::{Read, Write};
+
+    #[test]
+    fn unix_control_send_round_trips_ping() {
+        let control = UnixControl;
+        let listener = control.bind("unix-roundtrip").expect("bind should succeed");
+
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept should succeed");
+            let mut bytes = Vec::new();
+            stream.read_to_end(&mut bytes).expect("read should succeed");
+            assert_eq!(
+                ControlMessage::decode(&bytes).expect("decode should succeed"),
+                ControlMessage::Ping
+            );
+            stream
+                .write_all(&ControlMessage::Ready.encode())
+                .expect("write should succeed");
+        });
+
+        let reply = control
+            .send("unix-roundtrip", ControlMessage::Ping)
+            .expect("send should succeed");
+        assert_eq!(reply, ControlMessage::Ready);
+
+        server.join().expect("server thread should finish");
+    }
+}

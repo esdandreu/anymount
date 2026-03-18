@@ -326,4 +326,34 @@ mod tests {
         assert!(request.provider_name.is_none());
         assert_eq!(request.config.providers.len(), 1);
     }
+
+    #[test]
+    fn resolve_request_requires_name_or_path() {
+        let command = ProvideCommand {
+            name: None,
+            path: None,
+            config_dir: None,
+            storage: None,
+        };
+
+        let err = command
+            .resolve_request()
+            .expect_err("request without target should fail");
+        assert!(err.contains("specify --name <NAME> or --path <PATH>"));
+    }
+
+    #[test]
+    fn resolve_request_requires_storage_for_inline_path() {
+        let command = ProvideCommand {
+            name: None,
+            path: Some(PathBuf::from("/tmp/demo")),
+            config_dir: None,
+            storage: None,
+        };
+
+        let err = command
+            .resolve_request()
+            .expect_err("inline path without storage should fail");
+        assert!(err.contains("specify --name <NAME> or --path <PATH>"));
+    }
 }

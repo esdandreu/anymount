@@ -1690,6 +1690,15 @@ mod tests {
     }
 
     #[test]
+    fn path_completion_returns_no_match_when_directory_has_no_matches() {
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+        std::fs::create_dir(tmp.path().join("alpha")).expect("failed to create alpha");
+        let input = tmp.path().join("z").display().to_string();
+        let output = complete_filesystem_path(&input).expect("completion failed");
+        assert!(matches!(output, PathCompletion::NoMatch));
+    }
+
+    #[test]
     fn choice_mapping_from_context_row_works_for_storage_type() {
         let mut session = EditSession::new_for_add("provider-1".to_owned());
         session.selected_field = EditField::StorageType;

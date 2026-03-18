@@ -158,28 +158,58 @@ fn wait_until_ready<L: Logger>(
 ) -> Result<(), String> {
     let deadline = Instant::now() + READY_TIMEOUT;
     loop {
-        if is_provider_running(provider_name)? {
-            logger.info(format!("Provider {provider_name} is ready"));
-            return Ok(());
-        }
-
-        if let Some(status) = child
+        let child_status = child
             .try_wait()
-            .map_err(|error| format!("wait for provider process {provider_name}: {error}"))?
-        {
-            return Err(format!(
-                "provider process {provider_name} exited before ready with status {status}"
-            ));
-        }
+            .map(|status| status.map(|value| value.to_string()))
+            .map_err(|error| format!("wait for provider process {provider_name}: {error}"))?;
 
-        if Instant::now() >= deadline {
-            return Err(format!(
-                "provider process {provider_name} did not become ready"
-            ));
+        match next_ready_action(
+            provider_name,
+            is_provider_running(provider_name)?,
+            child_status,
+            Instant::now() >= deadline,
+        ) {
+            Ok(ReadyAction::Ready) => {
+                logger.info(format!("Provider {provider_name} is ready"));
+                return Ok(());
+            }
+            Ok(ReadyAction::Wait) => {}
+            Err(error) => return Err(error),
         }
 
         thread::sleep(READY_POLL_INTERVAL);
     }
+}
+
+#[derive(Debug)]
+enum ReadyAction {
+    Ready,
+    Wait,
+}
+
+fn next_ready_action(
+    provider_name: &str,
+    is_running: bool,
+    child_status: Option<String>,
+    deadline_expired: bool,
+) -> Result<ReadyAction, String> {
+    if is_running {
+        return Ok(ReadyAction::Ready);
+    }
+
+    if let Some(status) = child_status {
+        return Err(format!(
+            "provider process {provider_name} exited before ready with status {status}"
+        ));
+    }
+
+    if deadline_expired {
+        return Err(format!(
+            "provider process {provider_name} did not become ready"
+        ));
+    }
+
+    Ok(ReadyAction::Wait)
 }
 
 #[cfg(test)]
@@ -382,5 +412,21 @@ mod tests {
 
         assert!(err.contains("broken"));
         assert!(supervisor.ensured().contains(&"healthy".to_owned()));
+    }
+
+    #[test]
+    fn ready_check_reports_exited_process_before_ready() {
+        let outcome = next_ready_action("demo", false, Some("exit status 1".to_owned()), false)
+            .expect_err("exited child should fail");
+
+        assert!(outcome.contains("exited before ready"));
+    }
+
+    #[test]
+    fn ready_check_reports_timeout_when_deadline_passes() {
+        let outcome =
+            next_ready_action("demo", false, None, true).expect_err("expired deadline should fail");
+
+        assert!(outcome.contains("did not become ready"));
     }
 }
