@@ -65,7 +65,8 @@ pub fn connect_providers_with_telemetry(
                     storage,
                     logger.clone(),
                     daemon_tx.clone(),
-                )?;
+                )
+                .map_err(|error| error.to_string())?;
                 providers.push(Box::new(provider) as Box<dyn Provider>);
             }
             StorageConfig::OneDrive {
@@ -90,12 +91,13 @@ pub fn connect_providers_with_telemetry(
                     storage,
                     logger.clone(),
                     daemon_tx.clone(),
-                )?;
+                )
+                .map_err(|error| error.to_string())?;
                 providers.push(Box::new(provider) as Box<dyn Provider>);
             }
         }
     }
-    cleanup_registry(config, logger)?;
+    cleanup_registry(config, logger).map_err(|error| error.to_string())?;
     Ok(providers)
 }
 

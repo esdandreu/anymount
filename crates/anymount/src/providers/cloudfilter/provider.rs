@@ -1,5 +1,5 @@
 use super::callbacks::Callbacks;
-use super::{Provider, ProviderConfiguration, Storage};
+use super::{Error, Provider, ProviderConfiguration, Result, Storage};
 use crate::Logger;
 use crate::daemon::messages::DaemonMessage;
 use cloud_filter::root::{
@@ -26,20 +26,30 @@ impl<S: Storage, L: Logger + 'static> CloudFilterProvider<S, L> {
         storage: S,
         logger: L,
         daemon_tx: Option<Sender<DaemonMessage>>,
-    ) -> Result<Arc<Self>, String> {
-        let security_id = SecurityId::current_user().map_err(|e| e.to_string())?;
+    ) -> Result<Arc<Self>> {
+        let security_id =
+            SecurityId::current_user().map_err(|source| Error::CloudFilterOperation {
+                operation: "resolve current user security id",
+                source: Box::new(source),
+            })?;
         let path = config.path();
         if !path.exists() {
-            std::fs::create_dir(&path)
-                .map_err(|e| format!("Failed to create mount path: {}", e))?;
+            std::fs::create_dir(&path).map_err(|source| Error::Io {
+                operation: "create mount path",
+                path: path.clone(),
+                source,
+            })?;
         }
         logger.info(format!("Mount path: {}", path.display()));
-        let path = absolute(path)
-            .map_err(|e| format!("Mount path must exist and be accessible: {}", e))?;
+        let path = absolute(path).map_err(|source| Error::Io {
+            operation: "resolve mount path",
+            path: config.path(),
+            source,
+        })?;
         let name = path
             .file_name()
             .and_then(|os_str| os_str.to_str())
-            .ok_or("Invalid path")?;
+            .ok_or_else(|| Error::InvalidPath { path: path.clone() })?;
         let provider_name = ID_PREFIX.to_owned() + "|" + name;
 
         let id = SyncRootIdBuilder::new(provider_name)
@@ -47,7 +57,12 @@ impl<S: Storage, L: Logger + 'static> CloudFilterProvider<S, L> {
             .build();
 
         // Register if not already registered
-        let is_registered = id.is_registered().map_err(|e| e.to_string())?;
+        let is_registered = id
+            .is_registered()
+            .map_err(|source| Error::CloudFilterOperation {
+                operation: "check sync root registration",
+                source: Box::new(source),
+            })?;
         // TODO(GIA) Handle when registered to a different path
         if !is_registered {
             let sync_root_info = SyncRootInfo::default()
@@ -57,10 +72,16 @@ impl<S: Storage, L: Logger + 'static> CloudFilterProvider<S, L> {
                 .with_hydration_type(HydrationType::Full)
                 .with_population_type(PopulationType::Full)
                 .with_path(&path)
-                .map_err(|e| e.to_string())?;
+                .map_err(|source| Error::CloudFilterOperation {
+                    operation: "build sync root info",
+                    source: Box::new(source),
+                })?;
 
             id.register(sync_root_info)
-                .map_err(|e| format!("Failed to register sync root: {}", e))?;
+                .map_err(|source| Error::CloudFilterOperation {
+                    operation: "register sync root",
+                    source: Box::new(source),
+                })?;
             logger.info(format!("Sync root registered: {}", name));
         }
 
@@ -71,7 +92,10 @@ impl<S: Storage, L: Logger + 'static> CloudFilterProvider<S, L> {
                 &path,
                 Callbacks::new(path.clone(), storage, logger.clone(), daemon_tx),
             )
-            .map_err(|e| format!("Failed to connect to sync root: {}", e))?;
+            .map_err(|source| Error::CloudFilterOperation {
+                operation: "connect to sync root",
+                source: Box::new(source),
+            })?;
 
         Ok(Arc::new(Self {
             path,

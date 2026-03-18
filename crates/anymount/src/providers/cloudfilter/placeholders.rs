@@ -1,3 +1,4 @@
+use super::{Error, Result};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::Path;
@@ -22,7 +23,7 @@ pub fn open_file_handle(
     path: &Path,
     desired_access: u32,
     open_as_placeholder: bool,
-) -> Result<OwnedHandle, String> {
+) -> Result<OwnedHandle> {
     let is_directory = path.is_dir();
     let mut flags: u32 = 0;
     if open_as_placeholder {
@@ -44,7 +45,11 @@ pub fn open_file_handle(
             None,
         )
     }
-    .map_err(|e| format!("Failed to open file handle: {}", e))?;
+    .map_err(|source| Error::WindowsPath {
+        operation: "open file handle",
+        path: path.to_path_buf(),
+        source,
+    })?;
     Ok(unsafe { OwnedHandle::from_raw_handle(handle.0 as _) })
 }
 
@@ -59,7 +64,7 @@ pub struct PlaceholderState {
 }
 
 /// Reads placeholder metadata for the given path (file or directory).
-pub fn get_placeholder_info(path: &Path) -> Result<PlaceholderState, String> {
+pub fn get_placeholder_info(path: &Path) -> Result<PlaceholderState> {
     let handle = open_file_handle(path, FILE_READ_ATTRIBUTES.0, true)?;
     let info_size = (std::mem::size_of::<CF_PLACEHOLDER_STANDARD_INFO>()
         + (FILE_ID_MAX_LENGTH as usize)
@@ -74,7 +79,11 @@ pub fn get_placeholder_info(path: &Path) -> Result<PlaceholderState, String> {
             None,
         )
     }
-    .map_err(|e| e.to_string())?;
+    .map_err(|source| Error::WindowsPath {
+        operation: "get placeholder info",
+        path: path.to_path_buf(),
+        source,
+    })?;
     let info = unsafe { &*(buffer.as_ptr() as *const CF_PLACEHOLDER_STANDARD_INFO) };
     let identity_len = info.FileIdentityLength as usize;
     let identity_start = std::mem::size_of::<CF_PLACEHOLDER_STANDARD_INFO>() - 1;
@@ -95,9 +104,11 @@ pub fn get_placeholder_info(path: &Path) -> Result<PlaceholderState, String> {
 }
 
 /// Dehydrates a placeholder file so its data is no longer present on disk.
-pub fn dehydrate_file(path: &Path) -> Result<(), String> {
+pub fn dehydrate_file(path: &Path) -> Result<()> {
     if path.is_dir() {
-        return Err("Cannot dehydrate folder".to_string());
+        return Err(Error::CannotDehydrateDirectory {
+            path: path.to_path_buf(),
+        });
     }
     let handle = open_file_handle(path, FILE_WRITE_ATTRIBUTES.0, true)?;
     unsafe {
@@ -109,6 +120,23 @@ pub fn dehydrate_file(path: &Path) -> Result<(), String> {
             None,
         )
     }
-    .map_err(|e| e.to_string())?;
+    .map_err(|source| Error::WindowsPath {
+        operation: "dehydrate placeholder",
+        path: path.to_path_buf(),
+        source,
+    })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dehydrate_file_rejects_directory() {
+        let dir = tempfile::tempdir().expect("tempdir should exist");
+        let err = dehydrate_file(dir.path()).expect_err("directory should fail");
+
+        assert!(matches!(err, super::Error::CannotDehydrateDirectory { .. }));
+    }
 }

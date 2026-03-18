@@ -1,4 +1,5 @@
 use super::provider::ID_PREFIX;
+use super::{Error, Result};
 use crate::Logger;
 use crate::providers::{ProviderConfiguration, ProvidersConfiguration};
 use windows::{
@@ -10,23 +11,31 @@ use windows::{
 pub fn cleanup_registry<L: Logger>(
     configuration: &impl ProvidersConfiguration,
     logger: &L,
-) -> Result<(), String> {
+) -> Result<()> {
     _cleanup_registry::<StorageProviderSyncRootManager, L>(configuration, logger)
 }
 
 /// Trait for a registry manager.
 trait RegistryManager {
-    fn get_currently_registered() -> Result<IVectorView<StorageProviderSyncRootInfo>, String>;
-    fn unregister(id: &windows::core::HSTRING) -> Result<(), String>;
+    fn get_currently_registered() -> Result<IVectorView<StorageProviderSyncRootInfo>>;
+    fn unregister(id: &windows::core::HSTRING) -> Result<()>;
 }
 
 /// Implementation of the RegistryManager trait for StorageProviderSyncRootManager.
 impl RegistryManager for StorageProviderSyncRootManager {
-    fn get_currently_registered() -> Result<IVectorView<StorageProviderSyncRootInfo>, String> {
-        StorageProviderSyncRootManager::GetCurrentSyncRoots().map_err(|e| e.to_string())
+    fn get_currently_registered() -> Result<IVectorView<StorageProviderSyncRootInfo>> {
+        StorageProviderSyncRootManager::GetCurrentSyncRoots().map_err(|source| {
+            Error::WindowsOperation {
+                operation: "get current sync roots",
+                source,
+            }
+        })
     }
-    fn unregister(id: &windows::core::HSTRING) -> Result<(), String> {
-        StorageProviderSyncRootManager::Unregister(id).map_err(|e| e.to_string())
+    fn unregister(id: &windows::core::HSTRING) -> Result<()> {
+        StorageProviderSyncRootManager::Unregister(id).map_err(|source| Error::WindowsOperation {
+            operation: "unregister sync root",
+            source,
+        })
     }
 }
 
@@ -34,7 +43,7 @@ impl RegistryManager for StorageProviderSyncRootManager {
 fn _cleanup_registry<Registry: RegistryManager, L: Logger>(
     configuration: &impl ProvidersConfiguration,
     logger: &L,
-) -> Result<(), String> {
+) -> Result<()> {
     let sync_roots = Registry::get_currently_registered()?;
     for sync_root in sync_roots {
         let id = match sync_root.Id() {
@@ -94,8 +103,48 @@ fn is_path_configured(path: &str, configuration: &impl ProvidersConfiguration) -
 }
 
 /// Get the path of a sync root.
-fn get_sync_root_path(sync_root: &StorageProviderSyncRootInfo) -> Result<String, String> {
-    let folder = sync_root.Path().map_err(|e| e.to_string())?;
-    let path = folder.Path().map_err(|e| e.to_string())?;
+fn get_sync_root_path(sync_root: &StorageProviderSyncRootInfo) -> Result<String> {
+    let folder = sync_root.Path().map_err(|source| Error::WindowsOperation {
+        operation: "get sync root folder",
+        source,
+    })?;
+    let path = folder.Path().map_err(|source| Error::WindowsOperation {
+        operation: "get sync root path",
+        source,
+    })?;
     Ok(path.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Config, NoOpLogger};
+
+    struct FailingRegistryManager;
+
+    impl RegistryManager for FailingRegistryManager {
+        fn get_currently_registered() -> Result<IVectorView<StorageProviderSyncRootInfo>> {
+            Err(Error::WindowsOperation {
+                operation: "get current sync roots",
+                source: windows::core::Error::from_hresult(windows::core::HRESULT(
+                    0x80004005u32 as i32,
+                )),
+            })
+        }
+
+        fn unregister(_id: &windows::core::HSTRING) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn cleanup_registry_returns_get_current_sync_roots_error() {
+        let config = Config {
+            providers: Vec::new(),
+        };
+
+        let err = _cleanup_registry::<FailingRegistryManager, _>(&config, &NoOpLogger)
+            .expect_err("cleanup should fail");
+        assert!(matches!(err, super::Error::WindowsOperation { .. }));
+    }
 }

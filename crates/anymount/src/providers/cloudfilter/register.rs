@@ -1,8 +1,8 @@
 use super::CloudFilterProvider;
+use super::{Error, Result};
 use crate::Logger;
 use crate::storages::Storage;
 use std::path::{Path, PathBuf};
-use std::result::Result;
 use windows::Storage::Provider::*;
 use windows::Storage::StorageFolder;
 use windows::Win32::Storage::CloudFilters::{
@@ -65,19 +65,25 @@ impl Default for RegistrationConfig {
 
 /// Register a sync root with Windows Cloud Filter API
 impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
-    pub fn register_sync_root(&self, config: &RegistrationConfig) -> Result<(), crate::Error> {
+    pub fn register_sync_root(&self, config: &RegistrationConfig) -> Result<()> {
         self.logger.info(format!(
             "Registering sync root: {} at {:?}",
             config.display_name, config.sync_root_path
         ));
 
         // Ensure the sync root directory exists
-        std::fs::create_dir_all(&config.sync_root_path)?;
+        std::fs::create_dir_all(&config.sync_root_path).map_err(|source| Error::Io {
+            operation: "create sync root directory",
+            path: config.sync_root_path.clone(),
+            source,
+        })?;
 
         // Create StorageProviderSyncRootInfo using WinRT API
-        let sync_root_info = StorageProviderSyncRootInfo::new().map_err(|e| {
-            crate::Error::Platform(format!("Failed to create sync root info: {:?}", e))
-        })?;
+        let sync_root_info =
+            StorageProviderSyncRootInfo::new().map_err(|source| Error::WindowsOperation {
+                operation: "create sync root info",
+                source,
+            })?;
 
         // Set the ID (use folder name as ID)
         let folder_name = config
@@ -87,34 +93,53 @@ impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
             .unwrap_or("Anymount");
         sync_root_info
             .SetId(&HSTRING::from(folder_name))
-            .map_err(|e| crate::Error::Platform(format!("Failed to set ID: {:?}", e)))?;
+            .map_err(|source| Error::WindowsOperation {
+                operation: "set sync root id",
+                source,
+            })?;
 
         // Set the path using StorageFolder
         let path_hstring = HSTRING::from(config.sync_root_path.to_string_lossy().as_ref());
         let folder = StorageFolder::GetFolderFromPathAsync(&path_hstring)
-            .map_err(|e| crate::Error::Platform(format!("Failed to get folder async: {:?}", e)))?
+            .map_err(|source| Error::WindowsOperation {
+                operation: "get sync root folder async",
+                source,
+            })?
             .get()
-            .map_err(|e| crate::Error::Platform(format!("Failed to get folder: {:?}", e)))?;
+            .map_err(|source| Error::WindowsOperation {
+                operation: "get sync root folder",
+                source,
+            })?;
         sync_root_info
             .SetPath(&folder)
-            .map_err(|e| crate::Error::Platform(format!("Failed to set path: {:?}", e)))?;
+            .map_err(|source| Error::WindowsOperation {
+                operation: "set sync root path",
+                source,
+            })?;
 
         // Set display name
         sync_root_info
             .SetDisplayNameResource(&HSTRING::from(&config.display_name))
-            .map_err(|e| crate::Error::Platform(format!("Failed to set display name: {:?}", e)))?;
+            .map_err(|source| Error::WindowsOperation {
+                operation: "set display name",
+                source,
+            })?;
 
         // Set icon resource (optional)
         if let Some(icon) = &config.icon_resource {
             sync_root_info
                 .SetIconResource(&HSTRING::from(icon))
-                .map_err(|e| crate::Error::Platform(format!("Failed to set icon: {:?}", e)))?;
+                .map_err(|source| Error::WindowsOperation {
+                    operation: "set icon resource",
+                    source,
+                })?;
         } else {
             // Use default Windows folder icon
             sync_root_info
                 .SetIconResource(&HSTRING::from("%SystemRoot%\\system32\\shell32.dll,13"))
-                .map_err(|e| {
-                    crate::Error::Platform(format!("Failed to set default icon: {:?}", e))
+                .map_err(|source| Error::WindowsOperation {
+                    operation: "set default icon resource",
+                    source,
                 })?;
         }
 
@@ -126,13 +151,15 @@ impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
         };
         sync_root_info
             .SetHydrationPolicy(hydration_policy)
-            .map_err(|e| {
-                crate::Error::Platform(format!("Failed to set hydration policy: {:?}", e))
+            .map_err(|source| Error::WindowsOperation {
+                operation: "set hydration policy",
+                source,
             })?;
         sync_root_info
             .SetHydrationPolicyModifier(StorageProviderHydrationPolicyModifier::None)
-            .map_err(|e| {
-                crate::Error::Platform(format!("Failed to set hydration policy modifier: {:?}", e))
+            .map_err(|source| Error::WindowsOperation {
+                operation: "set hydration policy modifier",
+                source,
             })?;
 
         // Set population policy
@@ -143,27 +170,36 @@ impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
         };
         sync_root_info
             .SetPopulationPolicy(population_policy)
-            .map_err(|e| {
-                crate::Error::Platform(format!("Failed to set population policy: {:?}", e))
+            .map_err(|source| Error::WindowsOperation {
+                operation: "set population policy",
+                source,
             })?;
 
         // Set other policies
         sync_root_info
             .SetInSyncPolicy(StorageProviderInSyncPolicy::PreserveInsyncForSyncEngine)
-            .map_err(|e| {
-                crate::Error::Platform(format!("Failed to set in-sync policy: {:?}", e))
+            .map_err(|source| Error::WindowsOperation {
+                operation: "set in-sync policy",
+                source,
             })?;
         sync_root_info
             .SetHardlinkPolicy(StorageProviderHardlinkPolicy::None)
-            .map_err(|e| {
-                crate::Error::Platform(format!("Failed to set hardlink policy: {:?}", e))
+            .map_err(|source| Error::WindowsOperation {
+                operation: "set hardlink policy",
+                source,
             })?;
-        sync_root_info.SetShowSiblingsAsGroup(false).map_err(|e| {
-            crate::Error::Platform(format!("Failed to set show siblings as group: {:?}", e))
-        })?;
+        sync_root_info
+            .SetShowSiblingsAsGroup(false)
+            .map_err(|source| Error::WindowsOperation {
+                operation: "set show siblings as group",
+                source,
+            })?;
         sync_root_info
             .SetVersion(&HSTRING::from(config.provider_version.as_str()))
-            .map_err(|e| crate::Error::Platform(format!("Failed to set version: {:?}", e)))?;
+            .map_err(|source| Error::WindowsOperation {
+                operation: "set provider version",
+                source,
+            })?;
 
         // Register using WinRT API
         match StorageProviderSyncRootManager::Register(&sync_root_info) {
@@ -174,16 +210,16 @@ impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
             Err(e) => {
                 self.logger
                     .error(format!("Failed to register sync root: {:?}", e));
-                Err(crate::Error::Platform(format!(
-                    "Failed to register sync root: {:?}",
-                    e
-                )))
+                Err(Error::WindowsOperation {
+                    operation: "register sync root",
+                    source: e,
+                })
             }
         }
     }
 
     /// Unregister a sync root
-    pub fn unregister_sync_root(&self, sync_root_path: &Path) -> Result<(), crate::Error> {
+    pub fn unregister_sync_root(&self, sync_root_path: &Path) -> Result<()> {
         self.logger
             .info(format!("Unregistering sync root: {:?}", sync_root_path));
 
@@ -214,37 +250,34 @@ impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
                     self.logger.error(
                         "You may need to restart your computer to fully release the connection.",
                     );
-                    Err(crate::Error::Platform(format!(
-                        "Failed to unregister sync root (active connection detected): {:?}\n\
-                     Try closing all File Explorer windows that have the sync root open, \n\
-                     or restart your computer to release the connection.",
-                        e
-                    )))
+                    Err(Error::WindowsOperation {
+                        operation: "unregister sync root (active connection detected)",
+                        source: e,
+                    })
                 } else if err_str.contains("0x8007018B") {
                     // ERROR_CLOUD_FILE_ACCESS_DENIED - permission issue
                     self.logger
                         .error(format!("Failed to unregister sync root: {:?}", e));
                     self.logger
                         .error("Access denied. Make sure you're running as Administrator.");
-                    Err(crate::Error::Platform(format!(
-                        "Failed to unregister sync root (access denied): {:?}\n\
-                     Please run as Administrator.",
-                        e
-                    )))
+                    Err(Error::WindowsOperation {
+                        operation: "unregister sync root (access denied)",
+                        source: e,
+                    })
                 } else {
                     self.logger
                         .error(format!("Failed to unregister sync root: {:?}", e));
-                    Err(crate::Error::Platform(format!(
-                        "Failed to unregister sync root: {:?}",
-                        e
-                    )))
+                    Err(Error::WindowsOperation {
+                        operation: "unregister sync root",
+                        source: e,
+                    })
                 }
             }
         }
     }
 
     /// Check if a path is a registered sync root
-    pub fn is_sync_root_registered(&self, _path: &Path) -> Result<bool, crate::Error> {
+    pub fn is_sync_root_registered(&self, _path: &Path) -> Result<bool> {
         let id = HSTRING::from("Anymount");
 
         match StorageProviderSyncRootManager::GetSyncRootInformationForId(&id) {
@@ -254,10 +287,7 @@ impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
     }
 
     /// Connect to an existing sync root to start receiving callbacks
-    pub fn connect_sync_root(
-        &self,
-        sync_root_path: &Path,
-    ) -> Result<CF_CONNECTION_KEY, crate::Error> {
+    pub fn connect_sync_root(&self, sync_root_path: &Path) -> Result<CF_CONNECTION_KEY> {
         self.logger
             .info(format!("Connecting to sync root: {:?}", sync_root_path));
 
@@ -273,20 +303,17 @@ impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
                 Err(e) => {
                     self.logger
                         .error(format!("Failed to connect to sync root: {:?}", e));
-                    Err(crate::Error::Platform(format!(
-                        "Failed to connect to sync root: {:?}",
-                        e
-                    )))
+                    Err(Error::WindowsOperation {
+                        operation: "connect sync root",
+                        source: e,
+                    })
                 }
             }
         }
     }
 
     /// Disconnect from a sync root
-    pub fn disconnect_sync_root(
-        &self,
-        connection_key: CF_CONNECTION_KEY,
-    ) -> Result<(), crate::Error> {
+    pub fn disconnect_sync_root(&self, connection_key: CF_CONNECTION_KEY) -> Result<()> {
         self.logger.info("Disconnecting from sync root");
 
         unsafe {
