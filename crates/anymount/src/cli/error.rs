@@ -28,6 +28,9 @@ pub enum Error {
     #[error("specify --name <NAME> or --all")]
     MissingConnectTarget,
 
+    #[error("specify --name <NAME> or --all")]
+    MissingDisconnectTarget,
+
     #[error("specify --name <NAME> or --path <PATH> with a storage subcommand")]
     MissingProvideTarget,
 
@@ -68,6 +71,9 @@ pub enum Error {
 
     #[error("failed to connect providers: {failures}")]
     ConnectFailures { failures: String },
+
+    #[error("failed to disconnect providers: {failures}")]
+    DisconnectFailures { failures: String },
 
     #[error("{0}")]
     Prompt(String),

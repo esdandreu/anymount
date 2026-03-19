@@ -94,4 +94,30 @@ mod tests {
 
         server.join().expect("server thread should finish");
     }
+
+    #[test]
+    fn unix_control_send_shutdown_receives_ack() {
+        let control = UnixControl;
+        let listener = control.bind("unix-shutdown").expect("bind should succeed");
+
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept should succeed");
+            let mut bytes = Vec::new();
+            stream.read_to_end(&mut bytes).expect("read should succeed");
+            assert_eq!(
+                ControlMessage::decode(&bytes).expect("decode should succeed"),
+                ControlMessage::Shutdown
+            );
+            stream
+                .write_all(&ControlMessage::Ack.encode())
+                .expect("write should succeed");
+        });
+
+        let reply = control
+            .send("unix-shutdown", ControlMessage::Shutdown)
+            .expect("send should succeed");
+        assert_eq!(reply, ControlMessage::Ack);
+
+        server.join().expect("server thread should finish");
+    }
 }

@@ -1,6 +1,7 @@
 use crate::cli::commands::auth::AuthCommand;
 use crate::cli::commands::config::ConfigCommand;
 use crate::cli::commands::connect::ConnectCommand;
+use crate::cli::commands::disconnect::DisconnectCommand;
 use crate::cli::commands::provide::ProvideCommand;
 use crate::cli::commands::status::StatusCommand;
 use crate::tui;
@@ -27,6 +28,8 @@ pub enum Commands {
     Config(ConfigCommand),
     /// Connect to a storage provider
     Connect(ConnectCommand),
+    /// Stop a running provider daemon (idempotent).
+    Disconnect(DisconnectCommand),
     /// Run one configured provider as a long-lived process.
     Provide(ProvideCommand),
     /// Show configured providers and daemon readiness.
@@ -39,6 +42,7 @@ impl Cli {
             Some(Commands::Auth(cmd)) => cmd.execute(),
             Some(Commands::Config(cmd)) => cmd.execute(),
             Some(Commands::Connect(cmd)) => cmd.execute(),
+            Some(Commands::Disconnect(cmd)) => cmd.execute(),
             Some(Commands::Provide(cmd)) => cmd.execute(),
             Some(Commands::Status(cmd)) => cmd.execute(),
             None => tui::run().map_err(|error| super::Error::Validation(error.to_string())),
@@ -66,6 +70,18 @@ mod tests {
         let cli = Cli::try_parse_from(["anymount", "status"]).expect("parse should succeed");
         match cli.command.expect("command should exist") {
             Commands::Status(cmd) => assert!(cmd.config_dir.is_none()),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_disconnect_all_command() {
+        let cli = Cli::try_parse_from(["anymount", "disconnect", "--all"]).expect("parse");
+        match cli.command.expect("command should exist") {
+            Commands::Disconnect(cmd) => {
+                assert!(cmd.all);
+                assert!(cmd.name.is_none());
+            }
             other => panic!("unexpected command: {other:?}"),
         }
     }

@@ -2,6 +2,9 @@
 
 **Date:** 2026-03-20
 
+**Status:** Implemented (Unix named sockets + Windows named pipes `\\.\pipe\anymount-{name}`,
+`disconnect` / `try_disconnect_provider`, `provide` control server parity on Windows).
+
 **Goal:** Add `anymount disconnect` so users can stop background provider daemons
 cleanly via the existing control IPC (`Shutdown` → `Ack`), with **idempotent**
 semantics and **`ConfigDir::each_provider()`** for `--all`. **Windows and Unix

@@ -8,7 +8,6 @@ use std::sync::mpsc;
 
 #[cfg(unix)]
 use crate::daemon::control_unix::UnixControl;
-#[cfg(unix)]
 use crate::daemon::messages::ControlMessage;
 
 #[cfg(target_os = "windows")]
@@ -190,6 +189,24 @@ impl ProvideCommand {
     }
 }
 
+fn control_reply_for_request(
+    bytes: &[u8],
+    provider_name: &str,
+    tx: &mpsc::Sender<DaemonMessage>,
+) -> ControlMessage {
+    match ControlMessage::decode(bytes) {
+        Ok(ControlMessage::Ping) => ControlMessage::Ready,
+        Ok(ControlMessage::Shutdown) => {
+            let _ = tx.send(DaemonMessage::Shutdown);
+            ControlMessage::Ack
+        }
+        Ok(other) => ControlMessage::Error(format!(
+            "unsupported control message for {provider_name}: {other:?}"
+        )),
+        Err(error) => ControlMessage::Error(error.to_string()),
+    }
+}
+
 fn install_ctrlc_handler<L: Logger>(
     tx: mpsc::Sender<DaemonMessage>,
     logger: &L,
@@ -221,17 +238,7 @@ fn spawn_control_server<L: Logger + 'static>(
             if std::io::Read::read_to_end(&mut stream, &mut bytes).is_err() {
                 continue;
             }
-            let reply = match ControlMessage::decode(&bytes) {
-                Ok(ControlMessage::Ping) => ControlMessage::Ready,
-                Ok(ControlMessage::Shutdown) => {
-                    let _ = tx.send(DaemonMessage::Shutdown);
-                    ControlMessage::Ack
-                }
-                Ok(other) => ControlMessage::Error(format!(
-                    "unsupported control message for {provider_name}: {other:?}"
-                )),
-                Err(error) => ControlMessage::Error(error.to_string()),
-            };
+            let reply = control_reply_for_request(&bytes, &provider_name, &tx);
             let _ = std::io::Write::write_all(&mut stream, &reply.encode());
             if matches!(reply, ControlMessage::Ack) {
                 break;
@@ -245,13 +252,32 @@ fn spawn_control_server<L: Logger + 'static>(
 }
 
 #[cfg(target_os = "windows")]
-fn spawn_control_server<L: Logger>(
+fn spawn_control_server<L: Logger + 'static>(
     provider_name: &str,
-    _tx: mpsc::Sender<DaemonMessage>,
-    _logger: &L,
+    tx: mpsc::Sender<DaemonMessage>,
+    logger: &L,
 ) -> crate::cli::Result<()> {
-    let _ = provider_name;
-    let _ = WindowsControl.bind(provider_name)?;
+    let listener = WindowsControl.bind(provider_name)?;
+    let provider_name = provider_name.to_owned();
+    let logger = logger.clone();
+    std::thread::spawn(move || {
+        loop {
+            let stop = match listener.serve_one_exchange(&provider_name, |bytes| {
+                let reply = control_reply_for_request(bytes, &provider_name, &tx);
+                let stop = matches!(reply, ControlMessage::Ack);
+                (reply, stop)
+            }) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            if stop {
+                break;
+            }
+        }
+        logger.info(format!(
+            "control server stopped for provider {provider_name}"
+        ));
+    });
     Ok(())
 }
 
