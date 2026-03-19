@@ -156,7 +156,7 @@ fn provider_fails_on_invalid_root() {
 #[cfg(target_os = "linux")]
 #[test]
 fn provider_cleans_up_on_drop() {
-    let fixture = TestFixture::new();
+    let mut fixture = TestFixture::new();
     assert!(fixture.wait_for_ready());
 
     let child_id = fixture.child.id();
