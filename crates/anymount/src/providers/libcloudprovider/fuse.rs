@@ -57,6 +57,7 @@ trait CachePort: Send + Sync {
     fn write_range(&self, path: &Path, start: u64, data: &[u8], size: u64) -> Result<()>;
 }
 
+#[derive(Debug)]
 struct SparseFsCache {
     cache_root: PathBuf,
     data_cache_blocks: RwLock<HashMap<PathBuf, BTreeSet<u64>>>,
