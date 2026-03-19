@@ -1,9 +1,15 @@
+use crate::application::provide::{
+    Application as ProvideApplication, Error as ProvideError, ProvideRepository, ProvideUseCase,
+    ProviderRuntimeHost, TelemetryFactory,
+};
+use crate::application::types::ProvideRequest;
 use crate::config::ConfigDir;
+use crate::domain::provider::{ProviderSpec, StorageSpec, TelemetrySpec};
 use crate::service::control::messages::{ControlMessage, ServiceMessage};
 use crate::service::ServiceRuntime;
-use crate::{Config, Logger, Provider, ProviderFileConfig, StorageConfig, TracingLogger};
+use crate::{Config, Logger, Provider, ProviderFileConfig, TelemetryFileConfig, TracingLogger};
 use clap::{Args, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
 #[cfg(unix)]
@@ -29,23 +35,49 @@ pub struct ProvideCommand {
 
 impl ProvideCommand {
     pub fn execute(&self) -> crate::cli::Result<()> {
-        self.run_with(&DefaultProvideRunner)
+        let logger = TracingLogger::new();
+        let config_dir = self.config_dir();
+        let repository = ConfigRepository::new(config_dir);
+        let telemetry = DefaultTelemetryFactory;
+        let host = RuntimeHost::new(logger);
+        let app = ProvideApplication::new(&repository, &telemetry, &host);
+        self.run_with(&app)
     }
 
-    pub(crate) fn run_with<R>(&self, runner: &R) -> crate::cli::Result<()>
+    pub(crate) fn run_with<U>(&self, use_case: &U) -> crate::cli::Result<()>
     where
-        R: ProvideRunner,
+        U: ProvideUseCase,
     {
-        runner.run(self, &TracingLogger::new())
+        if let Some(name) = &self.name {
+            use_case.run_named(name).map_err(map_provide_error)
+        } else {
+            let spec = self.inline_spec()?;
+            use_case.run_inline(spec).map_err(map_provide_error)
+        }
     }
-}
 
-pub trait ProvideRunner {
-    fn run<L: Logger + 'static>(
-        &self,
-        command: &ProvideCommand,
-        logger: &L,
-    ) -> crate::cli::Result<()>;
+    fn inline_spec(&self) -> crate::cli::Result<ProviderSpec> {
+        let Some(path) = &self.path else {
+            return Err(crate::cli::Error::MissingProvideTarget);
+        };
+        let Some(storage) = &self.storage else {
+            return Err(crate::cli::Error::MissingProvideTarget);
+        };
+
+        Ok(ProviderSpec {
+            name: inline_provider_name(path),
+            path: path.clone(),
+            storage: storage.to_storage_spec(),
+            telemetry: TelemetrySpec::default(),
+        })
+    }
+
+    fn config_dir(&self) -> ConfigDir {
+        match &self.config_dir {
+            Some(path) => ConfigDir::new(path.clone()),
+            None => ConfigDir::default(),
+        }
+    }
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -91,12 +123,12 @@ pub struct OneDriveStorageArgs {
 }
 
 impl ProvideStorageSubcommand {
-    pub(crate) fn to_storage_config(&self) -> StorageConfig {
+    pub(crate) fn to_storage_spec(&self) -> StorageSpec {
         match self {
-            Self::Local(args) => StorageConfig::Local {
+            Self::Local(args) => StorageSpec::Local {
                 root: args.root.clone(),
             },
-            Self::OneDrive(args) => StorageConfig::OneDrive {
+            Self::OneDrive(args) => StorageSpec::OneDrive {
                 root: args.root.clone(),
                 endpoint: args.endpoint.clone(),
                 access_token: args.access_token.clone(),
@@ -108,84 +140,138 @@ impl ProvideStorageSubcommand {
     }
 }
 
+#[derive(Debug, Clone)]
+struct ConfigRepository {
+    config_dir: ConfigDir,
+}
+
+impl ConfigRepository {
+    fn new(config_dir: ConfigDir) -> Self {
+        Self { config_dir }
+    }
+}
+
+impl ProvideRepository for ConfigRepository {
+    fn read_spec(&self, name: &str) -> crate::application::provide::Result<ProviderSpec> {
+        self.config_dir.read_spec(name).map_err(Into::into)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
-pub struct DefaultProvideRunner;
+struct DefaultTelemetryFactory;
 
-impl ProvideRunner for DefaultProvideRunner {
-    fn run<L: Logger + 'static>(
+impl TelemetryFactory for DefaultTelemetryFactory {
+    fn build(
         &self,
-        command: &ProvideCommand,
-        logger: &L,
-    ) -> crate::cli::Result<()> {
-        let request = command.resolve_request()?;
-        let (tx, rx) = mpsc::channel();
-        install_ctrlc_handler(tx.clone(), logger)?;
-
-        let providers: Vec<Box<dyn Provider>> =
-            crate::connect_providers_with_telemetry(&request.config, logger, Some(tx.clone()))?;
-
-        for provider in &providers {
-            logger.info(format!(
-                "Connected to {} at {}",
-                provider.kind(),
-                provider.path().display()
-            ));
-        }
-
-        if let Some(provider_name) = request.provider_name.as_deref() {
-            spawn_control_server(provider_name, tx, logger)?;
-        }
-
-        let mut runtime = ServiceRuntime::new(logger.clone(), rx);
-        let result = runtime.run().map_err(crate::cli::Error::from);
-        drop(providers);
-        result
+        spec: &ProviderSpec,
+    ) -> crate::application::provide::Result<Option<crate::telemetry::OtelHandles>> {
+        crate::telemetry::OtelHandles::from_provider_spec(spec).map_err(Into::into)
     }
 }
 
 #[derive(Debug, Clone)]
-struct ProvideRequest {
-    provider_name: Option<String>,
-    config: Config,
+struct RuntimeHost<L: Logger> {
+    logger: L,
 }
 
-impl ProvideCommand {
-    fn resolve_request(&self) -> crate::cli::Result<ProvideRequest> {
-        if let Some(name) = &self.name {
-            let cd = self.config_dir();
-            let provider = cd.read(name)?;
-            return Ok(ProvideRequest {
-                provider_name: Some(name.clone()),
-                config: Config {
-                    providers: vec![provider],
-                },
-            });
-        }
-
-        let Some(path) = &self.path else {
-            return Err(crate::cli::Error::MissingProvideTarget);
-        };
-        let Some(storage) = &self.storage else {
-            return Err(crate::cli::Error::MissingProvideTarget);
-        };
-
-        Ok(ProvideRequest {
-            provider_name: None,
-            config: Config {
-                providers: vec![ProviderFileConfig {
-                    path: path.clone(),
-                    storage: storage.to_storage_config(),
-                    telemetry: Default::default(),
-                }],
-            },
-        })
+impl<L: Logger> RuntimeHost<L> {
+    fn new(logger: L) -> Self {
+        Self { logger }
     }
+}
 
-    fn config_dir(&self) -> ConfigDir {
-        match &self.config_dir {
-            Some(path) => ConfigDir::new(path.clone()),
-            None => ConfigDir::default(),
+impl<L: Logger + 'static> ProviderRuntimeHost for RuntimeHost<L> {
+    fn run(
+        &self,
+        request: ProvideRequest,
+        telemetry: Option<crate::telemetry::OtelHandles>,
+    ) -> crate::application::provide::Result<()> {
+        let provider_name = request
+            .control_name
+            .clone()
+            .unwrap_or_else(|| request.spec.name.clone());
+
+        let result = (|| {
+            let (tx, rx) = mpsc::channel();
+            install_ctrlc_handler(tx.clone(), &self.logger).map_err(|error| {
+                ProvideError::Host {
+                    provider_name: provider_name.clone(),
+                    reason: error.to_string(),
+                }
+            })?;
+
+            let config = config_from_spec(&request.spec);
+            let providers: Vec<Box<dyn Provider>> =
+                crate::connect_providers_with_telemetry(&config, &self.logger, Some(tx.clone()))
+                    .map_err(|error| ProvideError::Host {
+                        provider_name: provider_name.clone(),
+                        reason: error.to_string(),
+                    })?;
+
+            for provider in &providers {
+                self.logger.info(format!(
+                    "Connected to {} at {}",
+                    provider.kind(),
+                    provider.path().display()
+                ));
+            }
+
+            if let Some(control_name) = request.control_name.as_deref() {
+                spawn_control_server(control_name, tx, &self.logger).map_err(|error| {
+                    ProvideError::Host {
+                        provider_name: control_name.to_owned(),
+                        reason: error.to_string(),
+                    }
+                })?;
+            }
+
+            let mut runtime = ServiceRuntime::new(self.logger.clone(), rx);
+            let result = runtime.run().map_err(|error| ProvideError::Host {
+                provider_name: provider_name.clone(),
+                reason: error.to_string(),
+            });
+            drop(providers);
+            result
+        })();
+
+        if let Some(otel) = telemetry {
+            otel.shutdown();
         }
+
+        result
+    }
+}
+
+fn map_provide_error(error: ProvideError) -> crate::cli::Error {
+    match error {
+        ProvideError::Config(source) => crate::cli::Error::Config(source),
+        ProvideError::Telemetry(source) => crate::cli::Error::Otlp(source),
+        ProvideError::Repository {
+            provider_name,
+            reason,
+        }
+        | ProvideError::Host {
+            provider_name,
+            reason,
+        } => crate::cli::Error::Validation(format!("{provider_name}: {reason}")),
+    }
+}
+
+fn inline_provider_name(path: &Path) -> String {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("inline")
+        .to_owned()
+}
+
+fn config_from_spec(spec: &ProviderSpec) -> Config {
+    Config {
+        providers: vec![ProviderFileConfig {
+            path: spec.path.clone(),
+            storage: spec.storage.clone().into(),
+            telemetry: TelemetryFileConfig::from(spec.telemetry.clone()),
+        }],
     }
 }
 
@@ -295,20 +381,38 @@ fn spawn_control_server<L: Logger>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::NoOpLogger;
+    use crate::application::provide::{Error as ProvideError, ProvideUseCase};
 
-    #[derive(Debug, Clone, Copy, Default)]
-    struct FailingProvideRunner;
+    #[derive(Default)]
+    struct RecordingUseCase {
+        named_calls: Vec<String>,
+        inline_calls: Vec<String>,
+        fail_named: Option<String>,
+    }
 
-    impl ProvideRunner for FailingProvideRunner {
-        fn run<L: Logger + 'static>(
-            &self,
-            _command: &ProvideCommand,
-            _logger: &L,
-        ) -> crate::cli::Result<()> {
-            Err(crate::cli::Error::Providers(
-                crate::providers::Error::NotSupported,
-            ))
+    impl RecordingUseCase {
+        fn with_named_failure(mut self, reason: &str) -> Self {
+            self.fail_named = Some(reason.to_owned());
+            self
+        }
+    }
+
+    impl ProvideUseCase for std::cell::RefCell<RecordingUseCase> {
+        fn run_named(&self, name: &str) -> crate::application::provide::Result<()> {
+            let mut state = self.borrow_mut();
+            state.named_calls.push(name.to_owned());
+            if let Some(reason) = &state.fail_named {
+                return Err(ProvideError::Repository {
+                    provider_name: name.to_owned(),
+                    reason: reason.clone(),
+                });
+            }
+            Ok(())
+        }
+
+        fn run_inline(&self, spec: ProviderSpec) -> crate::application::provide::Result<()> {
+            self.borrow_mut().inline_calls.push(spec.name);
+            Ok(())
         }
     }
 
@@ -322,48 +426,25 @@ mod tests {
         };
 
         let err = command
-            .run_with(&FailingProvideRunner)
+            .run_with(&std::cell::RefCell::new(
+                RecordingUseCase::default().with_named_failure("startup failed"),
+            ))
             .expect_err("startup should fail");
-        assert!(matches!(
-            err,
-            crate::cli::Error::Providers(crate::providers::Error::NotSupported)
-        ));
+        assert!(matches!(err, crate::cli::Error::Validation(_)));
     }
 
     #[test]
-    fn default_runner_can_be_called_with_injected_logger() {
+    fn default_runner_can_be_called_with_injected_use_case() {
         let command = ProvideCommand {
             name: Some("demo".to_owned()),
             path: None,
             config_dir: None,
             storage: None,
         };
-        let logger = NoOpLogger;
-        let err = DefaultProvideRunner
-            .run(&command, &logger)
-            .expect_err("named provider is not configured in test");
-        assert!(matches!(
-            err,
-            crate::cli::Error::Config(crate::config::Error::Read { .. })
-        ));
-    }
 
-    #[test]
-    fn resolve_inline_request_builds_single_provider_config() {
-        let command = ProvideCommand {
-            name: None,
-            path: Some(PathBuf::from("/tmp/demo")),
-            config_dir: None,
-            storage: Some(ProvideStorageSubcommand::Local(LocalStorageArgs {
-                root: PathBuf::from("/data/demo"),
-            })),
-        };
-
-        let request = command
-            .resolve_request()
-            .expect("inline request should resolve");
-        assert!(request.provider_name.is_none());
-        assert_eq!(request.config.providers.len(), 1);
+        let use_case = std::cell::RefCell::new(RecordingUseCase::default());
+        command.run_with(&use_case).expect("provide should succeed");
+        assert_eq!(use_case.borrow().named_calls, vec!["demo"]);
     }
 
     #[test]
@@ -376,8 +457,8 @@ mod tests {
         };
 
         let err = command
-            .resolve_request()
-            .expect_err("request without target should fail");
+            .run_with(&std::cell::RefCell::new(RecordingUseCase::default()))
+            .expect_err("command should fail");
         assert!(matches!(err, crate::cli::Error::MissingProvideTarget));
     }
 
@@ -385,14 +466,30 @@ mod tests {
     fn resolve_request_requires_storage_for_inline_path() {
         let command = ProvideCommand {
             name: None,
-            path: Some(PathBuf::from("/tmp/demo")),
+            path: Some(PathBuf::from("/mnt/demo")),
             config_dir: None,
             storage: None,
         };
 
         let err = command
-            .resolve_request()
-            .expect_err("inline path without storage should fail");
+            .run_with(&std::cell::RefCell::new(RecordingUseCase::default()))
+            .expect_err("command should fail");
         assert!(matches!(err, crate::cli::Error::MissingProvideTarget));
+    }
+
+    #[test]
+    fn resolve_inline_request_builds_single_provider_spec() {
+        let command = ProvideCommand {
+            name: None,
+            path: Some(PathBuf::from("/mnt/demo")),
+            config_dir: None,
+            storage: Some(ProvideStorageSubcommand::Local(LocalStorageArgs {
+                root: PathBuf::from("/data/demo"),
+            })),
+        };
+
+        let use_case = std::cell::RefCell::new(RecordingUseCase::default());
+        command.run_with(&use_case).expect("provide should succeed");
+        assert_eq!(use_case.borrow().inline_calls, vec!["demo"]);
     }
 }
