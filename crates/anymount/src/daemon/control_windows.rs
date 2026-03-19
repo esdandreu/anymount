@@ -5,18 +5,18 @@ use crate::daemon::paths::provider_endpoint;
 use crate::daemon::{Error, Result};
 use std::fs;
 use std::io;
+use windows::core::HSTRING;
 use windows::Win32::Foundation::{
-    CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE, GENERIC_READ, GENERIC_WRITE,
+    CloseHandle, GetLastError, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
 };
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FlushFileBuffers, FileShareMode, ReadFile, WriteFile, FILE_ATTRIBUTE_NORMAL,
+    CreateFileW, FlushFileBuffers, ReadFile, WriteFile, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_MODE,
     OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
 };
 use windows::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, NAMED_PIPE_MODE, PIPE_READMODE_MESSAGE,
-    PIPE_TYPE_MESSAGE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, NAMED_PIPE_MODE,
+    PIPE_READMODE_MESSAGE, PIPE_TYPE_MESSAGE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
-use windows::core::HSTRING;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct WindowsControl;
@@ -77,7 +77,8 @@ impl WindowsPipeListener {
     ) -> Result<bool> {
         let pipe = create_server_pipe(&self.pipe_name, provider_name)?;
         unsafe {
-            ConnectNamedPipe(pipe, None).map_err(|e| win_to_io_error("ConnectNamedPipe", provider_name, e))?;
+            ConnectNamedPipe(pipe, None)
+                .map_err(|e| win_to_io_error("ConnectNamedPipe", provider_name, e))?;
         }
         let request = read_message_pipe(pipe, provider_name)?;
         let (reply, stop) = handle_control(&request);
@@ -117,7 +118,7 @@ fn create_server_pipe(name: &HSTRING, provider_name: &str) -> Result<HANDLE> {
 }
 
 fn connect_client_pipe(name: &HSTRING, provider_name: &str) -> Result<HANDLE> {
-    let share = FileShareMode::FILE_SHARE_READ | FileShareMode::FILE_SHARE_WRITE;
+    let share = FILE_SHARE_MODE(0);
     let handle = unsafe {
         CreateFileW(
             name,
@@ -178,11 +179,7 @@ fn io_error(operation: &'static str, provider_name: &str, source: io::Error) -> 
 }
 
 fn win_to_io_error(operation: &'static str, provider_name: &str, e: windows::core::Error) -> Error {
-    io_error(
-        operation,
-        provider_name,
-        io::Error::other(e.to_string()),
-    )
+    io_error(operation, provider_name, io::Error::other(e.to_string()))
 }
 
 #[cfg(test)]
