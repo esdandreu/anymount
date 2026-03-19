@@ -37,6 +37,22 @@ mise run cli -- provide --name demo
 - [**windows-rs**](https://github.com/microsoft/windows-rs) - Official Microsoft Rust bindings
 - [**cloud-filter**](https://github.com/ho-229/cloud-filter-rs) - Cloud Filter API wrapper
 
+## Testing
+
+Run unit tests:
+
+```bash
+cargo test
+```
+
+Run system tests:
+
+```bash
+cargo test --test '*_test'
+```
+
+Note: System tests run on Linux only (uses FUSE).
+
 ## License
 
 GPL-3.0 - See [LICENSE](LICENSE)
