@@ -1,4 +1,3 @@
-use crate::StorageConfig;
 use crate::application::config::{
     Application as ConfigApplication, ConfigRepository, ConfigUseCase,
     Error as ConfigApplicationError,
@@ -11,6 +10,9 @@ use crate::domain::provider::ProviderSpec;
 use clap::{Args, Subcommand};
 use inquire::{Select, Text};
 use std::path::{Path, PathBuf};
+
+#[cfg(test)]
+use crate::StorageConfig;
 
 #[derive(Args, Debug, Clone)]
 pub struct ConfigCommand {
@@ -336,6 +338,7 @@ fn config_from_spec(spec: &ProviderSpec) -> ProviderFileConfig {
     }
 }
 
+#[cfg(test)]
 fn apply_set(cfg: &mut ProviderFileConfig, key: &str, value: &str) -> crate::cli::Result<()> {
     match key {
         "path" => {

@@ -1,7 +1,7 @@
 use crate::application::auth::{
     Application as AuthApplication, AuthUseCase, Error as AuthApplicationError,
 };
-use crate::auth::{self, OneDriveAuthFlow, TokenResponse};
+use crate::auth::{OneDriveAuthFlow, TokenResponse};
 use clap::Subcommand;
 
 /// Auth subcommand: which provider to obtain a token for.
@@ -137,7 +137,7 @@ mod tests {
             &self,
             _client_id: Option<String>,
         ) -> AuthApplicationResult<Box<dyn StartedAuthSession>> {
-            Err(AuthApplicationError::Auth(auth::Error::OneDrive(
+            Err(AuthApplicationError::Auth(crate::auth::Error::OneDrive(
                 crate::auth::onedrive::Error::DeviceCodeExpired,
             )))
         }
