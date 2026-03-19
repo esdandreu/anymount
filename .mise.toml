@@ -23,7 +23,7 @@ description = "Run the application"
 depends = ["build"]
 usage = 'arg "[args]" var=#true double_dash="required" help="Arguments and flags forwarded to anymount-cli (use -- before flags)"'
 run = "target/release/anymount-cli ${usage_args-}"
-run_windows = "target\\release\\anymount-cli.exe %usage_args%"
+run_windows = 'target\\release\\anymount-cli.exe{% for arg in usage.args | default(value=[]) %} {{ arg }}{% endfor %}'
 
 [tasks.tui]
 description = "Run the terminal user interface"
