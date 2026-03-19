@@ -4,8 +4,7 @@
 
 **Status:** Draft
 
-**Supersedes:** [`2026-03-20-provider-logs-ipc-design.md`](2026-03-20-provider-logs-ipc-design.md)
-(IPC-only log socket). Observability is **export-based** using standard OTLP so
+Observability is **export-based** using standard OTLP so
 any compatible collector or vendor backend can persist and query **logs,
 traces, and metrics**.
 
@@ -146,8 +145,7 @@ No cross-process sharing of exporters is required.
 - **Crate API churn:** `opentelemetry-rust` evolves; pin versions and follow
   upstream migration guides when bumping.
 
-## Relation to IPC logs spec
+## Local vs exported telemetry
 
-The IPC-only design is **withdrawn** in favor of this approach: operators who
-want persistence and inspection use **standard backends**; developers who want
-local live output keep **console/file** `tracing` layers.
+Operators use **standard OTLP backends** for persistence and inspection;
+developers keep **console/file** `tracing` layers for local troubleshooting.
