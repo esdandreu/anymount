@@ -1,6 +1,8 @@
 #![allow(clippy::unwrap_used)]
 
 #[cfg(target_os = "linux")]
+use libc::kill;
+#[cfg(target_os = "linux")]
 use std::fs;
 #[cfg(target_os = "linux")]
 use std::path::PathBuf;
@@ -161,6 +163,13 @@ fn provider_cleans_up_on_drop() {
     drop(fixture);
 
     std::thread::sleep(Duration::from_millis(100));
+
+    let result = unsafe { kill(child_id as libc::pid_t, 0) };
+    assert_eq!(
+        result, -1,
+        "Child process {} should have been killed after fixture drop",
+        child_id
+    );
 }
 
 #[cfg(target_os = "linux")]
