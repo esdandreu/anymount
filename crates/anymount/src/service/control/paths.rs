@@ -1,16 +1,16 @@
-use crate::daemon::{Error, Result};
+use crate::service::{Error, Result};
 use std::path::PathBuf;
 
 const APP_STATE_DIR: &str = "anymount/providers";
 
 pub fn provider_endpoint(provider_name: &str) -> Result<PathBuf> {
     validate_provider_name(provider_name)?;
-    let state_dir = daemon_state_root();
+    let state_dir = service_state_root();
     let file_name = format!("{provider_name}{}", endpoint_suffix());
     Ok(state_dir.join(APP_STATE_DIR).join(file_name))
 }
 
-fn daemon_state_root() -> PathBuf {
+fn service_state_root() -> PathBuf {
     dirs::state_dir()
         .or_else(dirs::data_local_dir)
         .unwrap_or_else(std::env::temp_dir)
@@ -42,7 +42,7 @@ fn endpoint_suffix() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::provider_endpoint;
-    use crate::daemon::Error;
+    use crate::service::Error;
 
     #[test]
     fn endpoint_path_is_stable_for_provider_name() {

@@ -1,13 +1,13 @@
 use super::callbacks::Callbacks;
-use super::{Error, Provider, ProviderConfiguration, Result, Storage};
+use super::{Error, Provider, Result, Storage};
+use crate::service::control::messages::ServiceMessage;
 use crate::Logger;
-use crate::daemon::messages::DaemonMessage;
 use cloud_filter::root::{
     Connection, HydrationType, PopulationType, SecurityId, Session, SyncRootId, SyncRootIdBuilder,
     SyncRootInfo,
 };
-use std::path::{PathBuf, absolute};
-use std::sync::{Arc, mpsc::Sender};
+use std::path::{absolute, PathBuf};
+use std::sync::{mpsc::Sender, Arc};
 
 pub const ID_PREFIX: &'static str = "Anymount";
 
@@ -22,17 +22,16 @@ pub struct CloudFilterProvider<S: Storage, L: Logger> {
 
 impl<S: Storage, L: Logger + 'static> CloudFilterProvider<S, L> {
     pub fn connect(
-        config: &impl ProviderConfiguration,
+        path: PathBuf,
         storage: S,
         logger: L,
-        daemon_tx: Option<Sender<DaemonMessage>>,
+        service_tx: Option<Sender<ServiceMessage>>,
     ) -> Result<Arc<Self>> {
         let security_id =
             SecurityId::current_user().map_err(|source| Error::CloudFilterOperation {
                 operation: "resolve current user security id",
                 source,
             })?;
-        let path = config.path();
         if !path.exists() {
             std::fs::create_dir(&path).map_err(|source| Error::Io {
                 operation: "create mount path",
@@ -41,9 +40,9 @@ impl<S: Storage, L: Logger + 'static> CloudFilterProvider<S, L> {
             })?;
         }
         logger.info(format!("Mount path: {}", path.display()));
-        let path = absolute(path).map_err(|source| Error::Io {
+        let path = absolute(&path).map_err(|source| Error::Io {
             operation: "resolve mount path",
-            path: config.path(),
+            path: path.clone(),
             source,
         })?;
         let name = path
@@ -90,7 +89,7 @@ impl<S: Storage, L: Logger + 'static> CloudFilterProvider<S, L> {
         let connection = session
             .connect(
                 &path,
-                Callbacks::new(path.clone(), storage, logger.clone(), daemon_tx),
+                Callbacks::new(path.clone(), storage, logger.clone(), service_tx),
             )
             .map_err(|source| Error::CloudFilterOperation {
                 operation: "connect to sync root",

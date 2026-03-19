@@ -1,4 +1,5 @@
 use super::Cli;
+use crate::cli::cli::Commands;
 use clap::Parser;
 use opentelemetry::trace::TracerProvider;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
@@ -8,7 +9,7 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 pub fn run() -> super::Result<()> {
     let cli = Cli::parse();
 
-    let otel = crate::telemetry::OtelHandles::try_from_cli(&cli)?;
+    let otel = provide_otel_handles(&cli)?;
 
     let log_level = if cli.verbose { "debug" } else { "info" };
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
@@ -18,13 +19,11 @@ pub fn run() -> super::Result<()> {
     let (non_blocking, file_guard) = tracing_appender::non_blocking(file_appender);
 
     let stdout_layer = fmt::layer().with_writer(std::io::stdout);
-    let file_layer = fmt::layer()
-        .with_writer(non_blocking)
-        .with_ansi(false);
+    let file_layer = fmt::layer().with_writer(non_blocking).with_ansi(false);
 
     let result = if let Some(otel) = otel {
-        let trace_layer = tracing_opentelemetry::layer()
-            .with_tracer(otel.tracer_provider().tracer("anymount"));
+        let trace_layer =
+            tracing_opentelemetry::layer().with_tracer(otel.tracer_provider().tracer("anymount"));
         let log_layer = OpenTelemetryTracingBridge::new(otel.logger_provider());
 
         tracing_subscriber::registry()
@@ -50,4 +49,21 @@ pub fn run() -> super::Result<()> {
 
     drop(file_guard);
     result
+}
+
+fn provide_otel_handles(cli: &Cli) -> super::Result<Option<crate::telemetry::OtelHandles>> {
+    let Some(Commands::Provide(command)) = cli.command.as_ref() else {
+        return Ok(None);
+    };
+    let Some(name) = command.name.as_deref() else {
+        return Ok(None);
+    };
+
+    let config_dir = command
+        .config_dir
+        .clone()
+        .map(crate::ConfigDir::new)
+        .unwrap_or_default();
+    let spec = config_dir.read_spec(name)?;
+    crate::telemetry::OtelHandles::from_provider_spec(&spec).map_err(super::Error::from)
 }

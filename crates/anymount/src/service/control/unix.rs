@@ -1,6 +1,6 @@
-use crate::daemon::messages::ControlMessage;
-use crate::daemon::paths::provider_endpoint;
-use crate::daemon::{Error, Result};
+use crate::service::control::messages::ControlMessage;
+use crate::service::control::paths::provider_endpoint;
+use crate::service::{Error, Result};
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 
@@ -66,7 +66,7 @@ impl UnixControl {
 #[cfg(test)]
 mod tests {
     use super::UnixControl;
-    use crate::daemon::messages::ControlMessage;
+    use crate::service::control::messages::ControlMessage;
     use std::io::{Read, Write};
 
     #[test]

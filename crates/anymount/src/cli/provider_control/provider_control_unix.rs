@@ -1,6 +1,6 @@
 use super::ProviderControl;
-use crate::daemon::control_unix::UnixControl;
-use crate::daemon::messages::ControlMessage;
+use crate::service::control::messages::ControlMessage;
+use crate::service::control::unix::UnixControl;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ProviderControlUnix;
@@ -10,7 +10,7 @@ impl ProviderControl for ProviderControlUnix {
         &self,
         provider_name: &str,
         message: ControlMessage,
-    ) -> crate::daemon::Result<ControlMessage> {
+    ) -> crate::service::Result<ControlMessage> {
         UnixControl.send(provider_name, message)
     }
 }

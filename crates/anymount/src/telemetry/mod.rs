@@ -1,11 +1,11 @@
 //! OpenTelemetry OTLP export for named `provide --name` processes.
 
-use crate::cli::cli::{Cli, Commands};
-use crate::config::{ConfigDir, OtlpTelemetryConfig, OtlpTransport};
-use opentelemetry::global;
+use crate::domain::provider::{OtlpSpec, OtlpTransport as DomainOtlpTransport, ProviderSpec};
 use opentelemetry::Key;
 use opentelemetry::KeyValue;
-use opentelemetry_otlp::{LogExporter, Protocol, SpanExporter, WithExportConfig, WithHttpConfig, WithTonicConfig};
+use opentelemetry_otlp::{
+    LogExporter, Protocol, SpanExporter, WithExportConfig, WithHttpConfig, WithTonicConfig,
+};
 use opentelemetry_sdk::logs::SdkLoggerProvider;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::Resource;
@@ -20,9 +20,6 @@ use tonic::metadata::{AsciiMetadataKey, AsciiMetadataValue, MetadataMap};
 pub enum OtlpInitError {
     #[error(transparent)]
     Exporter(#[from] opentelemetry_otlp::ExporterBuildError),
-
-    #[error(transparent)]
-    Config(#[from] crate::config::Error),
 
     #[error("invalid OTLP/gRPC metadata header name: {0}")]
     InvalidHeaderName(String),
@@ -39,32 +36,23 @@ pub struct OtelHandles {
 }
 
 impl OtelHandles {
-    /// When the command is `provide --name` and `[telemetry.otlp]` has `enabled = true`, builds
-    /// OTLP exporters and providers. Otherwise returns `Ok(None)`.
-    pub fn try_from_cli(cli: &Cli) -> Result<Option<Self>, OtlpInitError> {
-        let Some(Commands::Provide(cmd)) = cli.command.as_ref() else {
-            return Ok(None);
-        };
-        let Some(name) = cmd.name.as_deref() else {
-            return Ok(None);
-        };
-        let cd = ConfigDir::new(
-            cmd.config_dir
-                .clone()
-                .unwrap_or_else(crate::config::default_config_dir),
-        );
-        let file = cd.read(name)?;
-        let Some(otlp) = file.telemetry.otlp else {
+    /// When `[telemetry.otlp]` has `enabled = true`, builds OTLP exporters and
+    /// providers. Otherwise returns `Ok(None)`.
+    pub fn from_provider_spec(spec: &ProviderSpec) -> Result<Option<Self>, OtlpInitError> {
+        let Some(otlp) = spec.telemetry.otlp.as_ref() else {
             return Ok(None);
         };
         if !otlp.enabled {
             return Ok(None);
         }
-        Self::build_for_provider(name, &otlp)
+        Self::build_for_provider(&spec.name, otlp)
     }
 
-    fn build_for_provider(provider_name: &str, otlp: &OtlpTelemetryConfig) -> Result<Option<Self>, OtlpInitError> {
-        let protocol = otlp.protocol.unwrap_or(OtlpTransport::HttpProtobuf);
+    fn build_for_provider(
+        provider_name: &str,
+        otlp: &OtlpSpec,
+    ) -> Result<Option<Self>, OtlpInitError> {
+        let protocol = otlp.protocol.unwrap_or(DomainOtlpTransport::HttpProtobuf);
 
         let resource = build_resource(provider_name, otlp)?;
 
@@ -79,8 +67,6 @@ impl OtelHandles {
             .with_resource(resource)
             .with_batch_exporter(log_exporter)
             .build();
-
-        global::set_tracer_provider(tracer_provider.clone());
 
         Ok(Some(Self {
             tracer_provider,
@@ -103,7 +89,7 @@ impl OtelHandles {
     }
 }
 
-fn build_resource(provider_name: &str, otlp: &OtlpTelemetryConfig) -> Result<Resource, OtlpInitError> {
+fn build_resource(provider_name: &str, otlp: &OtlpSpec) -> Result<Resource, OtlpInitError> {
     let mut builder = Resource::builder()
         .with_service_name("anymount-provider")
         .with_attribute(KeyValue::new(
@@ -139,11 +125,11 @@ fn metadata_from_headers(headers: &HashMap<String, String>) -> Result<MetadataMa
 }
 
 fn build_span_exporter(
-    otlp: &OtlpTelemetryConfig,
-    protocol: OtlpTransport,
+    otlp: &OtlpSpec,
+    protocol: DomainOtlpTransport,
 ) -> Result<SpanExporter, OtlpInitError> {
     match protocol {
-        OtlpTransport::HttpProtobuf => {
+        DomainOtlpTransport::HttpProtobuf => {
             let mut builder = SpanExporter::builder()
                 .with_http()
                 .with_protocol(Protocol::HttpBinary)
@@ -156,7 +142,7 @@ fn build_span_exporter(
             }
             Ok(builder.build()?)
         }
-        OtlpTransport::Grpc => {
+        DomainOtlpTransport::Grpc => {
             let mut builder = SpanExporter::builder()
                 .with_tonic()
                 .with_timeout(Duration::from_secs(10));
@@ -172,11 +158,11 @@ fn build_span_exporter(
 }
 
 fn build_log_exporter(
-    otlp: &OtlpTelemetryConfig,
-    protocol: OtlpTransport,
+    otlp: &OtlpSpec,
+    protocol: DomainOtlpTransport,
 ) -> Result<LogExporter, OtlpInitError> {
     match protocol {
-        OtlpTransport::HttpProtobuf => {
+        DomainOtlpTransport::HttpProtobuf => {
             let mut builder = LogExporter::builder()
                 .with_http()
                 .with_protocol(Protocol::HttpBinary)
@@ -189,7 +175,7 @@ fn build_log_exporter(
             }
             Ok(builder.build()?)
         }
-        OtlpTransport::Grpc => {
+        DomainOtlpTransport::Grpc => {
             let mut builder = LogExporter::builder()
                 .with_tonic()
                 .with_timeout(Duration::from_secs(10));
@@ -207,18 +193,45 @@ fn build_log_exporter(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::provider::{
+        OtlpSpec, OtlpTransport as DomainOtlpTransport, ProviderSpec, StorageSpec, TelemetrySpec,
+    };
+    use std::path::PathBuf;
 
     #[test]
     fn metadata_from_headers_accepts_authorization() {
         let mut h = HashMap::new();
-        h.insert(
-            "authorization".to_owned(),
-            "Bearer test".to_owned(),
-        );
+        h.insert("authorization".to_owned(), "Bearer test".to_owned());
         let m = metadata_from_headers(&h).expect("valid metadata");
         assert_eq!(
-            m.get("authorization").expect("authorization present").to_str().expect("ascii"),
+            m.get("authorization")
+                .expect("authorization present")
+                .to_str()
+                .expect("ascii"),
             "Bearer test"
         );
+    }
+
+    #[test]
+    fn telemetry_handles_build_from_provider_spec() {
+        let spec = ProviderSpec {
+            name: "demo".to_owned(),
+            path: PathBuf::from("/mnt/demo"),
+            storage: StorageSpec::Local {
+                root: PathBuf::from("/data/demo"),
+            },
+            telemetry: TelemetrySpec {
+                otlp: Some(OtlpSpec {
+                    enabled: true,
+                    endpoint: Some("http://localhost:4318".to_owned()),
+                    protocol: Some(DomainOtlpTransport::HttpProtobuf),
+                    headers: None,
+                    resource_attributes: None,
+                }),
+            },
+        };
+
+        let handles = OtelHandles::from_provider_spec(&spec).expect("telemetry build should work");
+        assert!(handles.is_some());
     }
 }

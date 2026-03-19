@@ -9,7 +9,7 @@ pub enum Error {
     #[error("unknown control message: {value}")]
     UnknownControlMessage { value: String },
 
-    #[error("daemon io error during {operation} for {provider_name}: {source}")]
+    #[error("service io error during {operation} for {provider_name}: {source}")]
     Io {
         operation: &'static str,
         provider_name: String,
@@ -17,7 +17,7 @@ pub enum Error {
         source: std::io::Error,
     },
 
-    #[error("daemon receive failed: {0}")]
+    #[error("service receive failed: {0}")]
     Receive(#[from] std::sync::mpsc::RecvError),
 
     #[error("in-memory control transport was poisoned")]

@@ -1,4 +1,4 @@
-use crate::daemon::{Error, Result};
+use crate::service::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlMessage {
@@ -40,7 +40,7 @@ impl ControlMessage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DaemonMessage {
+pub enum ServiceMessage {
     Shutdown,
     Telemetry(String),
 }
@@ -48,7 +48,7 @@ pub enum DaemonMessage {
 #[cfg(test)]
 mod tests {
     use super::ControlMessage;
-    use crate::daemon::Error;
+    use crate::service::Error;
 
     #[test]
     fn control_message_round_trips() {

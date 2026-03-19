@@ -1,6 +1,6 @@
-//! Probes and control requests for per-provider daemon endpoints.
+//! Probes and control requests for per-provider service endpoints.
 
-use crate::daemon::messages::ControlMessage;
+use crate::service::control::messages::ControlMessage;
 
 #[cfg(unix)]
 mod provider_control_unix;
@@ -12,13 +12,13 @@ pub use provider_control_unix::ProviderControlUnix;
 #[cfg(target_os = "windows")]
 pub use provider_control_windows::ProviderControlWindows;
 
-/// Sends control messages to a named provider daemon (Unix socket or Windows named pipe).
+/// Sends control messages to a named provider service (Unix socket or Windows named pipe).
 pub trait ProviderControl {
     fn send(
         &self,
         provider_name: &str,
         message: ControlMessage,
-    ) -> crate::daemon::Result<ControlMessage>;
+    ) -> crate::service::Result<ControlMessage>;
 
     fn provider_daemon_ready(&self, provider_name: &str) -> bool {
         matches!(
@@ -27,8 +27,8 @@ pub trait ProviderControl {
         )
     }
 
-    /// Idempotent shutdown: no error if the daemon is already stopped; returns `Err`
-    /// only when the daemon answered `Ping` with `Ready` but did not `Ack` shutdown.
+    /// Idempotent shutdown: no error if the service is already stopped; returns `Err`
+    /// only when the service answered `Ping` with `Ready` but did not `Ack` shutdown.
     fn try_disconnect_provider(&self, provider_name: &str) -> std::result::Result<(), String> {
         match self.send(provider_name, ControlMessage::Ping) {
             Err(_) => return Ok(()),
@@ -53,8 +53,8 @@ impl ProviderControl for ProviderControlUnsupported {
         &self,
         _provider_name: &str,
         _message: ControlMessage,
-    ) -> crate::daemon::Result<ControlMessage> {
-        Err(crate::daemon::Error::NotSupported)
+    ) -> crate::service::Result<ControlMessage> {
+        Err(crate::service::Error::NotSupported)
     }
 }
 
@@ -69,16 +69,16 @@ fn platform() -> Platform {
     Platform::default()
 }
 
-/// Returns true when the provider process answers `Ping` with `Ready`.
+/// Returns true when the provider service answers `Ping` with `Ready`.
 pub fn provider_daemon_ready(provider_name: &str) -> bool {
     platform().provider_daemon_ready(provider_name)
 }
 
-/// Send a control message and return the daemon reply.
+/// Send a control message and return the service reply.
 pub fn send_control_message(
     provider_name: &str,
     message: ControlMessage,
-) -> crate::daemon::Result<ControlMessage> {
+) -> crate::service::Result<ControlMessage> {
     platform().send(provider_name, message)
 }
 

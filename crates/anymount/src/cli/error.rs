@@ -10,7 +10,7 @@ pub enum Error {
     Otlp(#[from] crate::telemetry::OtlpInitError),
 
     #[error(transparent)]
-    Daemon(#[from] crate::daemon::Error),
+    Service(#[from] crate::service::Error),
 
     #[error(transparent)]
     Providers(#[from] crate::providers::Error),

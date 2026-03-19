@@ -1,11 +1,11 @@
 use super::Storage;
-use crate::Logger;
-use crate::daemon::messages::DaemonMessage;
 use crate::providers::cloudfilter::placeholders::{dehydrate_file, get_placeholder_info};
+use crate::service::control::messages::ServiceMessage;
 use crate::storages::{DirEntry, Error as StorageError, WriteAt};
+use crate::Logger;
 use cloud_filter::{
     error::CResult,
-    filter::{Request, SyncFilter, info, ticket},
+    filter::{info, ticket, Request, SyncFilter},
     metadata::Metadata,
     placeholder_file::PlaceholderFile,
     utility::{FileTime, WriteAt as CfWriteAt},
@@ -21,7 +21,7 @@ pub struct Callbacks<S: Storage, L: Logger> {
     path: PathBuf,
     storage: S,
     logger: L,
-    daemon_tx: Option<Sender<DaemonMessage>>,
+    service_tx: Option<Sender<ServiceMessage>>,
     pending_dehydrate: Mutex<HashSet<PathBuf>>,
 }
 
@@ -30,20 +30,20 @@ impl<S: Storage, L: Logger> Callbacks<S, L> {
         path: PathBuf,
         storage: S,
         logger: L,
-        daemon_tx: Option<Sender<DaemonMessage>>,
+        service_tx: Option<Sender<ServiceMessage>>,
     ) -> Self {
         Self {
             path,
             storage,
             logger,
-            daemon_tx,
+            service_tx,
             pending_dehydrate: Mutex::new(HashSet::new()),
         }
     }
 
     fn emit_telemetry(&self, message: String) {
-        if let Some(tx) = &self.daemon_tx {
-            let _ = tx.send(DaemonMessage::Telemetry(message.clone()));
+        if let Some(tx) = &self.service_tx {
+            let _ = tx.send(ServiceMessage::Telemetry(message.clone()));
         }
         self.logger.info(message);
     }

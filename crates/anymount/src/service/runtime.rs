@@ -1,23 +1,23 @@
-use crate::daemon::Result;
-use crate::daemon::messages::DaemonMessage;
 use crate::logger::Logger;
+use crate::service::control::messages::ServiceMessage;
+use crate::service::Result;
 use std::sync::mpsc::Receiver;
 
-pub struct DaemonRuntime<L: Logger> {
+pub struct ServiceRuntime<L: Logger> {
     logger: L,
-    rx: Receiver<DaemonMessage>,
+    rx: Receiver<ServiceMessage>,
 }
 
-impl<L: Logger> DaemonRuntime<L> {
-    pub fn new(logger: L, rx: Receiver<DaemonMessage>) -> Self {
+impl<L: Logger> ServiceRuntime<L> {
+    pub fn new(logger: L, rx: Receiver<ServiceMessage>) -> Self {
         Self { logger, rx }
     }
 
     pub fn run(&mut self) -> Result<()> {
         loop {
             match self.rx.recv()? {
-                DaemonMessage::Telemetry(message) => self.logger.info(message),
-                DaemonMessage::Shutdown => break,
+                ServiceMessage::Telemetry(message) => self.logger.info(message),
+                ServiceMessage::Shutdown => break,
             }
         }
         Ok(())
@@ -26,11 +26,11 @@ impl<L: Logger> DaemonRuntime<L> {
 
 #[cfg(test)]
 mod tests {
-    use super::DaemonRuntime;
-    use crate::daemon::messages::DaemonMessage;
+    use super::ServiceRuntime;
     use crate::logger::Logger;
+    use crate::service::control::messages::ServiceMessage;
     use std::fmt::Display;
-    use std::sync::{Arc, Mutex, mpsc};
+    use std::sync::{mpsc, Arc, Mutex};
 
     #[derive(Clone, Default)]
     struct RecordingLogger {
@@ -60,14 +60,14 @@ mod tests {
     }
 
     #[test]
-    fn daemon_logs_telemetry_until_shutdown() {
+    fn service_runtime_logs_telemetry_until_shutdown() {
         let (tx, rx) = mpsc::channel();
         let logger = RecordingLogger::default();
-        let mut runtime = DaemonRuntime::new(logger.clone(), rx);
+        let mut runtime = ServiceRuntime::new(logger.clone(), rx);
 
-        tx.send(DaemonMessage::Telemetry("opened: file.txt".into()))
+        tx.send(ServiceMessage::Telemetry("opened: file.txt".into()))
             .expect("send should work");
-        tx.send(DaemonMessage::Shutdown).expect("send should work");
+        tx.send(ServiceMessage::Shutdown).expect("send should work");
 
         runtime.run().expect("runtime should succeed");
         assert_eq!(logger.entries(), vec!["opened: file.txt"]);

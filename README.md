@@ -37,6 +37,26 @@ Build the release binary (`target/release/anymount-cli`):
 mise run build
 ```
 
+## Architecture
+
+`anymount` is organized around three layers.
+
+- `domain` models provider concepts and invariants. It owns provider,
+  storage, and telemetry specifications without filesystem, UI, or platform
+  code.
+- `application` implements use cases such as `connect`, `provide`, `auth`,
+  `status`, and config updates. It orchestrates work over domain types and
+  internal ports.
+- Adapters live at the edges. CLI and TUI handle input and output, `config`
+  persists named providers, `telemetry` builds observability, `auth`
+  handles external authorization flows, `service` hosts long-running
+  provider processes and control transport, and `providers` / `storages`
+  integrate with platform APIs.
+
+Dependency direction flows inward: frontends call `application`,
+`application` works in terms of `domain`, and adapters implement the
+external details around those layers.
+
 ## Notable dependencies
 
 ### Windows

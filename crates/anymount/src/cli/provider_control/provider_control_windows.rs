@@ -1,6 +1,6 @@
 use super::ProviderControl;
-use crate::daemon::control_windows::WindowsControl;
-use crate::daemon::messages::ControlMessage;
+use crate::service::control::messages::ControlMessage;
+use crate::service::control::windows::WindowsControl;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ProviderControlWindows;
@@ -10,7 +10,7 @@ impl ProviderControl for ProviderControlWindows {
         &self,
         provider_name: &str,
         message: ControlMessage,
-    ) -> crate::daemon::Result<ControlMessage> {
+    ) -> crate::service::Result<ControlMessage> {
         WindowsControl.send(provider_name, message)
     }
 }

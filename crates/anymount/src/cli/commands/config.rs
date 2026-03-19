@@ -1,11 +1,18 @@
-use crate::StorageConfig;
+use crate::application::config::{
+    Application as ConfigApplication, ConfigRepository, ConfigUseCase,
+    Error as ConfigApplicationError,
+};
 use crate::cli::commands::provide::{
     LocalStorageArgs, OneDriveStorageArgs, ProvideStorageSubcommand,
 };
 use crate::config::{ConfigDir, ProviderFileConfig};
+use crate::domain::provider::ProviderSpec;
 use clap::{Args, Subcommand};
 use inquire::{Select, Text};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+#[cfg(test)]
+use crate::StorageConfig;
 
 #[derive(Args, Debug, Clone)]
 pub struct ConfigCommand {
@@ -67,25 +74,69 @@ pub struct SetArgs {
 
 impl ConfigCommand {
     pub fn execute(&self) -> crate::cli::Result<()> {
-        let cd = match &self.config_dir {
-            Some(p) => ConfigDir::new(p.clone()),
-            None => ConfigDir::default(),
-        };
+        let config_dir = self.config_dir();
+        let repository = ConfigRepositoryAdapter::new(config_dir.clone());
+        let app = ConfigApplication::new(&repository);
+        self._execute(&app, config_dir.dir())
+    }
 
+    pub(crate) fn _execute<U>(&self, use_case: &U, config_dir: &Path) -> crate::cli::Result<()>
+    where
+        U: ConfigUseCase,
+    {
         match &self.action {
-            ConfigAction::List => execute_list(&cd),
-            ConfigAction::Show(args) => execute_show(&cd, args),
-            ConfigAction::Add(args) => execute_add(&cd, args),
-            ConfigAction::Remove(args) => execute_remove(&cd, args),
-            ConfigAction::Set(args) => execute_set(&cd, args),
+            ConfigAction::List => execute_list(use_case, config_dir),
+            ConfigAction::Show(args) => execute_show(use_case, args),
+            ConfigAction::Add(args) => execute_add(use_case, args),
+            ConfigAction::Remove(args) => execute_remove(use_case, args),
+            ConfigAction::Set(args) => execute_set(use_case, args),
+        }
+    }
+
+    fn config_dir(&self) -> ConfigDir {
+        match &self.config_dir {
+            Some(path) => ConfigDir::new(path.clone()),
+            None => ConfigDir::default(),
         }
     }
 }
 
-fn execute_list(cd: &ConfigDir) -> crate::cli::Result<()> {
-    let names = cd.list()?;
+#[derive(Debug, Clone)]
+struct ConfigRepositoryAdapter {
+    config_dir: ConfigDir,
+}
+
+impl ConfigRepositoryAdapter {
+    fn new(config_dir: ConfigDir) -> Self {
+        Self { config_dir }
+    }
+}
+
+impl ConfigRepository for ConfigRepositoryAdapter {
+    fn list_names(&self) -> crate::application::config::Result<Vec<String>> {
+        self.config_dir.list().map_err(Into::into)
+    }
+
+    fn read_spec(&self, name: &str) -> crate::application::config::Result<ProviderSpec> {
+        self.config_dir.read_spec(name).map_err(Into::into)
+    }
+
+    fn write_spec(&self, spec: &ProviderSpec) -> crate::application::config::Result<()> {
+        self.config_dir.write_spec(spec).map_err(Into::into)
+    }
+
+    fn remove(&self, name: &str) -> crate::application::config::Result<()> {
+        self.config_dir.remove(name).map_err(Into::into)
+    }
+}
+
+fn execute_list<U>(use_case: &U, config_dir: &Path) -> crate::cli::Result<()>
+where
+    U: ConfigUseCase,
+{
+    let names = use_case.list().map_err(map_config_error)?;
     if names.is_empty() {
-        println!("No providers configured in {}", cd.dir().display());
+        println!("No providers configured in {}", config_dir.display());
     } else {
         for name in &names {
             println!("{name}");
@@ -94,32 +145,30 @@ fn execute_list(cd: &ConfigDir) -> crate::cli::Result<()> {
     Ok(())
 }
 
-fn execute_show(cd: &ConfigDir, args: &ShowArgs) -> crate::cli::Result<()> {
-    let cfg = cd.read(&args.name)?;
+fn execute_show<U>(use_case: &U, args: &ShowArgs) -> crate::cli::Result<()>
+where
+    U: ConfigUseCase,
+{
+    let spec = use_case.read(&args.name).map_err(map_config_error)?;
+    let cfg = config_from_spec(&spec);
     let text = toml::to_string_pretty(&cfg)
         .map_err(|source| crate::cli::Error::SerializeConfig { source })?;
     print!("{text}");
     Ok(())
 }
 
-fn execute_add(cd: &ConfigDir, args: &AddArgs) -> crate::cli::Result<()> {
+fn execute_add<U>(use_case: &U, args: &AddArgs) -> crate::cli::Result<()>
+where
+    U: ConfigUseCase,
+{
     let resolved = resolve_add_args(args)?;
-    let existing = cd.list()?;
-    if existing.contains(&resolved.name) {
-        return Err(crate::cli::Error::Validation(format!(
-            "provider '{}' already exists, use 'set' to modify \
-             or 'remove' first",
-            resolved.name
-        )));
-    }
-
-    let storage = storage_config_from_subcommand(&resolved.storage);
-    let cfg = ProviderFileConfig {
-        path: resolved.path.clone(),
-        storage,
+    let spec = ProviderSpec {
+        name: resolved.name.clone(),
+        path: resolved.path,
+        storage: resolved.storage.to_storage_spec(),
         telemetry: Default::default(),
     };
-    cd.write(&resolved.name, &cfg)?;
+    use_case.add(spec).map_err(map_config_error)?;
     println!("Added provider '{}'", resolved.name);
     Ok(())
 }
@@ -255,16 +304,22 @@ fn prompt_optional(message: &str) -> crate::cli::Result<Option<String>> {
     }
 }
 
-fn execute_remove(cd: &ConfigDir, args: &RemoveArgs) -> crate::cli::Result<()> {
-    cd.remove(&args.name)?;
+fn execute_remove<U>(use_case: &U, args: &RemoveArgs) -> crate::cli::Result<()>
+where
+    U: ConfigUseCase,
+{
+    use_case.remove(&args.name).map_err(map_config_error)?;
     println!("Removed provider '{}'", args.name);
     Ok(())
 }
 
-fn execute_set(cd: &ConfigDir, args: &SetArgs) -> crate::cli::Result<()> {
-    let mut cfg = cd.read(&args.name)?;
-    apply_set(&mut cfg, &args.key, &args.value)?;
-    cd.write(&args.name, &cfg)?;
+fn execute_set<U>(use_case: &U, args: &SetArgs) -> crate::cli::Result<()>
+where
+    U: ConfigUseCase,
+{
+    use_case
+        .set(&args.name, &args.key, &args.value)
+        .map_err(map_config_error)?;
     println!("Updated '{}' in provider '{}'", args.key, args.name);
     Ok(())
 }
@@ -275,22 +330,15 @@ fn parse_u64(value: String) -> crate::cli::Result<u64> {
         .map_err(|source| crate::cli::Error::ParseInteger { value, source })
 }
 
-fn storage_config_from_subcommand(sub: &ProvideStorageSubcommand) -> StorageConfig {
-    match sub {
-        ProvideStorageSubcommand::Local(a) => StorageConfig::Local {
-            root: a.root.clone(),
-        },
-        ProvideStorageSubcommand::OneDrive(a) => StorageConfig::OneDrive {
-            root: a.root.clone(),
-            endpoint: a.endpoint.clone(),
-            access_token: a.access_token.clone(),
-            refresh_token: a.refresh_token.clone(),
-            client_id: a.client_id.clone(),
-            token_expiry_buffer_secs: Some(a.token_expiry_buffer_secs),
-        },
+fn config_from_spec(spec: &ProviderSpec) -> ProviderFileConfig {
+    ProviderFileConfig {
+        path: spec.path.clone(),
+        storage: spec.storage.clone().into(),
+        telemetry: spec.telemetry.clone().into(),
     }
 }
 
+#[cfg(test)]
 fn apply_set(cfg: &mut ProviderFileConfig, key: &str, value: &str) -> crate::cli::Result<()> {
     match key {
         "path" => {
@@ -369,10 +417,35 @@ fn apply_set(cfg: &mut ProviderFileConfig, key: &str, value: &str) -> crate::cli
     Ok(())
 }
 
+fn map_config_error(error: ConfigApplicationError) -> crate::cli::Error {
+    match error {
+        ConfigApplicationError::Config(source) => crate::cli::Error::Config(source),
+        ConfigApplicationError::DuplicateProvider { name } => crate::cli::Error::Validation(
+            format!("provider '{name}' already exists, use 'set' to modify or 'remove' first"),
+        ),
+        ConfigApplicationError::InvalidStorageKey { key } => {
+            crate::cli::Error::Validation(format!("'{key}' only applies to onedrive storage"))
+        }
+        ConfigApplicationError::UnknownKey { key } => crate::cli::Error::Validation(format!(
+            "unknown key '{key}'. Valid keys: path, \
+                 storage.root, storage.endpoint, \
+                 storage.access_token, \
+                 storage.refresh_token, storage.client_id, \
+                 storage.token_expiry_buffer_secs"
+        )),
+        ConfigApplicationError::ParseInteger { value, source } => {
+            crate::cli::Error::ParseInteger { value, source }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::config::{ConfigUseCase, Result as ConfigApplicationResult};
     use crate::cli::commands::provide::{LocalStorageArgs, ProvideStorageSubcommand};
+    use crate::domain::provider::{ProviderSpec, StorageSpec, TelemetrySpec};
+    use std::cell::RefCell;
 
     fn local_config() -> ProviderFileConfig {
         ProviderFileConfig {
@@ -381,6 +454,49 @@ mod tests {
                 root: PathBuf::from("/data"),
             },
             telemetry: Default::default(),
+        }
+    }
+
+    fn local_spec(name: &str) -> ProviderSpec {
+        ProviderSpec {
+            name: name.to_owned(),
+            path: PathBuf::from("/mnt/local"),
+            storage: StorageSpec::Local {
+                root: PathBuf::from("/data"),
+            },
+            telemetry: TelemetrySpec::default(),
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingUseCase {
+        added: RefCell<Vec<ProviderSpec>>,
+        set_calls: RefCell<Vec<(String, String, String)>>,
+    }
+
+    impl ConfigUseCase for RecordingUseCase {
+        fn list(&self) -> ConfigApplicationResult<Vec<String>> {
+            Ok(Vec::new())
+        }
+
+        fn read(&self, name: &str) -> ConfigApplicationResult<ProviderSpec> {
+            Ok(local_spec(name))
+        }
+
+        fn add(&self, spec: ProviderSpec) -> ConfigApplicationResult<()> {
+            self.added.borrow_mut().push(spec);
+            Ok(())
+        }
+
+        fn remove(&self, _name: &str) -> ConfigApplicationResult<()> {
+            Ok(())
+        }
+
+        fn set(&self, name: &str, key: &str, value: &str) -> ConfigApplicationResult<()> {
+            self.set_calls
+                .borrow_mut()
+                .push((name.to_owned(), key.to_owned(), value.to_owned()));
+            Ok(())
         }
     }
 
@@ -477,6 +593,8 @@ mod tests {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
         let cd = ConfigDir::new(tmp.path().to_path_buf());
         cd.write("dup", &local_config()).expect("write failed");
+        let repository = ConfigRepositoryAdapter::new(cd.clone());
+        let app = ConfigApplication::new(&repository);
 
         let args = AddArgs {
             name: Some("dup".to_owned()),
@@ -485,13 +603,37 @@ mod tests {
                 root: PathBuf::from("/x"),
             })),
         };
-        assert!(execute_add(&cd, &args).is_err());
+        assert!(execute_add(&app, &args).is_err());
+    }
+
+    #[test]
+    fn execute_dispatches_add_to_use_case() {
+        let cmd = ConfigCommand {
+            config_dir: None,
+            action: ConfigAction::Add(AddArgs {
+                name: Some("test".to_owned()),
+                path: Some(PathBuf::from("/mnt/test")),
+                storage: Some(ProvideStorageSubcommand::Local(LocalStorageArgs {
+                    root: PathBuf::from("/test/root"),
+                })),
+            }),
+        };
+        let use_case = RecordingUseCase::default();
+
+        cmd._execute(&use_case, PathBuf::from("/tmp/config").as_path())
+            .expect("add should work");
+
+        let added = use_case.added.borrow();
+        assert_eq!(added.len(), 1);
+        assert_eq!(added[0].name, "test");
     }
 
     #[test]
     fn execute_add_and_show_roundtrip() {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
         let cd = ConfigDir::new(tmp.path().to_path_buf());
+        let repository = ConfigRepositoryAdapter::new(cd.clone());
+        let app = ConfigApplication::new(&repository);
 
         let args = AddArgs {
             name: Some("test".to_owned()),
@@ -500,7 +642,7 @@ mod tests {
                 root: PathBuf::from("/test/root"),
             })),
         };
-        execute_add(&cd, &args).expect("add failed");
+        execute_add(&app, &args).expect("add failed");
 
         let cfg = cd.read("test").expect("read failed");
         assert_eq!(cfg.path, PathBuf::from("/mnt/test"));
@@ -511,16 +653,40 @@ mod tests {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
         let cd = ConfigDir::new(tmp.path().to_path_buf());
         cd.write("edit", &local_config()).expect("write failed");
+        let repository = ConfigRepositoryAdapter::new(cd.clone());
+        let app = ConfigApplication::new(&repository);
 
         let args = SetArgs {
             name: "edit".to_owned(),
             key: "path".to_owned(),
             value: "/updated".to_owned(),
         };
-        execute_set(&cd, &args).expect("set failed");
+        execute_set(&app, &args).expect("set failed");
 
         let cfg = cd.read("edit").expect("read failed");
         assert_eq!(cfg.path, PathBuf::from("/updated"));
+    }
+
+    #[test]
+    fn execute_dispatches_set_to_use_case() {
+        let cmd = ConfigCommand {
+            config_dir: None,
+            action: ConfigAction::Set(SetArgs {
+                name: "edit".to_owned(),
+                key: "path".to_owned(),
+                value: "/updated".to_owned(),
+            }),
+        };
+        let use_case = RecordingUseCase::default();
+
+        cmd._execute(&use_case, PathBuf::from("/tmp/config").as_path())
+            .expect("set should work");
+
+        let calls = use_case.set_calls.borrow();
+        assert_eq!(
+            calls.as_slice(),
+            [("edit".to_owned(), "path".to_owned(), "/updated".to_owned(),)]
+        );
     }
 
     #[test]
