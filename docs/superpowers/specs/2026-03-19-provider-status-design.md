@@ -29,9 +29,10 @@ that surface in a minimal form.
 
 - New CLI subcommand: `anymount status`
 - Optional `--config-dir` (consistent with `connect` and `provide`)
-- Simple **list** output (no column alignment): per provider, show **name**,
-  **storage type**, **mount path**, and **daemon running / not running** (map
-  to control `Ping` → `Ready` vs otherwise)
+- Simple **markdown-style bullet list** on stdout, one entry per successfully
+  read provider, format: **`- name (storage type, path): status`** where
+  **status** is **running** or **not running** (from control `Ping` → `Ready`
+  vs otherwise)
 - Extract shared liveness probing from `connect` so `status` and `connect`
   cannot drift
 
@@ -62,15 +63,23 @@ that surface in a minimal form.
      running** (unreachable socket, wrong reply, etc. treated as down without
      spamming stderr unless `--verbose`).
 
-**Output shape:** plain lines, easy to read, **not** a table (no padded
-columns). Exact line format is implementation-defined but must include **name**,
-**storage type**, **path**, and **running state** for successfully read
-providers. Example style (illustrative only):
+**Output shape:** each successful provider is one **stdout** line, **required
+format:**
 
 ```text
-demo: local, /mnt/demo, running
-other: onedrive, /mnt/other, not running
+- name (storage type, path): status
 ```
+
+Examples:
+
+```text
+- demo (local, /mnt/demo): running
+- other (onedrive, /mnt/other): not running
+```
+
+**Storage type** labels should match user-facing names used elsewhere (e.g.
+`local`, `onedrive`). **Path** is the configured mount path. No column
+alignment beyond this single-line pattern.
 
 Platform: reuse the same `cfg` split as `connect` for Unix vs Windows; other
 platforms should behave like `connect` (no control transport → not running or
