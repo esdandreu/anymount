@@ -43,7 +43,6 @@ impl TestFixture {
                 "--path",
                 mount_path.to_str().unwrap(),
                 "local",
-                "--root",
                 data_path.to_str().unwrap(),
             ])
             .spawn()
@@ -127,7 +126,6 @@ fn provider_fails_on_invalid_root() {
             "--path",
             mount_path.to_str().unwrap(),
             "local",
-            "--root",
             invalid_root.to_str().unwrap(),
         ])
         .spawn()
@@ -189,7 +187,6 @@ fn provider_handles_empty_directory() {
             "--path",
             mount_path.to_str().unwrap(),
             "local",
-            "--root",
             data_path.to_str().unwrap(),
         ])
         .spawn()
