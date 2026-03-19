@@ -9,7 +9,8 @@ have a live daemon (control endpoint answers `Ping` with `Ready`).
 
 The command lists provider names from the config directory (`ConfigDir::list()`,
 same source as `connect --all`). For each name it loads the provider TOML for
-display metadata and probes liveness via the existing per-provider control
+display metadata (or prints an **error** bullet with read-failure detail) and,
+when read succeeds, probes liveness via the existing per-provider control
 transport (Unix socket / Windows named pipe), using the same semantics as
 `connect`’s `is_provider_running` check.
 
@@ -29,10 +30,12 @@ that surface in a minimal form.
 
 - New CLI subcommand: `anymount status`
 - Optional `--config-dir` (consistent with `connect` and `provide`)
-- Simple **markdown-style bullet list** on stdout, one entry per successfully
-  read provider, format: **`- name (storage type, path): status`** where
-  **status** is **running** or **not running** (from control `Ping` → `Ready`
-  vs otherwise)
+- Simple **markdown-style bullet list** on stdout, **one entry per configured
+  name** from `list()`. Normal case: **`- name (storage type, path): status`**
+  where **status** is **running** or **not running** (from control `Ping` →
+  `Ready` vs otherwise). Read failure case: **`- name: error — <detail>`** where
+  **detail** is a short explanation of why the config read failed (use the
+  error’s display text; include enough context to fix the file).
 - Extract shared liveness probing from `connect` so `status` and `connect`
   cannot drift
 
@@ -53,18 +56,20 @@ that surface in a minimal form.
    configured providers) and exit successfully.
 3. For each provider name from `list()` (sorted order, as `ConfigDir::list()`
    already guarantees):
-   - **Read config** for display fields. If `read()` fails, print a **short
-     line for that provider only** (e.g. name + error summary) on **stderr**,
-     **continue** with the remaining providers (**partial output**). Do **not**
-     abort the whole command for one bad TOML. Do **not** emit a normal list
-     line for that name on stdout (storage type and path are unknown).
-   - Send `ControlMessage::Ping` to that name’s endpoint.
-   - If the reply is `ControlMessage::Ready`, report **running**; else **not
-     running** (unreachable socket, wrong reply, etc. treated as down without
-     spamming stderr unless `--verbose`).
+   - **Read config** for display fields. If `read()` fails, print one **stdout**
+     bullet in the **error** form (**`- name: error — <detail>`**), **continue**
+     with the remaining providers (**partial output**). Do **not** abort the
+     whole command for one bad TOML. **Do not** send a control `Ping` for that
+     name (type/path are unknown; liveness is meaningless for display).
+   - On **successful** read:
+     - Send `ControlMessage::Ping` to that name’s endpoint.
+     - If the reply is `ControlMessage::Ready`, report **running**; else **not
+       running** (unreachable socket, wrong reply, etc. treated as down without
+       spamming stderr unless `--verbose`).
 
-**Output shape:** each successful provider is one **stdout** line, **required
-format:**
+**Output shape:** each provider is one **stdout** line.
+
+**When config read succeeds** — required format:
 
 ```text
 - name (storage type, path): status
@@ -77,9 +82,25 @@ Examples:
 - other (onedrive, /mnt/other): not running
 ```
 
+**When config read fails** — required form (status is the word **error**, detail
+is mandatory):
+
+```text
+- name: error — <detail>
+```
+
+Example:
+
+```text
+- broken: error — failed to read /path/to/broken.toml: invalid TOML at line 2
+```
+
+(Exact `<detail>` wording follows the `config::Error` / CLI error display for
+that failure; it must be the human-readable reason, not an opaque code.)
+
 **Storage type** labels should match user-facing names used elsewhere (e.g.
 `local`, `onedrive`). **Path** is the configured mount path. No column
-alignment beyond this single-line pattern.
+alignment beyond these single-line patterns.
 
 Platform: reuse the same `cfg` split as `connect` for Unix vs Windows; other
 platforms should behave like `connect` (no control transport → not running or
@@ -100,6 +121,6 @@ documented limitation).
   `connect.rs`).
 - Tests for empty config dir and for “all stopped” vs “all running” without
   requiring a real socket where possible.
-- Test that a failing `read()` for one name still prints lines for other
-  providers and emits an error for the bad one (stderr vs stdout as specified
-  above).
+- Test that a failing `read()` for one name still prints bullets for other
+  providers and prints **`- name: error — …`** on stdout for the bad one with a
+  non-empty detail substring.
