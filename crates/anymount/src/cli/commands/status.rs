@@ -162,6 +162,7 @@ mod tests {
                 storage: StorageConfig::Local {
                     root: PathBuf::from("/data/a"),
                 },
+                telemetry: Default::default(),
             },
         )
         .expect("write");
@@ -187,6 +188,7 @@ mod tests {
                 storage: StorageConfig::Local {
                     root: PathBuf::from("/data/b"),
                 },
+                telemetry: Default::default(),
             },
         )
         .expect("write");
@@ -214,6 +216,7 @@ mod tests {
                 storage: StorageConfig::Local {
                     root: PathBuf::from("/data/g"),
                 },
+                telemetry: Default::default(),
             },
         )
         .expect("write good");

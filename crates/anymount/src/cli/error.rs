@@ -7,6 +7,9 @@ pub enum Error {
     Config(#[from] crate::config::Error),
 
     #[error(transparent)]
+    Otlp(#[from] crate::telemetry::OtlpInitError),
+
+    #[error(transparent)]
     Daemon(#[from] crate::daemon::Error),
 
     #[error(transparent)]

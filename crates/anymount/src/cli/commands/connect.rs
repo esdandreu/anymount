@@ -277,6 +277,7 @@ mod tests {
                 storage: StorageConfig::Local {
                     root: PathBuf::from("/data"),
                 },
+                telemetry: Default::default(),
             },
         )
         .expect("write failed");
@@ -304,6 +305,7 @@ mod tests {
                 storage: StorageConfig::Local {
                     root: PathBuf::from("/data/a"),
                 },
+                telemetry: Default::default(),
             },
         )
         .expect("write failed");
@@ -345,6 +347,7 @@ mod tests {
                 storage: crate::StorageConfig::Local {
                     root: PathBuf::from("/data/demo"),
                 },
+                telemetry: Default::default(),
             },
         )
         .expect("write failed");
@@ -373,6 +376,7 @@ mod tests {
                     storage: crate::StorageConfig::Local {
                         root: PathBuf::from(format!("/data/{name}")),
                     },
+                    telemetry: Default::default(),
                 },
             )
             .expect("write failed");

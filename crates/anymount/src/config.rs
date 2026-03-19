@@ -1,5 +1,6 @@
 use crate::{ProviderConfiguration, ProvidersConfiguration, StorageConfig};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 use thiserror::Error;
@@ -57,11 +58,49 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+fn default_true() -> bool {
+    true
+}
+
+/// Optional OpenTelemetry export settings for a named provider.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TelemetryFileConfig {
+    #[serde(default)]
+    pub otlp: Option<OtlpTelemetryConfig>,
+}
+
+/// OTLP exporter settings under `[telemetry.otlp]` in a provider `.toml`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OtlpTelemetryConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    #[serde(default)]
+    pub protocol: Option<OtlpTransport>,
+    #[serde(default)]
+    pub headers: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub resource_attributes: Option<HashMap<String, String>>,
+}
+
+/// OTLP wire transport (only HTTP/protobuf is implemented today).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum OtlpTransport {
+    #[default]
+    #[serde(rename = "http/protobuf")]
+    HttpProtobuf,
+    #[serde(rename = "grpc")]
+    Grpc,
+}
+
 /// Single provider entry stored as `<name>.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderFileConfig {
     pub path: PathBuf,
     pub storage: StorageConfig,
+    #[serde(default)]
+    pub telemetry: TelemetryFileConfig,
 }
 
 impl ProviderConfiguration for ProviderFileConfig {
@@ -224,6 +263,7 @@ mod tests {
             storage: StorageConfig::Local {
                 root: PathBuf::from("/data"),
             },
+            telemetry: TelemetryFileConfig::default(),
         }
     }
 
@@ -238,6 +278,7 @@ mod tests {
                 client_id: Some("cid".to_owned()),
                 token_expiry_buffer_secs: Some(60),
             },
+            telemetry: TelemetryFileConfig::default(),
         }
     }
 
@@ -255,6 +296,31 @@ mod tests {
         cd.write("mylocal", &cfg).expect("write failed");
         let loaded = cd.read("mylocal").expect("read failed");
         assert_eq!(loaded.path, cfg.path);
+    }
+
+    #[test]
+    fn write_and_read_otlp_telemetry_section() {
+        let (_tmp, cd) = tmp_config_dir();
+        let cfg = ProviderFileConfig {
+            path: PathBuf::from("/mnt/otel"),
+            storage: StorageConfig::Local {
+                root: PathBuf::from("/data"),
+            },
+            telemetry: TelemetryFileConfig {
+                otlp: Some(OtlpTelemetryConfig {
+                    enabled: true,
+                    endpoint: Some("http://localhost:4318".to_owned()),
+                    protocol: Some(OtlpTransport::HttpProtobuf),
+                    headers: None,
+                    resource_attributes: None,
+                }),
+            },
+        };
+        cd.write("otel", &cfg).expect("write failed");
+        let loaded = cd.read("otel").expect("read failed");
+        let otlp = loaded.telemetry.otlp.expect("otlp section");
+        assert!(otlp.enabled);
+        assert_eq!(otlp.endpoint.as_deref(), Some("http://localhost:4318"));
     }
 
     #[test]
@@ -358,6 +424,7 @@ mod tests {
                 client_id: None,
                 token_expiry_buffer_secs: None,
             },
+            telemetry: TelemetryFileConfig::default(),
         };
         cd.write("sparse", &cfg).expect("write failed");
         let loaded = cd.read("sparse").expect("read failed");

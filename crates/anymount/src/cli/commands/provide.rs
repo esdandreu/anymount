@@ -176,6 +176,7 @@ impl ProvideCommand {
                 providers: vec![ProviderFileConfig {
                     path: path.clone(),
                     storage: storage.to_storage_config(),
+                    telemetry: Default::default(),
                 }],
             },
         })

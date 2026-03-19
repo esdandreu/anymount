@@ -397,6 +397,7 @@ impl EditDraft {
         Ok(ProviderFileConfig {
             path: PathBuf::from(self.path.trim()),
             storage,
+            telemetry: Default::default(),
         })
     }
 }
@@ -1564,6 +1565,7 @@ mod tests {
                 storage: StorageConfig::Local {
                     root: PathBuf::from(format!("/data/{name}")),
                 },
+                telemetry: Default::default(),
             },
         }
     }

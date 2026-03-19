@@ -22,13 +22,19 @@ either a named provider from config or an inline unnamed provider.
 Build and run the application:
 
 ```bash
-mise run cli -- connect --all
+mise run anymount -- connect --all
 ```
 
 Run one provider process directly:
 
 ```bash
-mise run cli -- provide --name demo
+mise run anymount -- provide --name demo
+```
+
+Build the release binary (`target/release/anymount-cli`):
+
+```bash
+mise run build
 ```
 
 ## Notable dependencies
@@ -39,19 +45,11 @@ mise run cli -- provide --name demo
 
 ## Testing
 
-Run unit tests:
+Run the full suite:
 
 ```bash
-cargo test
+mise run test
 ```
-
-Run system tests:
-
-```bash
-cargo test --test '*_test'
-```
-
-Note: System tests run on Linux only (uses FUSE).
 
 ## License
 

@@ -7,10 +7,11 @@ pub mod error;
 pub mod logger;
 pub mod providers;
 pub mod storages;
+pub mod telemetry;
 pub mod tui;
 
 pub use cli::commands::connect::{DefaultProviderProcessSupervisor, ProviderProcessSupervisor};
-pub use config::{Config, ConfigDir, ProviderFileConfig};
+pub use config::{Config, ConfigDir, ProviderFileConfig, TelemetryFileConfig};
 pub use logger::{Logger, NoOpLogger, TracingLogger};
 pub use providers::{
     Provider, ProviderConfiguration, ProvidersConfiguration, StorageConfig, connect_providers,

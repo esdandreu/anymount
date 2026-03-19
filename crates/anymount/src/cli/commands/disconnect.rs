@@ -89,6 +89,7 @@ mod tests {
                 storage: crate::StorageConfig::Local {
                     root: std::path::PathBuf::from("/d/b"),
                 },
+                telemetry: Default::default(),
             },
         )
         .expect("write");
@@ -99,6 +100,7 @@ mod tests {
                 storage: crate::StorageConfig::Local {
                     root: std::path::PathBuf::from("/d/a"),
                 },
+                telemetry: Default::default(),
             },
         )
         .expect("write");
@@ -149,6 +151,7 @@ mod tests {
                 storage: crate::StorageConfig::Local {
                     root: std::path::PathBuf::from("/d/o"),
                 },
+                telemetry: Default::default(),
             },
         )
         .expect("write");
@@ -159,6 +162,7 @@ mod tests {
                 storage: crate::StorageConfig::Local {
                     root: std::path::PathBuf::from("/d/x"),
                 },
+                telemetry: Default::default(),
             },
         )
         .expect("write");

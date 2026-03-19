@@ -117,6 +117,7 @@ fn execute_add(cd: &ConfigDir, args: &AddArgs) -> crate::cli::Result<()> {
     let cfg = ProviderFileConfig {
         path: resolved.path.clone(),
         storage,
+        telemetry: Default::default(),
     };
     cd.write(&resolved.name, &cfg)?;
     println!("Added provider '{}'", resolved.name);
@@ -379,6 +380,7 @@ mod tests {
             storage: StorageConfig::Local {
                 root: PathBuf::from("/data"),
             },
+            telemetry: Default::default(),
         }
     }
 
@@ -393,6 +395,7 @@ mod tests {
                 client_id: Some("cid".to_owned()),
                 token_expiry_buffer_secs: Some(60),
             },
+            telemetry: Default::default(),
         }
     }
 

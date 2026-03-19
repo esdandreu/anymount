@@ -39,13 +39,34 @@ ctrlc = "3.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
+opentelemetry = { version = "0.31.0", default-features = false, features = [
+    "trace",
+    "logs",
+] }
+opentelemetry_sdk = { version = "0.31.0", default-features = false, features = [
+    "trace",
+    "logs",
+] }
+opentelemetry-otlp = { version = "0.31.0", default-features = false, features = [
+    "trace",
+    "logs",
+    "http-proto",
+    "grpc-tonic",
+    "reqwest-blocking-client",
+] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+tonic = { version = "0.14.5", default-features = false }
+tracing-opentelemetry = { version = "0.32.1", default-features = false, features = [
+    "tracing-log",
+] }
+opentelemetry-appender-tracing = "0.31.1"
+opentelemetry-semantic-conventions = "0.31.0"
 
 # Linux-specific dependencies
 [target.'cfg(target_os = "linux")'.dependencies]
 fuser = "0.17"
 libc = "0.2"
 zbus = { version = "5", features = ["tokio"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
 
 # Windows-specific dependencies
 [target.'cfg(target_os = "windows")'.dependencies]
