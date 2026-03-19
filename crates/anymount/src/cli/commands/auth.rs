@@ -1,8 +1,7 @@
 use crate::application::auth::{
-    Application as AuthApplication, AuthFlow, AuthUseCase, Error as AuthApplicationError,
-    Result as AuthApplicationResult, StartedAuthSession,
+    Application as AuthApplication, AuthUseCase, Error as AuthApplicationError,
 };
-use crate::auth::{self, OneDriveAuthorizer, OneDriveStartedAuthorization, TokenResponse};
+use crate::auth::{self, OneDriveAuthFlow, TokenResponse};
 use clap::Subcommand;
 
 /// Auth subcommand: which provider to obtain a token for.
@@ -68,37 +67,6 @@ impl AuthCommand {
         let tokens = started.finish().map_err(map_auth_error)?;
         print_tokens(&tokens);
         Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-struct OneDriveAuthFlow;
-
-impl AuthFlow for OneDriveAuthFlow {
-    fn start(
-        &self,
-        client_id: Option<String>,
-    ) -> AuthApplicationResult<Box<dyn StartedAuthSession>> {
-        let authorizer = OneDriveAuthorizer::new(client_id).map_err(auth::Error::from)?;
-        let started =
-            OneDriveAuthorizer::start_authorization(authorizer).map_err(auth::Error::from)?;
-        Ok(Box::new(started))
-    }
-}
-
-impl StartedAuthSession for OneDriveStartedAuthorization {
-    fn message(&self) -> String {
-        OneDriveStartedAuthorization::message(self)
-    }
-
-    fn verification_uri(&self) -> String {
-        OneDriveStartedAuthorization::verification_uri(self)
-    }
-
-    fn finish(self: Box<Self>) -> AuthApplicationResult<TokenResponse> {
-        OneDriveStartedAuthorization::wait(self.as_ref())
-            .map_err(auth::Error::from)
-            .map_err(Into::into)
     }
 }
 

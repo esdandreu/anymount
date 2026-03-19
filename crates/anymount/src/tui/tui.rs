@@ -1,9 +1,17 @@
 use super::{Error, Result};
-use crate::auth::{OneDriveAuthorizer, TokenResponse};
+use crate::application::auth::{Application as AuthApplication, AuthUseCase};
+use crate::application::config::{
+    Application as ConfigApplication, ConfigRepository, ConfigUseCase,
+};
+use crate::application::connect::{
+    Application as ConnectApplication, ConnectRepository, ConnectUseCase, ServiceControl,
+    ServiceLauncher,
+};
+use crate::auth::{OneDriveAuthFlow, TokenResponse};
 use crate::cli::commands::config::ProviderType;
-use crate::cli::commands::connect::ConnectCommand;
 use crate::config::ConfigDir;
-use crate::{ProviderFileConfig, StorageConfig};
+use crate::domain::provider::ProviderSpec;
+use crate::{Logger, ProviderFileConfig, StorageConfig, TracingLogger};
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
     MouseEvent, MouseEventKind,
@@ -19,9 +27,10 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wra
 use ratatui::{DefaultTerminal, Frame};
 use std::fs;
 use std::io::{stdout, Write};
-use std::path::Path;
-use std::path::PathBuf;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::thread;
+use std::time::{Duration, Instant};
 
 const COLOR_BORDER: Color = Color::Blue;
 const COLOR_HIGHLIGHT: Color = Color::Yellow;
@@ -50,12 +59,15 @@ struct AppState {
 }
 
 impl AppState {
-    fn load(cd: &ConfigDir) -> Result<Self> {
-        let names = cd.list()?;
+    fn load<U>(use_case: &U) -> Result<Self>
+    where
+        U: ConfigUseCase,
+    {
+        let names = use_case.list()?;
         let mut providers = Vec::with_capacity(names.len());
         for name in names {
-            let config = cd.read(&name)?;
-            providers.push(ProviderEntry { name, config });
+            let spec = use_case.read(&name)?;
+            providers.push(provider_entry_from_spec(spec));
         }
         Ok(Self {
             providers,
@@ -65,9 +77,12 @@ impl AppState {
         })
     }
 
-    fn refresh(&mut self, cd: &ConfigDir) -> Result<()> {
+    fn refresh<U>(&mut self, use_case: &U) -> Result<()>
+    where
+        U: ConfigUseCase,
+    {
         let selected_name = self.selected_name().map(ToOwned::to_owned);
-        let refreshed = Self::load(cd)?;
+        let refreshed = Self::load(use_case)?;
         self.providers = refreshed.providers;
         self.status = refreshed.status;
         if let Some(name) = selected_name {
@@ -112,6 +127,95 @@ impl AppState {
         }
     }
 }
+
+fn provider_entry_from_spec(spec: ProviderSpec) -> ProviderEntry {
+    let name = spec.name.clone();
+    ProviderEntry {
+        name,
+        config: ProviderFileConfig {
+            path: spec.path,
+            storage: spec.storage.into(),
+            telemetry: spec.telemetry.into(),
+        },
+    }
+}
+
+#[derive(Debug, Clone)]
+struct TuiConfigRepository {
+    config_dir: ConfigDir,
+}
+
+impl TuiConfigRepository {
+    fn new(config_dir: ConfigDir) -> Self {
+        Self { config_dir }
+    }
+}
+
+impl ConfigRepository for TuiConfigRepository {
+    fn list_names(&self) -> crate::application::config::Result<Vec<String>> {
+        self.config_dir.list().map_err(Into::into)
+    }
+
+    fn read_spec(&self, name: &str) -> crate::application::config::Result<ProviderSpec> {
+        self.config_dir.read_spec(name).map_err(Into::into)
+    }
+
+    fn write_spec(&self, spec: &ProviderSpec) -> crate::application::config::Result<()> {
+        self.config_dir.write_spec(spec).map_err(Into::into)
+    }
+
+    fn remove(&self, name: &str) -> crate::application::config::Result<()> {
+        self.config_dir.remove(name).map_err(Into::into)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct TuiConnectRepository {
+    config_dir: ConfigDir,
+}
+
+impl TuiConnectRepository {
+    fn new(config_dir: ConfigDir) -> Self {
+        Self { config_dir }
+    }
+}
+
+impl ConnectRepository for TuiConnectRepository {
+    fn list_names(&self) -> crate::application::connect::Result<Vec<String>> {
+        self.config_dir.list().map_err(Into::into)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct TuiServiceControl;
+
+impl ServiceControl for TuiServiceControl {
+    fn ready(&self, provider_name: &str) -> bool {
+        crate::cli::provider_control::provider_daemon_ready(provider_name)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ProcessServiceLauncher<L: Logger> {
+    logger: L,
+}
+
+impl<L: Logger> ProcessServiceLauncher<L> {
+    fn new(logger: L) -> Self {
+        Self { logger }
+    }
+}
+
+impl<L: Logger> ServiceLauncher for ProcessServiceLauncher<L> {
+    fn launch(&self, provider_name: &str, config_dir: &Path) -> std::result::Result<(), String> {
+        let mut child =
+            spawn_provider_process(provider_name, config_dir).map_err(|error| error.to_string())?;
+        wait_until_ready(provider_name, &mut child, &self.logger).map_err(|error| error.to_string())
+    }
+}
+
+const READY_TIMEOUT: Duration = Duration::from_secs(5);
+const READY_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EditField {
@@ -730,38 +834,42 @@ fn complete_filesystem_path(input: &str) -> Result<PathCompletion> {
     Ok(PathCompletion::NoMatch)
 }
 
-fn authenticate_onedrive(draft: &mut EditDraft) -> Result<String> {
+fn authenticate_onedrive<U>(draft: &mut EditDraft, use_case: &U) -> Result<String>
+where
+    U: AuthUseCase,
+{
     if !matches!(draft.storage_type, ProviderType::OneDrive) {
         return Err(Error::Validation(
             "OneDrive auth is only available for storage.type=onedrive".to_owned(),
         ));
     }
 
-    let client_id = optional_trimmed(&draft.onedrive_client_id);
-    let tokens = suspend_terminal(|| {
-        let authorizer = OneDriveAuthorizer::new(client_id).map_err(crate::auth::Error::from)?;
-        let started = authorizer
-            .start_authorization()
-            .map_err(crate::auth::Error::from)?;
-        eprintln!("{}", started.message());
-        if open::that(started.verification_uri()).is_err() {
-            eprintln!("(Could not open browser; open the URL above manually.)");
-        }
-        eprintln!();
-        eprintln!("Waiting for you to sign in...");
-        started
-            .wait()
-            .map_err(crate::auth::Error::from)
-            .map_err(Error::from)
-    })?;
+    let started = use_case
+        .start_onedrive_auth(optional_trimmed(&draft.onedrive_client_id))
+        .map_err(Error::from)?;
+    eprintln!("{}", started.message());
+    if open::that(started.verification_uri()).is_err() {
+        eprintln!("(Could not open browser; open the URL above manually.)");
+    }
+    eprintln!();
+    eprintln!("Waiting for you to sign in...");
+    let tokens = started.finish().map_err(Error::from)?;
 
     draft.apply_onedrive_auth_tokens(tokens)?;
     Ok("OneDrive authentication completed; refresh token populated. Press s to save.".to_owned())
 }
 
+fn authenticate_onedrive_in_terminal(draft: &mut EditDraft) -> Result<String> {
+    suspend_terminal(|| {
+        let flow = OneDriveAuthFlow;
+        let app = AuthApplication::new(&flow);
+        authenticate_onedrive(draft, &app)
+    })
+}
+
 pub fn run() -> Result<()> {
     let cd = ConfigDir::default();
-    let mut state = AppState::load(&cd)?;
+    let mut state = load_state(&cd)?;
 
     let mut terminal = enter_terminal()?;
     let loop_result = run_loop(&mut terminal, &cd, &mut state);
@@ -822,7 +930,7 @@ fn run_loop(terminal: &mut DefaultTerminal, cd: &ConfigDir, state: &mut AppState
                             }
                             EditAction::Saved(name) => {
                                 state.mode = UiMode::Browse;
-                                state.refresh(cd)?;
+                                refresh_state(cd, state)?;
                                 state.status = format!("Saved provider '{name}'");
                             }
                             EditAction::Message(message) => {
@@ -1016,7 +1124,7 @@ fn handle_browse_key(code: KeyCode, cd: &ConfigDir, state: &mut AppState) -> Res
             Ok(false)
         }
         KeyCode::Char('r') => {
-            match state.refresh(cd) {
+            match refresh_state(cd, state) {
                 Ok(()) => state.status = "Refreshed provider list".to_owned(),
                 Err(e) => state.status = format!("Refresh failed: {e}"),
             }
@@ -1048,7 +1156,7 @@ fn handle_browse_key(code: KeyCode, cd: &ConfigDir, state: &mut AppState) -> Res
             Ok(false)
         }
         KeyCode::Char('c') => {
-            match connect_selected_provider(cd, state) {
+            match connect_selected_provider_for_config(cd, state) {
                 Ok(Some(name)) => state.status = format!("Disconnected '{name}'"),
                 Ok(None) => state.status = "No provider selected".to_owned(),
                 Err(e) => state.status = format!("Connect failed: {e}"),
@@ -1093,7 +1201,7 @@ fn handle_edit_key(code: KeyCode, cd: &ConfigDir, session: &mut EditSession) -> 
                 Ok(EditAction::Saved(saved_name))
             }
             _ if is_onedrive_auth_key(code) => {
-                let message = authenticate_onedrive(&mut session.draft)?;
+                let message = authenticate_onedrive_in_terminal(&mut session.draft)?;
                 Ok(EditAction::Message(message))
             }
             _ => Ok(EditAction::Continue),
@@ -1162,9 +1270,9 @@ fn handle_delete_confirm_key(code: KeyCode, cd: &ConfigDir, state: &mut AppState
     match code {
         KeyCode::Char('y') => {
             if let Some(name) = state.selected_name().map(ToOwned::to_owned) {
-                cd.remove(&name)?;
+                remove_provider(cd, &name)?;
                 state.mode = UiMode::Browse;
-                state.refresh(cd)?;
+                refresh_state(cd, state)?;
                 state.status = format!("Removed provider '{name}'");
             } else {
                 state.mode = UiMode::Browse;
@@ -1422,32 +1530,78 @@ fn mask_option(value: Option<&str>) -> String {
     }
 }
 
-fn connect_selected_provider(cd: &ConfigDir, state: &AppState) -> Result<Option<String>> {
+fn load_state(cd: &ConfigDir) -> Result<AppState> {
+    let repository = TuiConfigRepository::new(cd.clone());
+    let app = ConfigApplication::new(&repository);
+    AppState::load(&app)
+}
+
+fn refresh_state(cd: &ConfigDir, state: &mut AppState) -> Result<()> {
+    let repository = TuiConfigRepository::new(cd.clone());
+    let app = ConfigApplication::new(&repository);
+    state.refresh(&app)
+}
+
+fn remove_provider(cd: &ConfigDir, name: &str) -> Result<()> {
+    let repository = TuiConfigRepository::new(cd.clone());
+    let app = ConfigApplication::new(&repository);
+    app.remove(name).map_err(Error::from)
+}
+
+fn connect_selected_provider<U>(use_case: &U, state: &AppState) -> Result<Option<String>>
+where
+    U: ConnectUseCase,
+{
     let Some(name) = state.selected_name() else {
         return Ok(None);
     };
     let name = name.to_owned();
+    run_connect(use_case, Some(name.clone()), false)?;
+    Ok(Some(name))
+}
+
+fn connect_selected_provider_for_config(
+    cd: &ConfigDir,
+    state: &AppState,
+) -> Result<Option<String>> {
     suspend_terminal(|| {
-        run_connect(Some(name.clone()), false, cd)?;
-        Ok(Some(name))
+        let logger = TracingLogger::new();
+        let repository = TuiConnectRepository::new(cd.clone());
+        let control = TuiServiceControl;
+        let launcher = ProcessServiceLauncher::new(logger);
+        let app = ConnectApplication::new(cd.dir(), &repository, &control, &launcher);
+        connect_selected_provider(&app, state)
     })
 }
 
 fn connect_all_providers(cd: &ConfigDir) -> Result<()> {
-    suspend_terminal(|| run_connect(None, true, cd))
+    suspend_terminal(|| {
+        let logger = TracingLogger::new();
+        let repository = TuiConnectRepository::new(cd.clone());
+        let control = TuiServiceControl;
+        let launcher = ProcessServiceLauncher::new(logger);
+        let app = ConnectApplication::new(cd.dir(), &repository, &control, &launcher);
+        run_connect(&app, None, true)
+    })
 }
 
-fn run_connect(name: Option<String>, all: bool, cd: &ConfigDir) -> Result<()> {
-    let cmd = ConnectCommand {
-        name,
-        all,
-        config_dir: Some(cd.dir().to_path_buf()),
-    };
-    cmd.execute().map_err(Error::from)
+fn run_connect<U>(use_case: &U, name: Option<String>, all: bool) -> Result<()>
+where
+    U: ConnectUseCase,
+{
+    if all {
+        use_case.connect_all().map_err(Error::from)
+    } else if let Some(name) = name {
+        use_case.connect_name(&name).map_err(Error::from)
+    } else {
+        Ok(())
+    }
 }
 
 fn ensure_name_available(cd: &ConfigDir, name: &str, current_name: Option<&str>) -> Result<()> {
-    let names = cd.list()?;
+    let repository = TuiConfigRepository::new(cd.clone());
+    let app = ConfigApplication::new(&repository);
+    let names = app.list().map_err(Error::from)?;
     if names
         .iter()
         .any(|existing| existing == name && Some(existing.as_str()) != current_name)
@@ -1457,6 +1611,90 @@ fn ensure_name_available(cd: &ConfigDir, name: &str, current_name: Option<&str>)
         )));
     }
     Ok(())
+}
+
+fn spawn_provider_process(provider_name: &str, config_dir: &Path) -> Result<std::process::Child> {
+    let current_exe = std::env::current_exe()
+        .map_err(|source| crate::cli::Error::ResolveCurrentExecutable { source })?;
+    Command::new(current_exe)
+        .arg("provide")
+        .arg("--name")
+        .arg(provider_name)
+        .arg("--config-dir")
+        .arg(config_dir)
+        .spawn()
+        .map_err(|source| crate::cli::Error::SpawnProvider {
+            provider_name: provider_name.to_owned(),
+            source,
+        })
+        .map_err(Error::from)
+}
+
+fn wait_until_ready<L: Logger>(
+    provider_name: &str,
+    child: &mut std::process::Child,
+    logger: &L,
+) -> Result<()> {
+    let deadline = Instant::now() + READY_TIMEOUT;
+    loop {
+        let child_status = child
+            .try_wait()
+            .map(|status| status.map(|value| value.to_string()))
+            .map_err(|source| crate::cli::Error::WaitForProvider {
+                provider_name: provider_name.to_owned(),
+                source,
+            })
+            .map_err(Error::from)?;
+
+        match next_ready_action(
+            provider_name,
+            crate::cli::provider_control::provider_daemon_ready(provider_name),
+            child_status,
+            Instant::now() >= deadline,
+        )? {
+            ReadyAction::Ready => {
+                logger.info(format!("Provider {provider_name} is ready"));
+                return Ok(());
+            }
+            ReadyAction::Wait => {}
+        }
+
+        thread::sleep(READY_POLL_INTERVAL);
+    }
+}
+
+#[derive(Debug)]
+enum ReadyAction {
+    Ready,
+    Wait,
+}
+
+fn next_ready_action(
+    provider_name: &str,
+    is_running: bool,
+    child_status: Option<String>,
+    deadline_expired: bool,
+) -> Result<ReadyAction> {
+    if is_running {
+        return Ok(ReadyAction::Ready);
+    }
+
+    if let Some(status) = child_status {
+        return Err(crate::cli::Error::ProviderExitedBeforeReady {
+            provider_name: provider_name.to_owned(),
+            status,
+        }
+        .into());
+    }
+
+    if deadline_expired {
+        return Err(crate::cli::Error::ProviderDidNotBecomeReady {
+            provider_name: provider_name.to_owned(),
+        }
+        .into());
+    }
+
+    Ok(ReadyAction::Wait)
 }
 
 fn enter_terminal() -> Result<DefaultTerminal> {
@@ -1528,6 +1766,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::auth::{
+        AuthUseCase, Result as AuthApplicationResult, StartedAuthSession,
+    };
+    use crate::application::connect::{ConnectUseCase, Result as ConnectApplicationResult};
+    use std::cell::RefCell;
     use tempfile::TempDir;
 
     fn tmp_config_dir() -> (TempDir, ConfigDir) {
@@ -1550,7 +1793,9 @@ mod tests {
         let path = tmp.path().join("not-a-directory");
         std::fs::write(&path, "oops").expect("seed file should succeed");
         let cd = ConfigDir::new(path);
-        let err = AppState::load(&cd).expect_err("load should fail");
+        let repository = TuiConfigRepository::new(cd);
+        let app = ConfigApplication::new(&repository);
+        let err = AppState::load(&app).expect_err("load should fail");
 
         assert!(matches!(err, crate::tui::Error::Config(_)));
     }
@@ -1565,6 +1810,69 @@ mod tests {
                 },
                 telemetry: Default::default(),
             },
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingConnectApp {
+        connected_names: RefCell<Vec<String>>,
+    }
+
+    impl ConnectUseCase for RecordingConnectApp {
+        fn connect_name(&self, provider_name: &str) -> ConnectApplicationResult<()> {
+            self.connected_names
+                .borrow_mut()
+                .push(provider_name.to_owned());
+            Ok(())
+        }
+
+        fn connect_all(&self) -> ConnectApplicationResult<()> {
+            Ok(())
+        }
+    }
+
+    struct FakeAuthSession {
+        refresh_token: String,
+    }
+
+    impl StartedAuthSession for FakeAuthSession {
+        fn message(&self) -> String {
+            "Open example.com".to_owned()
+        }
+
+        fn verification_uri(&self) -> String {
+            "https://example.com/device".to_owned()
+        }
+
+        fn finish(self: Box<Self>) -> AuthApplicationResult<TokenResponse> {
+            Ok(TokenResponse {
+                access_token: "access".to_owned(),
+                refresh_token: Some(self.refresh_token),
+                expires_in: 3600,
+            })
+        }
+    }
+
+    struct FakeAuthApp {
+        refresh_token: String,
+    }
+
+    impl FakeAuthApp {
+        fn success(refresh_token: &str) -> Self {
+            Self {
+                refresh_token: refresh_token.to_owned(),
+            }
+        }
+    }
+
+    impl AuthUseCase for FakeAuthApp {
+        fn start_onedrive_auth(
+            &self,
+            _client_id: Option<String>,
+        ) -> AuthApplicationResult<Box<dyn StartedAuthSession>> {
+            Ok(Box::new(FakeAuthSession {
+                refresh_token: self.refresh_token.clone(),
+            }))
         }
     }
 
@@ -1610,6 +1918,25 @@ mod tests {
         };
 
         assert!(state.selected_name().is_none());
+    }
+
+    #[test]
+    fn connect_selected_provider_uses_application_connect() {
+        let state = AppState {
+            providers: vec![local_provider("alpha")],
+            selected: 0,
+            status: String::new(),
+            mode: UiMode::Browse,
+        };
+        let app = RecordingConnectApp::default();
+
+        let connected = connect_selected_provider(&app, &state).expect("connect should work");
+
+        assert_eq!(connected, Some("alpha".to_owned()));
+        assert_eq!(
+            app.connected_names.borrow().as_slice(),
+            ["alpha".to_owned()]
+        );
     }
 
     #[test]
@@ -1701,6 +2028,18 @@ mod tests {
             .expect("should apply token response");
 
         assert_eq!(draft.onedrive_refresh_token, "rt");
+    }
+
+    #[test]
+    fn authenticate_onedrive_updates_draft_from_application_response() {
+        let mut draft = EditDraft::new_empty("demo".to_owned());
+        draft.storage_type = ProviderType::OneDrive;
+
+        let status = authenticate_onedrive(&mut draft, &FakeAuthApp::success("refresh"))
+            .expect("auth should work");
+
+        assert!(status.contains("refresh token populated"));
+        assert_eq!(draft.onedrive_refresh_token, "refresh".to_owned());
     }
 
     #[test]

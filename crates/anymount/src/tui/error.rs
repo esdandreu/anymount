@@ -32,3 +32,46 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl From<crate::application::auth::Error> for Error {
+    fn from(value: crate::application::auth::Error) -> Self {
+        match value {
+            crate::application::auth::Error::Auth(source) => Self::Auth(source),
+        }
+    }
+}
+
+impl From<crate::application::config::Error> for Error {
+    fn from(value: crate::application::config::Error) -> Self {
+        match value {
+            crate::application::config::Error::Config(source) => Self::Config(source),
+            crate::application::config::Error::DuplicateProvider { name } => {
+                Self::Validation(format!("provider '{name}' already exists"))
+            }
+            crate::application::config::Error::InvalidStorageKey { key } => {
+                Self::Validation(format!("'{key}' only applies to onedrive storage"))
+            }
+            crate::application::config::Error::UnknownKey { .. }
+            | crate::application::config::Error::ParseInteger { .. } => {
+                Self::Validation(value.to_string())
+            }
+        }
+    }
+}
+
+impl From<crate::application::connect::Error> for Error {
+    fn from(value: crate::application::connect::Error) -> Self {
+        match value {
+            crate::application::connect::Error::Config(source) => Self::Config(source),
+            crate::application::connect::Error::Launch {
+                provider_name,
+                reason,
+            } => Self::Validation(format!(
+                "failed to connect provider {provider_name}: {reason}"
+            )),
+            crate::application::connect::Error::ConnectFailures { failures } => {
+                Self::Validation(format!("failed to connect providers: {failures}"))
+            }
+        }
+    }
+}
