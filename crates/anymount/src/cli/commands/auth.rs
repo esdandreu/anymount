@@ -1,38 +1,9 @@
+use crate::application::auth::{
+    Application as AuthApplication, AuthFlow, AuthUseCase, Error as AuthApplicationError,
+    Result as AuthApplicationResult, StartedAuthSession,
+};
 use crate::auth::{self, OneDriveAuthorizer, OneDriveStartedAuthorization, TokenResponse};
 use clap::Subcommand;
-
-/// Value returned from [`Authorizer::start_authorization`]; use [`message`](StartedAuthorization::message) and [`verification_uri`](StartedAuthorization::verification_uri) for the user, then [`wait`](StartedAuthorization::wait) to obtain tokens.
-pub trait StartedAuthorization {
-    fn wait(&self) -> auth::Result<TokenResponse>;
-    fn message(&self) -> String;
-    fn verification_uri(&self) -> String;
-}
-
-/// Starts an authorization flow; returns a [`StartedAuthorization`] to display
-/// instructions and wait for completion.
-pub trait Authorizer {
-    fn start_authorization(self) -> auth::Result<impl StartedAuthorization>;
-}
-
-impl StartedAuthorization for OneDriveStartedAuthorization {
-    fn wait(&self) -> auth::Result<TokenResponse> {
-        self.wait().map_err(auth::Error::from)
-    }
-
-    fn message(&self) -> String {
-        self.message()
-    }
-
-    fn verification_uri(&self) -> String {
-        self.verification_uri()
-    }
-}
-
-impl Authorizer for OneDriveAuthorizer {
-    fn start_authorization(self) -> auth::Result<impl StartedAuthorization> {
-        OneDriveAuthorizer::start_authorization(self).map_err(auth::Error::from)
-    }
-}
 
 /// Auth subcommand: which provider to obtain a token for.
 #[derive(Subcommand, Debug, Clone)]
@@ -51,11 +22,9 @@ pub struct AuthOneDrive {
 }
 
 impl AuthSubcommand {
-    fn authorizer(&self) -> auth::Result<impl Authorizer> {
+    fn client_id(&self) -> Option<String> {
         match self {
-            AuthSubcommand::OneDrive(args) => {
-                OneDriveAuthorizer::new(args.client_id.clone()).map_err(auth::Error::from)
-            }
+            AuthSubcommand::OneDrive(args) => args.client_id.clone(),
         }
     }
 }
@@ -75,27 +44,61 @@ impl AuthCommand {
     /// Returns an error if the device-code request fails, the user does not
     /// complete sign-in, or the token response is invalid.
     pub fn execute(&self) -> crate::cli::Result<()> {
-        let authorizer = self.subcommand.authorizer()?;
-        self._execute(authorizer, &DefaultUrlOpener)
+        let flow = OneDriveAuthFlow;
+        let app = AuthApplication::new(&flow);
+        self._execute(&app, &DefaultUrlOpener)
     }
 
     /// Internal entry point for injection (e.g. tests). Not part of the public
     /// API.
-    pub(crate) fn _execute<A, U>(&self, authorizer: A, url_opener: &U) -> crate::cli::Result<()>
+    pub(crate) fn _execute<U, O>(&self, use_case: &U, url_opener: &O) -> crate::cli::Result<()>
     where
-        A: Authorizer,
-        U: UrlOpener,
+        U: AuthUseCase,
+        O: UrlOpener,
     {
-        let started = authorizer.start_authorization()?;
+        let started = use_case
+            .start_onedrive_auth(self.subcommand.client_id())
+            .map_err(map_auth_error)?;
         print_instructions(&started.message());
         if url_opener.open(&started.verification_uri()).is_err() {
             eprintln!("(Could not open browser; open the URL above manually.)");
         }
         eprintln!();
         eprintln!("Waiting for you to sign in...");
-        let tokens = started.wait()?;
+        let tokens = started.finish().map_err(map_auth_error)?;
         print_tokens(&tokens);
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct OneDriveAuthFlow;
+
+impl AuthFlow for OneDriveAuthFlow {
+    fn start(
+        &self,
+        client_id: Option<String>,
+    ) -> AuthApplicationResult<Box<dyn StartedAuthSession>> {
+        let authorizer = OneDriveAuthorizer::new(client_id).map_err(auth::Error::from)?;
+        let started =
+            OneDriveAuthorizer::start_authorization(authorizer).map_err(auth::Error::from)?;
+        Ok(Box::new(started))
+    }
+}
+
+impl StartedAuthSession for OneDriveStartedAuthorization {
+    fn message(&self) -> String {
+        OneDriveStartedAuthorization::message(self)
+    }
+
+    fn verification_uri(&self) -> String {
+        OneDriveStartedAuthorization::verification_uri(self)
+    }
+
+    fn finish(self: Box<Self>) -> AuthApplicationResult<TokenResponse> {
+        OneDriveStartedAuthorization::wait(self.as_ref())
+            .map_err(auth::Error::from)
+            .map_err(Into::into)
     }
 }
 
@@ -125,45 +128,61 @@ fn print_tokens(tokens: &TokenResponse) {
     eprintln!("access_token is short-lived; use refresh_token for storage config.");
 }
 
+fn map_auth_error(error: AuthApplicationError) -> crate::cli::Error {
+    match error {
+        AuthApplicationError::Auth(source) => crate::cli::Error::Auth(source),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::auth::{
+        AuthUseCase, Error as AuthApplicationError, Result as AuthApplicationResult,
+        StartedAuthSession,
+    };
 
-    struct MockStarted;
+    struct MockSession;
 
-    impl StartedAuthorization for MockStarted {
-        fn wait(&self) -> auth::Result<TokenResponse> {
+    impl StartedAuthSession for MockSession {
+        fn message(&self) -> String {
+            "Open example.com".to_owned()
+        }
+
+        fn verification_uri(&self) -> String {
+            "https://example.com/device".to_owned()
+        }
+
+        fn finish(self: Box<Self>) -> AuthApplicationResult<TokenResponse> {
             Ok(TokenResponse {
                 access_token: "at".into(),
                 refresh_token: Some("rt".into()),
                 expires_in: 3600,
             })
         }
-
-        fn message(&self) -> String {
-            "Open example.com".into()
-        }
-
-        fn verification_uri(&self) -> String {
-            "https://example.com/device".into()
-        }
     }
 
-    struct FailingAuthorizer;
+    struct FailingUseCase;
 
-    impl Authorizer for FailingAuthorizer {
-        fn start_authorization(self) -> auth::Result<impl StartedAuthorization> {
-            Err::<MockStarted, _>(auth::Error::OneDrive(
+    impl AuthUseCase for FailingUseCase {
+        fn start_onedrive_auth(
+            &self,
+            _client_id: Option<String>,
+        ) -> AuthApplicationResult<Box<dyn StartedAuthSession>> {
+            Err(AuthApplicationError::Auth(auth::Error::OneDrive(
                 crate::auth::onedrive::Error::DeviceCodeExpired,
-            ))
+            )))
         }
     }
 
-    struct SuccessAuthorizer;
+    struct SuccessUseCase;
 
-    impl Authorizer for SuccessAuthorizer {
-        fn start_authorization(self) -> auth::Result<impl StartedAuthorization> {
-            Ok(MockStarted)
+    impl AuthUseCase for SuccessUseCase {
+        fn start_onedrive_auth(
+            &self,
+            _client_id: Option<String>,
+        ) -> AuthApplicationResult<Box<dyn StartedAuthSession>> {
+            Ok(Box::new(MockSession))
         }
     }
 
@@ -182,7 +201,7 @@ mod tests {
                 client_id: Some("test-client".into()),
             }),
         };
-        let err = cmd._execute(FailingAuthorizer, &NoOpUrlOpener).unwrap_err();
+        let err = cmd._execute(&FailingUseCase, &NoOpUrlOpener).unwrap_err();
         assert!(matches!(err, crate::cli::Error::Auth(_)));
     }
 
@@ -193,7 +212,7 @@ mod tests {
                 client_id: Some("test-client".into()),
             }),
         };
-        let result = cmd._execute(SuccessAuthorizer, &NoOpUrlOpener);
+        let result = cmd._execute(&SuccessUseCase, &NoOpUrlOpener);
         assert!(result.is_ok());
     }
 }

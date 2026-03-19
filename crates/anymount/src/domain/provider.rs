@@ -54,6 +54,13 @@ impl ProviderSpec {
 
         self.storage.validate()
     }
+
+    pub fn onedrive_endpoint(&self) -> Option<&str> {
+        match &self.storage {
+            StorageSpec::OneDrive { endpoint, .. } => Some(endpoint.as_str()),
+            StorageSpec::Local { .. } => None,
+        }
+    }
 }
 
 /// Supported storage backends.
