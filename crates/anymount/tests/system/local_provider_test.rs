@@ -1,15 +1,24 @@
+#![allow(clippy::unwrap_used)]
+
+#[cfg(target_os = "linux")]
 use std::fs;
+#[cfg(target_os = "linux")]
 use std::path::PathBuf;
+#[cfg(target_os = "linux")]
 use std::process::{Child, Command};
+#[cfg(target_os = "linux")]
 use std::time::{Duration, Instant};
+#[cfg(target_os = "linux")]
 use tempfile::TempDir;
 
+#[cfg(target_os = "linux")]
 struct TestFixture {
     mount_path: PathBuf,
     data_path: PathBuf,
     child: Child,
 }
 
+#[cfg(target_os = "linux")]
 impl TestFixture {
     fn new() -> Self {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -45,7 +54,7 @@ impl TestFixture {
         }
     }
 
-    fn wait_for_ready(&mut self) -> bool {
+    fn wait_for_ready(&self) -> bool {
         let timeout = Duration::from_secs(5);
         let poll_interval = Duration::from_millis(50);
         let start = Instant::now();
@@ -69,6 +78,7 @@ impl TestFixture {
     }
 }
 
+#[cfg(target_os = "linux")]
 impl Drop for TestFixture {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -76,12 +86,14 @@ impl Drop for TestFixture {
     }
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn local_provider_connects_and_responds() {
     let mut fixture = TestFixture::new();
     assert!(fixture.wait_for_ready());
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn local_provider_lists_directory_contents() {
     let mut fixture = TestFixture::new();
@@ -97,6 +109,7 @@ fn local_provider_lists_directory_contents() {
     assert!(entries.contains(&"subdir".to_string()));
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn local_provider_reads_file_content() {
     let mut fixture = TestFixture::new();
