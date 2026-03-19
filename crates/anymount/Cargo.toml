@@ -9,6 +9,10 @@ authors.workspace = true
 name = "anymount-cli"
 path = "src/main.rs"
 
+[[test]]
+name = "local_provider_test"
+path = "tests/system/local_provider_test.rs"
+
 [dependencies]
 # Core dependencies
 thiserror = "1.0"
