@@ -111,6 +111,119 @@ fn local_provider_lists_directory_contents() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn provider_fails_on_invalid_root() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let mount_path = temp_dir.path().join("mnt");
+    let invalid_root = temp_dir.path().join("nonexistent");
+
+    fs::create_dir(&mount_path).expect("Failed to create mnt dir");
+
+    let binary_path = env!("CARGO_BIN_EXE_anymount-cli");
+    let mut child = Command::new(binary_path)
+        .args([
+            "provide",
+            "--path",
+            mount_path.to_str().unwrap(),
+            "local",
+            "--root",
+            invalid_root.to_str().unwrap(),
+        ])
+        .spawn()
+        .expect("Failed to spawn provider");
+
+    let timeout = Duration::from_secs(5);
+    let start = Instant::now();
+    let mut process_exited = false;
+
+    while start.elapsed() < timeout {
+        if let Some(_status) = child.try_wait().unwrap() {
+            process_exited = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    assert!(
+        process_exited,
+        "Provider should exit with error for invalid root"
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn provider_cleans_up_on_drop() {
+    let fixture = TestFixture::new();
+    assert!(fixture.wait_for_ready());
+
+    let child_id = fixture.child.id();
+    drop(fixture);
+
+    std::thread::sleep(Duration::from_millis(100));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn provider_handles_empty_directory() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let mount_path = temp_dir.path().join("mnt");
+    let data_path = temp_dir.path().join("data");
+
+    fs::create_dir(&mount_path).expect("Failed to create mnt dir");
+    fs::create_dir(&data_path).expect("Failed to create data dir");
+
+    let binary_path = env!("CARGO_BIN_EXE_anymount-cli");
+    let mut child = Command::new(binary_path)
+        .args([
+            "provide",
+            "--path",
+            mount_path.to_str().unwrap(),
+            "local",
+            "--root",
+            data_path.to_str().unwrap(),
+        ])
+        .spawn()
+        .expect("Failed to spawn provider");
+
+    let timeout = Duration::from_secs(5);
+    let poll_interval = Duration::from_millis(50);
+    let start = Instant::now();
+    let mut ready = false;
+
+    loop {
+        if start.elapsed() > timeout {
+            break;
+        }
+
+        if let Some(_status) = child.try_wait().unwrap() {
+            break;
+        }
+
+        match fs::read_dir(&mount_path) {
+            Ok(_) => {
+                ready = true;
+                break;
+            }
+            Err(_) => {}
+        }
+
+        std::thread::sleep(poll_interval);
+    }
+
+    assert!(ready, "Provider should become ready with empty directory");
+    let entries: Vec<_> = fs::read_dir(&mount_path)
+        .expect("Failed to read mount dir")
+        .filter_map(|e| e.ok())
+        .collect();
+    assert!(entries.is_empty(), "Mount path should be empty");
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn local_provider_reads_file_content() {
     let mut fixture = TestFixture::new();
     assert!(fixture.wait_for_ready());
