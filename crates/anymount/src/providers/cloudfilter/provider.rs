@@ -30,7 +30,7 @@ impl<S: Storage, L: Logger + 'static> CloudFilterProvider<S, L> {
         let security_id =
             SecurityId::current_user().map_err(|source| Error::CloudFilterOperation {
                 operation: "resolve current user security id",
-                source: Box::new(source),
+                source,
             })?;
         let path = config.path();
         if !path.exists() {
@@ -61,7 +61,7 @@ impl<S: Storage, L: Logger + 'static> CloudFilterProvider<S, L> {
             .is_registered()
             .map_err(|source| Error::CloudFilterOperation {
                 operation: "check sync root registration",
-                source: Box::new(source),
+                source,
             })?;
         // TODO(GIA) Handle when registered to a different path
         if !is_registered {
@@ -74,13 +74,13 @@ impl<S: Storage, L: Logger + 'static> CloudFilterProvider<S, L> {
                 .with_path(&path)
                 .map_err(|source| Error::CloudFilterOperation {
                     operation: "build sync root info",
-                    source: Box::new(source),
+                    source,
                 })?;
 
             id.register(sync_root_info)
                 .map_err(|source| Error::CloudFilterOperation {
                     operation: "register sync root",
-                    source: Box::new(source),
+                    source,
                 })?;
             logger.info(format!("Sync root registered: {}", name));
         }
@@ -94,7 +94,7 @@ impl<S: Storage, L: Logger + 'static> CloudFilterProvider<S, L> {
             )
             .map_err(|source| Error::CloudFilterOperation {
                 operation: "connect to sync root",
-                source: Box::new(source),
+                source,
             })?;
 
         Ok(Arc::new(Self {

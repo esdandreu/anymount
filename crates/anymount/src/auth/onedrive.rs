@@ -1,8 +1,8 @@
 use super::token_response::{TokenResponse, jwt_expires_at};
 pub use oauth2::StandardDeviceAuthorizationResponse;
 use oauth2::{
-    AuthUrl, ClientId, DeviceAuthorizationUrl, RefreshToken, Scope,
-    TokenResponse as OAuth2TokenResponse, TokenUrl, basic::BasicClient,
+    AuthUrl, ClientId, DeviceAuthorizationUrl, HttpClientError, RefreshToken, RequestTokenError,
+    Scope, TokenResponse as OAuth2TokenResponse, TokenUrl, basic::BasicClient,
 };
 use parking_lot::RwLock;
 use std::thread;
@@ -18,7 +18,10 @@ const SCOPE_OFFLINE: &str = "offline_access";
 
 const ANYMOUNT_AZURE_APP_CLIENT_ID: &str = "5970173e-1b75-4317-987d-6849236cc3df";
 const DEFAULT_TOKEN_EXPIRY_BUFFER_SECS: u64 = 60;
-type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
+type HttpError = HttpClientError<ureq::Error>;
+type DeviceCodeRequestError = RequestTokenError<HttpError, oauth2::basic::BasicErrorResponse>;
+type DeviceTokenError = RequestTokenError<HttpError, oauth2::DeviceCodeErrorResponse>;
+type RefreshTokenRequestError = RequestTokenError<HttpError, oauth2::basic::BasicErrorResponse>;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -34,7 +37,7 @@ pub enum Error {
     #[error("device code request failed")]
     DeviceCodeRequest {
         #[source]
-        source: BoxError,
+        source: DeviceCodeRequestError,
     },
 
     #[error("device code expired")]
@@ -46,7 +49,7 @@ pub enum Error {
     #[error("token request failed")]
     TokenRequest {
         #[source]
-        source: BoxError,
+        source: DeviceTokenError,
     },
 
     #[error("missing refresh token")]
@@ -55,7 +58,7 @@ pub enum Error {
     #[error("refresh token request failed")]
     RefreshTokenRequest {
         #[source]
-        source: BoxError,
+        source: RefreshTokenRequestError,
     },
 }
 
@@ -105,9 +108,7 @@ impl OneDriveAuthorizer {
             .add_scope(Scope::new(SCOPE_FILES.to_string()))
             .add_scope(Scope::new(SCOPE_OFFLINE.to_string()))
             .request(&self.agent)
-            .map_err(|source| Error::DeviceCodeRequest {
-                source: Box::new(source),
-            })?;
+            .map_err(|source| Error::DeviceCodeRequest { source })?;
         Ok(OneDriveStartedAuthorization {
             authorizer: self,
             state,
@@ -132,7 +133,7 @@ impl OneDriveStartedAuthorization {
             .map_err(|source| {
                 let message = source.to_string();
                 classify_wait_error(&message).unwrap_or(Error::TokenRequest {
-                    source: Box::new(source),
+                    source,
                 })
             })?;
         Ok(TokenResponse::from(token_result))
@@ -247,9 +248,7 @@ impl OneDriveTokenSource {
             .client
             .exchange_refresh_token(&RefreshToken::new(refresh_token))
             .request(&self.agent)
-            .map_err(|source| Error::RefreshTokenRequest {
-                source: Box::new(source),
-            })?;
+            .map_err(|source| Error::RefreshTokenRequest { source })?;
         let expires_in_secs = response.expires_in().map(|d| d.as_secs()).unwrap_or(0);
         let access_token = response.access_token().secret().to_string();
         token.access_token = Some(access_token.clone());

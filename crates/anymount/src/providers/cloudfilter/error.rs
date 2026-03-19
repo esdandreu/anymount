@@ -1,7 +1,5 @@
 use std::path::PathBuf;
 
-type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
-
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("{operation} failed")]
@@ -31,7 +29,7 @@ pub enum Error {
     CloudFilterOperation {
         operation: &'static str,
         #[source]
-        source: BoxError,
+        source: windows::core::Error,
     },
 
     #[error("invalid mount path: {path}")]

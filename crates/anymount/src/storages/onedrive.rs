@@ -11,7 +11,6 @@ use super::{Error as StorageError, Result as StorageResult};
 
 /// Default buffer (seconds) before token expiry to trigger refresh when not set in config.
 const DEFAULT_TOKEN_EXPIRY_BUFFER_SECS: u64 = 60;
-type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -28,7 +27,7 @@ pub enum Error {
     Request {
         url: String,
         #[source]
-        source: BoxError,
+        source: ureq::Error,
     },
 
     #[error("response body read failed for {url}: {source}")]
@@ -108,7 +107,7 @@ impl HttpGet for UreqHttpGet {
         }
         let response = request.call().map_err(|source| Error::Request {
             url: url.to_owned(),
-            source: Box::new(source),
+            source,
         })?;
         let status = response.status();
         let mut reader = response.into_reader();
