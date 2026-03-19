@@ -30,3 +30,9 @@ description = "Run the terminal user interface"
 depends = ["build"]
 run = "target/release/anymount-cli"
 run_windows = "target\\release\\anymount-cli.exe"
+
+# OpenTelemetry Collector (Docker): OTLP → logs/otel/collector-logs.jsonl
+[tasks.otel-collector]
+description = "Run OTel Collector (contrib); OTLP gRPC :4317, HTTP :4318 → logs/otel/collector-logs.jsonl"
+run = "mkdir -p logs/otel && docker run --rm --name anymount-otel-collector -p 4317:4317 -p 4318:4318 -v \"$PWD/devtools/otel-collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro\" -v \"$PWD/logs/otel:/out:rw\" otel/opentelemetry-collector-contrib:0.147.0 --config=/etc/otelcol-contrib/config.yaml"
+run_windows = "if not exist logs\\otel mkdir logs\\otel && docker run --rm --name anymount-otel-collector -p 4317:4317 -p 4318:4318 -v \"%CD%\\devtools\\otel-collector\\config.yaml:/etc/otelcol-contrib/config.yaml:ro\" -v \"%CD%\\logs\\otel:/out:rw\" otel/opentelemetry-collector-contrib:0.147.0 --config=/etc/otelcol-contrib/config.yaml"

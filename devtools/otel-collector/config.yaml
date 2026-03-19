@@ -1,0 +1,31 @@
+# OpenTelemetry Collector (contrib) — local dev
+# Receives OTLP (gRPC :4317, HTTP :4318) and appends logs as JSON lines.
+#
+# Run: mise run otel-collector
+# Output: logs/otel/collector-logs.jsonl (gitignored via logs/)
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+exporters:
+  file:
+    path: /out/collector-logs.jsonl
+    format: json
+    append: true
+    flush_interval: 1s
+    create_directory: true
+
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [file]

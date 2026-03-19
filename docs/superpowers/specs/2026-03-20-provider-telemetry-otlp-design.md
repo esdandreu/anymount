@@ -125,6 +125,13 @@ No cross-process sharing of exporters is required.
   with timeout).
 - Document security: TLS, header secrets, never log exporter headers.
 
+## Local collector (mise)
+
+For development, **`mise run otel-collector`** starts the **contrib** collector
+in Docker (OTLP gRPC `4317`, HTTP `4318`) and appends received **logs** as JSON
+lines to **`logs/otel/collector-logs.jsonl`** (see `devtools/otel-collector/config.yaml`).
+Requires Docker; output is under `logs/` (already gitignored).
+
 ## Testing
 
 - **Unit:** config parse / merge with env (where testable without network).
