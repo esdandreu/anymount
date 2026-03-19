@@ -29,11 +29,9 @@ that surface in a minimal form.
 
 - New CLI subcommand: `anymount status`
 - Optional `--config-dir` (consistent with `connect` and `provide`)
-- One row per configured provider: at least **name** and **running / not
-  running** (wording TBD in implementation; map to control `Ready` vs
-  otherwise)
-- Display columns from config where cheap: e.g. mount **path** and a short
-  **storage kind** (local vs OneDrive, etc.)
+- Simple **list** output (no column alignment): per provider, show **name**,
+  **storage type**, **mount path**, and **daemon running / not running** (map
+  to control `Ping` → `Ready` vs otherwise)
 - Extract shared liveness probing from `connect` so `status` and `connect`
   cannot drift
 
@@ -52,14 +50,27 @@ that surface in a minimal form.
 1. Resolve config directory (default or `--config-dir`).
 2. If there are no `*.toml` providers, print a clear message (e.g. no
    configured providers) and exit successfully.
-3. For each provider name from `list()`:
-   - Read config for display fields; surface read errors like other CLI
-     commands (fail the command or skip that row with error—prefer failing fast
-     for corrupt config).
+3. For each provider name from `list()` (sorted order, as `ConfigDir::list()`
+   already guarantees):
+   - **Read config** for display fields. If `read()` fails, print a **short
+     line for that provider only** (e.g. name + error summary) on **stderr**,
+     **continue** with the remaining providers (**partial output**). Do **not**
+     abort the whole command for one bad TOML. Do **not** emit a normal list
+     line for that name on stdout (storage type and path are unknown).
    - Send `ControlMessage::Ping` to that name’s endpoint.
-   - If the reply is `ControlMessage::Ready`, mark **running**; else **not
+   - If the reply is `ControlMessage::Ready`, report **running**; else **not
      running** (unreachable socket, wrong reply, etc. treated as down without
      spamming stderr unless `--verbose`).
+
+**Output shape:** plain lines, easy to read, **not** a table (no padded
+columns). Exact line format is implementation-defined but must include **name**,
+**storage type**, **path**, and **running state** for successfully read
+providers. Example style (illustrative only):
+
+```text
+demo: local, /mnt/demo, running
+other: onedrive, /mnt/other, not running
+```
 
 Platform: reuse the same `cfg` split as `connect` for Unix vs Windows; other
 platforms should behave like `connect` (no control transport → not running or
@@ -80,10 +91,6 @@ documented limitation).
   `connect.rs`).
 - Tests for empty config dir and for “all stopped” vs “all running” without
   requiring a real socket where possible.
-
-## Open choices (implementation)
-
-- Exact column labels and alignment (stable plain text; no dependency required
-  for v1).
-- Whether a single failed `read()` aborts the whole command vs partial output
-  (default: abort with `cli::Error`).
+- Test that a failing `read()` for one name still prints lines for other
+  providers and emits an error for the bad one (stderr vs stdout as specified
+  above).
