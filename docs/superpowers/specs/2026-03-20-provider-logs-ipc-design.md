@@ -2,7 +2,9 @@
 
 **Date:** 2026-03-20
 
-**Status:** Draft
+**Status:** **Superseded** — see
+[`2026-03-20-provider-telemetry-otlp-design.md`](2026-03-20-provider-telemetry-otlp-design.md)
+(OpenTelemetry / OTLP export instead of a dedicated log socket).
 
 **Goal:** Let users **live-inspect** logs from a running named provider (`provide
 --name`) without relying on stdout inheritance or log files. **IPC-only:** no
