@@ -56,7 +56,7 @@ impl TestFixture {
         }
     }
 
-    fn wait_for_ready(&self) -> bool {
+    fn wait_for_ready(&mut self) -> bool {
         let timeout = Duration::from_secs(5);
         let poll_interval = Duration::from_millis(50);
         let start = Instant::now();
