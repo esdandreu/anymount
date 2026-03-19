@@ -2,7 +2,6 @@ use crate::domain::provider::{
     OtlpSpec as DomainOtlpSpec, OtlpTransport as DomainOtlpTransport, ProviderSpec, StorageSpec,
     TelemetrySpec,
 };
-use crate::{ProviderConfiguration, ProvidersConfiguration, StorageConfig};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -73,6 +72,36 @@ fn default_true() -> bool {
     true
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum StorageConfig {
+    Local {
+        root: PathBuf,
+    },
+    OneDrive {
+        root: PathBuf,
+        endpoint: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        access_token: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        refresh_token: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        client_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        token_expiry_buffer_secs: Option<u64>,
+    },
+}
+
+impl StorageConfig {
+    /// Short label for CLI and status output (`local`, `onedrive`, ...).
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Local { .. } => "local",
+            Self::OneDrive { .. } => "onedrive",
+        }
+    }
+}
+
 /// Optional OpenTelemetry export settings for a named provider.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TelemetryFileConfig {
@@ -112,16 +141,6 @@ pub struct ProviderFileConfig {
     pub storage: StorageConfig,
     #[serde(default)]
     pub telemetry: TelemetryFileConfig,
-}
-
-impl ProviderConfiguration for ProviderFileConfig {
-    fn path(&self) -> PathBuf {
-        self.path.clone()
-    }
-
-    fn storage_config(&self) -> StorageConfig {
-        self.storage.clone()
-    }
 }
 
 impl ProviderFileConfig {
@@ -251,12 +270,6 @@ impl From<DomainOtlpTransport> for OtlpTransport {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub providers: Vec<ProviderFileConfig>,
-}
-
-impl ProvidersConfiguration for Config {
-    fn providers(&self) -> Vec<&impl ProviderConfiguration> {
-        self.providers.iter().collect()
-    }
 }
 
 /// Handle to the configuration directory.
@@ -621,12 +634,9 @@ mod tests {
     }
 
     #[test]
-    fn provider_file_config_implements_provider_configuration() {
+    fn provider_file_config_exposes_mount_path() {
         let cfg = local_config();
-        assert_eq!(
-            ProviderConfiguration::path(&cfg),
-            PathBuf::from("/mnt/local")
-        );
+        assert_eq!(cfg.path, PathBuf::from("/mnt/local"));
     }
 
     #[test]

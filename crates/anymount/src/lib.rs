@@ -12,10 +12,7 @@ pub mod storages;
 pub mod telemetry;
 pub mod tui;
 
-pub use config::{Config, ConfigDir, ProviderFileConfig, TelemetryFileConfig};
+pub use config::{Config, ConfigDir, ProviderFileConfig, StorageConfig, TelemetryFileConfig};
 pub use logger::{Logger, NoOpLogger, TracingLogger};
-pub use providers::{
-    connect_providers, connect_providers_with_telemetry, Provider, ProviderConfiguration,
-    ProvidersConfiguration, StorageConfig,
-};
+pub use providers::{connect_providers, connect_providers_with_telemetry, Provider};
 pub use storages::Storage;

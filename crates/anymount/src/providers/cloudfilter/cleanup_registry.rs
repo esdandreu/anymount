@@ -1,18 +1,15 @@
 use super::provider::ID_PREFIX;
 use super::{Error, Result};
+use crate::domain::provider::ProviderSpec;
 use crate::Logger;
-use crate::providers::{ProviderConfiguration, ProvidersConfiguration};
 use windows::{
     Foundation::Collections::IVectorView,
     Storage::Provider::{StorageProviderSyncRootInfo, StorageProviderSyncRootManager},
 };
 
 /// Cleanup the registry of any non-configured registered sync roots.
-pub fn cleanup_registry<L: Logger>(
-    configuration: &impl ProvidersConfiguration,
-    logger: &L,
-) -> Result<()> {
-    _cleanup_registry::<StorageProviderSyncRootManager, L>(configuration, logger)
+pub fn cleanup_registry<L: Logger>(specs: &[ProviderSpec], logger: &L) -> Result<()> {
+    _cleanup_registry::<StorageProviderSyncRootManager, L>(specs, logger)
 }
 
 /// Trait for a registry manager.
@@ -41,7 +38,7 @@ impl RegistryManager for StorageProviderSyncRootManager {
 
 /// Cleanup the registry of any non-configured registered sync roots.
 fn _cleanup_registry<Registry: RegistryManager, L: Logger>(
-    configuration: &impl ProvidersConfiguration,
+    specs: &[ProviderSpec],
     logger: &L,
 ) -> Result<()> {
     let sync_roots = Registry::get_currently_registered()?;
@@ -69,7 +66,7 @@ fn _cleanup_registry<Registry: RegistryManager, L: Logger>(
         };
 
         // Only unregister if not configured
-        if is_path_configured(&sync_root_path, configuration) {
+        if is_path_configured(&sync_root_path, specs) {
             continue;
         }
 
@@ -92,14 +89,11 @@ fn _cleanup_registry<Registry: RegistryManager, L: Logger>(
 }
 
 /// Check if a path is part of a configured provider.
-fn is_path_configured(path: &str, configuration: &impl ProvidersConfiguration) -> bool {
-    for provider in configuration.providers() {
-        let provider_path = provider.path().to_string_lossy().to_string();
-        if path.eq_ignore_ascii_case(&provider_path) {
-            return true;
-        }
-    }
-    return false;
+fn is_path_configured(path: &str, specs: &[ProviderSpec]) -> bool {
+    specs.iter().any(|spec| {
+        let provider_path = spec.path.to_string_lossy().to_string();
+        path.eq_ignore_ascii_case(&provider_path)
+    })
 }
 
 /// Get the path of a sync root.
@@ -118,7 +112,7 @@ fn get_sync_root_path(sync_root: &StorageProviderSyncRootInfo) -> Result<String>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Config, NoOpLogger};
+    use crate::NoOpLogger;
 
     struct FailingRegistryManager;
 
@@ -139,11 +133,7 @@ mod tests {
 
     #[test]
     fn cleanup_registry_returns_get_current_sync_roots_error() {
-        let config = Config {
-            providers: Vec::new(),
-        };
-
-        let err = _cleanup_registry::<FailingRegistryManager, _>(&config, &NoOpLogger)
+        let err = _cleanup_registry::<FailingRegistryManager, _>(&[], &NoOpLogger)
             .expect_err("cleanup should fail");
         assert!(matches!(err, super::Error::WindowsOperation { .. }));
     }

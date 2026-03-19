@@ -7,7 +7,7 @@ use crate::config::ConfigDir;
 use crate::domain::provider::{ProviderSpec, StorageSpec, TelemetrySpec};
 use crate::service::control::messages::{ControlMessage, ServiceMessage};
 use crate::service::ServiceRuntime;
-use crate::{Config, Logger, Provider, ProviderFileConfig, TelemetryFileConfig, TracingLogger};
+use crate::{Logger, Provider, TracingLogger};
 use clap::{Args, Subcommand};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -200,13 +200,15 @@ impl<L: Logger + 'static> ProviderRuntimeHost for RuntimeHost<L> {
                 }
             })?;
 
-            let config = config_from_spec(&request.spec);
-            let providers: Vec<Box<dyn Provider>> =
-                crate::connect_providers_with_telemetry(&config, &self.logger, Some(tx.clone()))
-                    .map_err(|error| ProvideError::Host {
-                        provider_name: provider_name.clone(),
-                        reason: error.to_string(),
-                    })?;
+            let providers: Vec<Box<dyn Provider>> = crate::connect_providers_with_telemetry(
+                std::slice::from_ref(&request.spec),
+                &self.logger,
+                Some(tx.clone()),
+            )
+            .map_err(|error| ProvideError::Host {
+                provider_name: provider_name.clone(),
+                reason: error.to_string(),
+            })?;
 
             for provider in &providers {
                 self.logger.info(format!(
@@ -263,16 +265,6 @@ fn inline_provider_name(path: &Path) -> String {
         .filter(|value| !value.is_empty())
         .unwrap_or("inline")
         .to_owned()
-}
-
-fn config_from_spec(spec: &ProviderSpec) -> Config {
-    Config {
-        providers: vec![ProviderFileConfig {
-            path: spec.path.clone(),
-            storage: spec.storage.clone().into(),
-            telemetry: TelemetryFileConfig::from(spec.telemetry.clone()),
-        }],
-    }
 }
 
 fn control_reply_for_request(

@@ -1,5 +1,5 @@
 use super::callbacks::Callbacks;
-use super::{Error, Provider, ProviderConfiguration, Result, Storage};
+use super::{Error, Provider, Result, Storage};
 use crate::service::control::messages::ServiceMessage;
 use crate::Logger;
 use cloud_filter::root::{
@@ -22,7 +22,7 @@ pub struct CloudFilterProvider<S: Storage, L: Logger> {
 
 impl<S: Storage, L: Logger + 'static> CloudFilterProvider<S, L> {
     pub fn connect(
-        config: &impl ProviderConfiguration,
+        path: PathBuf,
         storage: S,
         logger: L,
         service_tx: Option<Sender<ServiceMessage>>,
@@ -32,7 +32,6 @@ impl<S: Storage, L: Logger + 'static> CloudFilterProvider<S, L> {
                 operation: "resolve current user security id",
                 source,
             })?;
-        let path = config.path();
         if !path.exists() {
             std::fs::create_dir(&path).map_err(|source| Error::Io {
                 operation: "create mount path",
@@ -43,7 +42,7 @@ impl<S: Storage, L: Logger + 'static> CloudFilterProvider<S, L> {
         logger.info(format!("Mount path: {}", path.display()));
         let path = absolute(path).map_err(|source| Error::Io {
             operation: "resolve mount path",
-            path: config.path(),
+            path: path.clone(),
             source,
         })?;
         let name = path

@@ -89,6 +89,14 @@ pub enum StorageSpec {
 }
 
 impl StorageSpec {
+    /// Short label for CLI and status output (`local`, `onedrive`, ...).
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Local { .. } => "local",
+            Self::OneDrive { .. } => "onedrive",
+        }
+    }
+
     /// Validates storage-specific invariants.
     ///
     /// # Errors
