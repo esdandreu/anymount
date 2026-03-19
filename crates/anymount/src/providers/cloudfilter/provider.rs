@@ -40,7 +40,7 @@ impl<S: Storage, L: Logger + 'static> CloudFilterProvider<S, L> {
             })?;
         }
         logger.info(format!("Mount path: {}", path.display()));
-        let path = absolute(path).map_err(|source| Error::Io {
+        let path = absolute(&path).map_err(|source| Error::Io {
             operation: "resolve mount path",
             path: path.clone(),
             source,
