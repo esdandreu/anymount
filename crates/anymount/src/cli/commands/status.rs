@@ -3,7 +3,7 @@ use clap::Args;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
-/// Probes whether a named provider daemon responds on its control endpoint.
+/// Probes whether a named provider service responds on its control endpoint.
 pub(crate) trait ProviderDaemonProbe {
     fn provider_daemon_ready(&self, provider_name: &str) -> bool;
 }
@@ -17,7 +17,7 @@ impl ProviderDaemonProbe for DefaultProviderDaemonProbe {
     }
 }
 
-/// Show configured providers and whether each daemon responds on its control endpoint.
+/// Show configured providers and whether each service responds on its control endpoint.
 #[derive(Args, Debug, Clone)]
 pub struct StatusCommand {
     /// Config directory override.
@@ -145,8 +145,7 @@ mod tests {
             config_dir: Some(tmp.path().to_path_buf()),
         };
         let mut buf = Vec::new();
-        cmd._execute(&NeverRunningProbe, &mut buf)
-            .expect("status");
+        cmd._execute(&NeverRunningProbe, &mut buf).expect("status");
         let s = String::from_utf8(buf).expect("utf8");
         assert!(s.contains("No configured providers."));
     }
@@ -171,8 +170,7 @@ mod tests {
             config_dir: Some(tmp.path().to_path_buf()),
         };
         let mut buf = Vec::new();
-        cmd._execute(&NeverRunningProbe, &mut buf)
-            .expect("status");
+        cmd._execute(&NeverRunningProbe, &mut buf).expect("status");
         let s = String::from_utf8(buf).expect("utf8");
         assert!(s.contains("- alpha (local, /mnt/a): not running"));
     }
@@ -197,8 +195,7 @@ mod tests {
             config_dir: Some(tmp.path().to_path_buf()),
         };
         let mut buf = Vec::new();
-        cmd._execute(&AlwaysRunningProbe, &mut buf)
-            .expect("status");
+        cmd._execute(&AlwaysRunningProbe, &mut buf).expect("status");
         let s = String::from_utf8(buf).expect("utf8");
         assert!(s.contains("- beta (local, /mnt/b): running"));
     }
@@ -207,8 +204,7 @@ mod tests {
     fn invalid_toml_still_lists_other_provider() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let cd = ConfigDir::new(tmp.path().to_path_buf());
-        std::fs::write(cd.dir().join("bad.toml"), "not valid toml {{{")
-            .expect("write bad");
+        std::fs::write(cd.dir().join("bad.toml"), "not valid toml {{{").expect("write bad");
         cd.write(
             "good",
             &ProviderFileConfig {
@@ -225,8 +221,7 @@ mod tests {
             config_dir: Some(tmp.path().to_path_buf()),
         };
         let mut buf = Vec::new();
-        cmd._execute(&NeverRunningProbe, &mut buf)
-            .expect("status");
+        cmd._execute(&NeverRunningProbe, &mut buf).expect("status");
         let s = String::from_utf8(buf).expect("utf8");
         assert!(
             s.contains("- bad: error — "),

@@ -1,7 +1,7 @@
 use super::Result;
-use crate::Logger;
-use crate::daemon::messages::DaemonMessage;
+use crate::service::control::messages::ServiceMessage;
 use crate::storages::{LocalStorage, OneDriveConfig};
+use crate::Logger;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
@@ -62,9 +62,9 @@ pub fn connect_providers(
 pub fn connect_providers_with_telemetry(
     config: &impl ProvidersConfiguration,
     logger: &(impl Logger + 'static),
-    daemon_tx: Option<Sender<DaemonMessage>>,
+    service_tx: Option<Sender<ServiceMessage>>,
 ) -> Result<Vec<Box<dyn Provider>>> {
-    use super::cloudfilter::{CloudFilterProvider, cleanup_registry};
+    use super::cloudfilter::{cleanup_registry, CloudFilterProvider};
     let mut providers: Vec<Box<dyn Provider>> = Vec::new();
     for provider_config in config.providers() {
         match provider_config.storage_config() {
@@ -74,7 +74,7 @@ pub fn connect_providers_with_telemetry(
                     provider_config,
                     storage,
                     logger.clone(),
-                    daemon_tx.clone(),
+                    service_tx.clone(),
                 )?;
                 providers.push(Box::new(provider) as Box<dyn Provider>);
             }
@@ -99,7 +99,7 @@ pub fn connect_providers_with_telemetry(
                     provider_config,
                     storage,
                     logger.clone(),
-                    daemon_tx.clone(),
+                    service_tx.clone(),
                 )?;
                 providers.push(Box::new(provider) as Box<dyn Provider>);
             }
@@ -121,11 +121,11 @@ pub fn connect_providers(
 pub fn connect_providers_with_telemetry(
     config: &impl ProvidersConfiguration,
     logger: &(impl Logger + 'static),
-    _daemon_tx: Option<Sender<DaemonMessage>>,
+    _service_tx: Option<Sender<ServiceMessage>>,
 ) -> Result<Vec<Box<dyn Provider>>> {
     use super::libcloudprovider::dbus::AccountExporter;
     use super::libcloudprovider::provider::{
-        LibCloudProvider, export_on_dbus, mount_storage, new_runtime,
+        export_on_dbus, mount_storage, new_runtime, LibCloudProvider,
     };
     let rt = new_runtime()?;
     let mut accounts: Vec<(std::path::PathBuf, AccountExporter)> = Vec::new();
@@ -210,7 +210,7 @@ pub fn connect_providers(
 pub fn connect_providers_with_telemetry(
     _config: &impl ProvidersConfiguration,
     _logger: &impl Logger,
-    _daemon_tx: Option<Sender<DaemonMessage>>,
+    _service_tx: Option<Sender<ServiceMessage>>,
 ) -> Result<Vec<Box<dyn Provider>>> {
     Err(super::Error::NotSupported)
 }

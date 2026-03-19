@@ -28,11 +28,11 @@ pub enum Commands {
     Config(ConfigCommand),
     /// Connect to a storage provider
     Connect(ConnectCommand),
-    /// Stop a running provider daemon (idempotent).
+    /// Stop a running provider service (idempotent).
     Disconnect(DisconnectCommand),
     /// Run one configured provider as a long-lived process.
     Provide(ProvideCommand),
-    /// Show configured providers and daemon readiness.
+    /// Show configured providers and service readiness.
     Status(StatusCommand),
 }
 

@@ -1,8 +1,8 @@
-//! Named-pipe control transport for provider daemons on Windows.
+//! Named-pipe control transport for provider services on Windows.
 
-use crate::daemon::messages::ControlMessage;
-use crate::daemon::paths::provider_endpoint;
-use crate::daemon::{Error, Result};
+use crate::service::control::messages::ControlMessage;
+use crate::service::control::paths::provider_endpoint;
+use crate::service::{Error, Result};
 use std::fs;
 use std::io;
 use windows::core::HSTRING;
@@ -185,7 +185,7 @@ fn win_to_io_error(operation: &'static str, provider_name: &str, e: windows::cor
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::messages::ControlMessage;
+    use crate::service::control::messages::ControlMessage;
     use std::thread;
     use std::time::Duration;
 

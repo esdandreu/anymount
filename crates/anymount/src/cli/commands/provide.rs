@@ -1,17 +1,16 @@
 use crate::config::ConfigDir;
-use crate::daemon::messages::DaemonMessage;
-use crate::daemon::runtime::DaemonRuntime;
+use crate::service::control::messages::{ControlMessage, ServiceMessage};
+use crate::service::ServiceRuntime;
 use crate::{Config, Logger, Provider, ProviderFileConfig, StorageConfig, TracingLogger};
 use clap::{Args, Subcommand};
 use std::path::PathBuf;
 use std::sync::mpsc;
 
 #[cfg(unix)]
-use crate::daemon::control_unix::UnixControl;
-use crate::daemon::messages::ControlMessage;
+use crate::service::control::unix::UnixControl;
 
 #[cfg(target_os = "windows")]
-use crate::daemon::control_windows::WindowsControl;
+use crate::service::control::windows::WindowsControl;
 
 #[derive(Args, Debug, Clone)]
 pub struct ProvideCommand {
@@ -137,7 +136,7 @@ impl ProvideRunner for DefaultProvideRunner {
             spawn_control_server(provider_name, tx, logger)?;
         }
 
-        let mut runtime = DaemonRuntime::new(logger.clone(), rx);
+        let mut runtime = ServiceRuntime::new(logger.clone(), rx);
         let result = runtime.run().map_err(crate::cli::Error::from);
         drop(providers);
         result
@@ -193,12 +192,12 @@ impl ProvideCommand {
 fn control_reply_for_request(
     bytes: &[u8],
     provider_name: &str,
-    tx: &mpsc::Sender<DaemonMessage>,
+    tx: &mpsc::Sender<ServiceMessage>,
 ) -> ControlMessage {
     match ControlMessage::decode(bytes) {
         Ok(ControlMessage::Ping) => ControlMessage::Ready,
         Ok(ControlMessage::Shutdown) => {
-            let _ = tx.send(DaemonMessage::Shutdown);
+            let _ = tx.send(ServiceMessage::Shutdown);
             ControlMessage::Ack
         }
         Ok(other) => ControlMessage::Error(format!(
@@ -209,11 +208,11 @@ fn control_reply_for_request(
 }
 
 fn install_ctrlc_handler<L: Logger>(
-    tx: mpsc::Sender<DaemonMessage>,
+    tx: mpsc::Sender<ServiceMessage>,
     logger: &L,
 ) -> crate::cli::Result<()> {
     ctrlc::set_handler(move || {
-        let _ = tx.send(DaemonMessage::Shutdown);
+        let _ = tx.send(ServiceMessage::Shutdown);
     })
     .map_err(|source| {
         logger.error(format!("Error setting Ctrl-C handler: {source}"));
@@ -224,7 +223,7 @@ fn install_ctrlc_handler<L: Logger>(
 #[cfg(unix)]
 fn spawn_control_server<L: Logger + 'static>(
     provider_name: &str,
-    tx: mpsc::Sender<DaemonMessage>,
+    tx: mpsc::Sender<ServiceMessage>,
     logger: &L,
 ) -> crate::cli::Result<()> {
     let listener = UnixControl.bind(provider_name)?;
@@ -255,7 +254,7 @@ fn spawn_control_server<L: Logger + 'static>(
 #[cfg(target_os = "windows")]
 fn spawn_control_server<L: Logger + 'static>(
     provider_name: &str,
-    tx: mpsc::Sender<DaemonMessage>,
+    tx: mpsc::Sender<ServiceMessage>,
     logger: &L,
 ) -> crate::cli::Result<()> {
     let listener = WindowsControl.bind(provider_name)?;
@@ -285,7 +284,7 @@ fn spawn_control_server<L: Logger + 'static>(
 #[cfg(not(any(unix, target_os = "windows")))]
 fn spawn_control_server<L: Logger>(
     _provider_name: &str,
-    _tx: mpsc::Sender<DaemonMessage>,
+    _tx: mpsc::Sender<ServiceMessage>,
     _logger: &L,
 ) -> crate::cli::Result<()> {
     Err(crate::cli::Error::Validation(

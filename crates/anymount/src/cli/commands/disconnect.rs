@@ -1,11 +1,11 @@
-use crate::Logger;
-use crate::TracingLogger;
 use crate::cli::provider_control::try_disconnect_provider;
 use crate::config::ConfigDir;
+use crate::Logger;
+use crate::TracingLogger;
 use clap::Args;
 use std::path::PathBuf;
 
-/// Stop background provider daemons via the control endpoint (idempotent).
+/// Stop background provider services via the control endpoint (idempotent).
 #[derive(Args, Debug, Clone)]
 pub struct DisconnectCommand {
     /// Disconnect a named provider.
@@ -50,14 +50,10 @@ impl DisconnectCommand {
                 })
             }
         } else if let Some(name) = &self.name {
-            try_disconnect(name).map_err(|e| {
-                crate::cli::Error::DisconnectFailures {
-                    failures: format!("{name}: {e}"),
-                }
+            try_disconnect(name).map_err(|e| crate::cli::Error::DisconnectFailures {
+                failures: format!("{name}: {e}"),
             })?;
-            logger.info(format!(
-                "Disconnected (or already stopped) provider {name}"
-            ));
+            logger.info(format!("Disconnected (or already stopped) provider {name}"));
             Ok(())
         } else {
             Err(crate::cli::Error::MissingDisconnectTarget)
@@ -134,10 +130,7 @@ mod tests {
         let err = cmd
             ._execute(|_| Ok(()), &NoOpLogger)
             .expect_err("missing target");
-        assert!(matches!(
-            err,
-            crate::cli::Error::MissingDisconnectTarget
-        ));
+        assert!(matches!(err, crate::cli::Error::MissingDisconnectTarget));
     }
 
     #[test]
@@ -184,9 +177,6 @@ mod tests {
                 &NoOpLogger,
             )
             .expect_err("partial failure");
-        assert!(matches!(
-            err,
-            crate::cli::Error::DisconnectFailures { .. }
-        ));
+        assert!(matches!(err, crate::cli::Error::DisconnectFailures { .. }));
     }
 }

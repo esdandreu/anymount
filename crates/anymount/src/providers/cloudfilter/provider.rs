@@ -1,13 +1,13 @@
 use super::callbacks::Callbacks;
 use super::{Error, Provider, ProviderConfiguration, Result, Storage};
+use crate::service::control::messages::ServiceMessage;
 use crate::Logger;
-use crate::daemon::messages::DaemonMessage;
 use cloud_filter::root::{
     Connection, HydrationType, PopulationType, SecurityId, Session, SyncRootId, SyncRootIdBuilder,
     SyncRootInfo,
 };
-use std::path::{PathBuf, absolute};
-use std::sync::{Arc, mpsc::Sender};
+use std::path::{absolute, PathBuf};
+use std::sync::{mpsc::Sender, Arc};
 
 pub const ID_PREFIX: &'static str = "Anymount";
 
@@ -25,7 +25,7 @@ impl<S: Storage, L: Logger + 'static> CloudFilterProvider<S, L> {
         config: &impl ProviderConfiguration,
         storage: S,
         logger: L,
-        daemon_tx: Option<Sender<DaemonMessage>>,
+        service_tx: Option<Sender<ServiceMessage>>,
     ) -> Result<Arc<Self>> {
         let security_id =
             SecurityId::current_user().map_err(|source| Error::CloudFilterOperation {
@@ -90,7 +90,7 @@ impl<S: Storage, L: Logger + 'static> CloudFilterProvider<S, L> {
         let connection = session
             .connect(
                 &path,
-                Callbacks::new(path.clone(), storage, logger.clone(), daemon_tx),
+                Callbacks::new(path.clone(), storage, logger.clone(), service_tx),
             )
             .map_err(|source| Error::CloudFilterOperation {
                 operation: "connect to sync root",

@@ -1,5 +1,14 @@
-use crate::daemon::messages::ControlMessage;
-use crate::daemon::{Error, Result};
+pub mod messages;
+pub mod paths;
+
+#[cfg(unix)]
+pub mod unix;
+
+#[cfg(target_os = "windows")]
+pub mod windows;
+
+use self::messages::ControlMessage;
+use crate::service::{Error, Result};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -60,7 +69,7 @@ impl ControlTransport for InMemoryControlTransport {
 #[cfg(test)]
 mod tests {
     use super::{ControlTransport, InMemoryControlTransport};
-    use crate::daemon::messages::ControlMessage;
+    use crate::service::control::messages::ControlMessage;
 
     #[test]
     fn client_ping_receives_ready() {
