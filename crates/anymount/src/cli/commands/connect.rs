@@ -1,7 +1,9 @@
-use crate::Logger;
-use crate::TracingLogger;
-use crate::cli::provider_control::provider_daemon_ready;
+use crate::application::connect::{
+    Application as ConnectApplication, ConnectRepository, ConnectUseCase, Error as ConnectError,
+    ServiceControl, ServiceLauncher,
+};
 use crate::config::ConfigDir;
+use crate::{Logger, TracingLogger};
 use clap::Args;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -27,32 +29,22 @@ pub struct ConnectCommand {
 impl ConnectCommand {
     pub fn execute(&self) -> crate::cli::Result<()> {
         let logger = TracingLogger::new();
-        self._execute(&DefaultProviderProcessSupervisor, &logger)
+        let config_dir = self.config_dir();
+        let repository = ConfigRepository::new(config_dir.clone());
+        let control = ProviderServiceControl;
+        let launcher = ProcessServiceLauncher::new(logger);
+        let app = ConnectApplication::new(config_dir.dir(), &repository, &control, &launcher);
+        self._execute(&app)
     }
 
-    pub(crate) fn _execute<S, L>(&self, supervisor: &S, logger: &L) -> crate::cli::Result<()>
+    pub(crate) fn _execute<U>(&self, use_case: &U) -> crate::cli::Result<()>
     where
-        S: ProviderProcessSupervisor,
-        L: Logger + 'static,
+        U: ConnectUseCase,
     {
         if self.all {
-            let cd = self.config_dir();
-            let mut failures = Vec::new();
-            for name in cd.list()? {
-                if let Err(error) = supervisor.ensure_running(&name, &cd, logger) {
-                    failures.push(format!("{name}: {error}"));
-                }
-            }
-            if failures.is_empty() {
-                Ok(())
-            } else {
-                Err(crate::cli::Error::ConnectFailures {
-                    failures: failures.join(", "),
-                })
-            }
+            use_case.connect_all().map_err(map_connect_error)
         } else if let Some(name) = &self.name {
-            let cd = self.config_dir();
-            supervisor.ensure_running(name, &cd, logger)
+            use_case.connect_name(name).map_err(map_connect_error)
         } else {
             Err(crate::cli::Error::MissingConnectTarget)
         }
@@ -66,37 +58,61 @@ impl ConnectCommand {
     }
 }
 
-pub trait ProviderProcessSupervisor {
-    fn ensure_running<L>(
-        &self,
-        provider_name: &str,
-        config_dir: &ConfigDir,
-        logger: &L,
-    ) -> crate::cli::Result<()>
-    where
-        L: Logger + 'static;
+#[derive(Debug, Clone)]
+struct ConfigRepository {
+    config_dir: ConfigDir,
+}
+
+impl ConfigRepository {
+    fn new(config_dir: ConfigDir) -> Self {
+        Self { config_dir }
+    }
+}
+
+impl ConnectRepository for ConfigRepository {
+    fn list_names(&self) -> crate::application::connect::Result<Vec<String>> {
+        self.config_dir.list().map_err(Into::into)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-pub struct DefaultProviderProcessSupervisor;
+struct ProviderServiceControl;
 
-impl ProviderProcessSupervisor for DefaultProviderProcessSupervisor {
-    fn ensure_running<L>(
-        &self,
-        provider_name: &str,
-        config_dir: &ConfigDir,
-        logger: &L,
-    ) -> crate::cli::Result<()>
-    where
-        L: Logger + 'static,
-    {
-        if provider_daemon_ready(provider_name) {
-            logger.info(format!("Provider {provider_name} is already running"));
-            return Ok(());
+impl ServiceControl for ProviderServiceControl {
+    fn ready(&self, provider_name: &str) -> bool {
+        crate::cli::provider_control::provider_daemon_ready(provider_name)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ProcessServiceLauncher<L: Logger> {
+    logger: L,
+}
+
+impl<L: Logger> ProcessServiceLauncher<L> {
+    fn new(logger: L) -> Self {
+        Self { logger }
+    }
+}
+
+impl<L: Logger> ServiceLauncher for ProcessServiceLauncher<L> {
+    fn launch(&self, provider_name: &str, config_dir: &Path) -> std::result::Result<(), String> {
+        let mut child =
+            spawn_provider_process(provider_name, config_dir).map_err(|error| error.to_string())?;
+        wait_until_ready(provider_name, &mut child, &self.logger).map_err(|error| error.to_string())
+    }
+}
+
+fn map_connect_error(error: ConnectError) -> crate::cli::Error {
+    match error {
+        ConnectError::Config(source) => crate::cli::Error::Config(source),
+        ConnectError::ConnectFailures { failures } => {
+            crate::cli::Error::ConnectFailures { failures }
         }
-
-        let mut child = spawn_provider_process(provider_name, config_dir.dir())?;
-        wait_until_ready(provider_name, &mut child, logger)
+        ConnectError::Launch {
+            provider_name,
+            reason,
+        } => crate::cli::Error::Validation(format!("{provider_name}: {reason}")),
     }
 }
 
@@ -141,7 +157,7 @@ fn wait_until_ready<L: Logger>(
 
         match next_ready_action(
             provider_name,
-            provider_daemon_ready(provider_name),
+            crate::cli::provider_control::provider_daemon_ready(provider_name),
             child_status,
             Instant::now() >= deadline,
         ) {
@@ -192,134 +208,89 @@ fn next_ready_action(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::NoOpLogger;
-    use crate::{ProviderFileConfig, StorageConfig};
-    use std::collections::{HashMap, HashSet};
+    use crate::application::connect::{ConnectUseCase, Error as ConnectError};
+    use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
-    #[derive(Clone, Default)]
-    struct RecordingSupervisor {
-        running: Arc<Mutex<HashSet<String>>>,
-        failures: Arc<Mutex<HashMap<String, String>>>,
-        ensured: Arc<Mutex<Vec<String>>>,
+    #[derive(Default)]
+    struct RecordingUseCase {
+        calls: Arc<Mutex<Vec<String>>>,
+        connect_name_errors: HashMap<String, String>,
+        connect_all_error: Option<String>,
     }
 
-    impl RecordingSupervisor {
-        fn with_running(provider_name: &str) -> Self {
-            let supervisor = Self::default();
-            supervisor
-                .running
-                .lock()
-                .expect("running providers lock should not be poisoned")
-                .insert(provider_name.to_owned());
-            supervisor
+    impl RecordingUseCase {
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().expect("calls lock").clone()
         }
 
-        fn with_failure(provider_name: &str, error: &str) -> Self {
-            let supervisor = Self::default();
-            supervisor
-                .failures
-                .lock()
-                .expect("failure map lock should not be poisoned")
-                .insert(provider_name.to_owned(), error.to_owned());
-            supervisor
+        fn with_name_error(mut self, provider_name: &str, reason: &str) -> Self {
+            self.connect_name_errors
+                .insert(provider_name.to_owned(), reason.to_owned());
+            self
         }
 
-        fn ensured(&self) -> Vec<String> {
-            self.ensured
-                .lock()
-                .expect("ensure log lock should not be poisoned")
-                .clone()
+        fn with_all_error(mut self, failures: &str) -> Self {
+            self.connect_all_error = Some(failures.to_owned());
+            self
         }
     }
 
-    impl ProviderProcessSupervisor for RecordingSupervisor {
-        fn ensure_running<L>(
-            &self,
-            provider_name: &str,
-            _config_dir: &ConfigDir,
-            _logger: &L,
-        ) -> crate::cli::Result<()>
-        where
-            L: Logger + 'static,
-        {
-            self.ensured
+    impl ConnectUseCase for RecordingUseCase {
+        fn connect_name(&self, provider_name: &str) -> crate::application::connect::Result<()> {
+            self.calls
                 .lock()
-                .expect("ensure log lock should not be poisoned")
-                .push(provider_name.to_owned());
-
-            if let Some(error) = self
-                .failures
-                .lock()
-                .expect("failure map lock should not be poisoned")
-                .get(provider_name)
-                .cloned()
-            {
-                return Err(crate::cli::Error::Validation(error));
+                .expect("calls lock")
+                .push(format!("name:{provider_name}"));
+            match self.connect_name_errors.get(provider_name) {
+                Some(reason) => Err(ConnectError::Launch {
+                    provider_name: provider_name.to_owned(),
+                    reason: reason.clone(),
+                }),
+                None => Ok(()),
             }
+        }
 
-            self.running
+        fn connect_all(&self) -> crate::application::connect::Result<()> {
+            self.calls
                 .lock()
-                .expect("running providers lock should not be poisoned")
-                .insert(provider_name.to_owned());
-            Ok(())
+                .expect("calls lock")
+                .push("all".to_owned());
+            match &self.connect_all_error {
+                Some(failures) => Err(ConnectError::ConnectFailures {
+                    failures: failures.clone(),
+                }),
+                None => Ok(()),
+            }
         }
     }
 
     #[test]
     fn execute_from_config_name() {
-        let tmp = tempfile::tempdir().expect("failed to create temp dir");
-        let cd = ConfigDir::new(tmp.path().to_path_buf());
-        cd.write(
-            "test",
-            &ProviderFileConfig {
-                path: PathBuf::from("/mnt/test"),
-                storage: StorageConfig::Local {
-                    root: PathBuf::from("/data"),
-                },
-                telemetry: Default::default(),
-            },
-        )
-        .expect("write failed");
-
         let cmd = ConnectCommand {
             name: Some("test".to_owned()),
             all: false,
-            config_dir: Some(tmp.path().to_path_buf()),
+            config_dir: None,
         };
-        let logger = NoOpLogger;
-        let supervisor = RecordingSupervisor::default();
-        let result = cmd._execute(&supervisor, &logger);
-        assert!(result.is_ok());
-        assert_eq!(supervisor.ensured(), vec!["test"]);
+
+        let use_case = RecordingUseCase::default();
+        cmd._execute(&use_case).expect("connect should succeed");
+
+        assert_eq!(use_case.calls(), vec!["name:test"]);
     }
 
     #[test]
-    fn execute_all_from_config() {
-        let tmp = tempfile::tempdir().expect("failed to create temp dir");
-        let cd = ConfigDir::new(tmp.path().to_path_buf());
-        cd.write(
-            "a",
-            &ProviderFileConfig {
-                path: PathBuf::from("/mnt/a"),
-                storage: StorageConfig::Local {
-                    root: PathBuf::from("/data/a"),
-                },
-                telemetry: Default::default(),
-            },
-        )
-        .expect("write failed");
-
+    fn execute_all_uses_application_use_case() {
         let cmd = ConnectCommand {
             name: None,
             all: true,
-            config_dir: Some(tmp.path().to_path_buf()),
+            config_dir: None,
         };
-        let logger = NoOpLogger;
-        let supervisor = RecordingSupervisor::default();
-        let result = cmd._execute(&supervisor, &logger);
-        assert!(result.is_ok());
-        assert_eq!(supervisor.ensured(), vec!["a"]);
+
+        let use_case = RecordingUseCase::default();
+        cmd._execute(&use_case).expect("connect should succeed");
+
+        assert_eq!(use_case.calls(), vec!["all"]);
     }
 
     #[test]
@@ -329,72 +300,41 @@ mod tests {
             all: false,
             config_dir: None,
         };
-        let logger = NoOpLogger;
+
         let err = cmd
-            ._execute(&RecordingSupervisor::default(), &logger)
+            ._execute(&RecordingUseCase::default())
             .expect_err("connect should fail");
         assert!(matches!(err, crate::cli::Error::MissingConnectTarget));
     }
 
     #[test]
-    fn execute_reuses_running_provider_daemon() {
-        let tmp = tempfile::tempdir().expect("failed to create temp dir");
-        let cd = ConfigDir::new(tmp.path().to_path_buf());
-        cd.write(
-            "demo",
-            &crate::ProviderFileConfig {
-                path: PathBuf::from("/mnt/demo"),
-                storage: crate::StorageConfig::Local {
-                    root: PathBuf::from("/data/demo"),
-                },
-                telemetry: Default::default(),
-            },
-        )
-        .expect("write failed");
-
-        let cmd = ConnectCommand {
-            name: Some("demo".to_owned()),
-            all: false,
-            config_dir: Some(tmp.path().to_path_buf()),
-        };
-        let supervisor = RecordingSupervisor::with_running("demo");
-        cmd._execute(&supervisor, &NoOpLogger)
-            .expect("connect should succeed");
-
-        assert_eq!(supervisor.ensured(), vec!["demo"]);
-    }
-
-    #[test]
-    fn execute_returns_error_when_one_provider_fails_during_all() {
-        let tmp = tempfile::tempdir().expect("failed to create temp dir");
-        let cd = ConfigDir::new(tmp.path().to_path_buf());
-        for (name, path) in [("healthy", "/mnt/healthy"), ("broken", "/mnt/broken")] {
-            cd.write(
-                name,
-                &crate::ProviderFileConfig {
-                    path: PathBuf::from(path),
-                    storage: crate::StorageConfig::Local {
-                        root: PathBuf::from(format!("/data/{name}")),
-                    },
-                    telemetry: Default::default(),
-                },
-            )
-            .expect("write failed");
-        }
-
+    fn execute_maps_application_failure_for_all() {
         let cmd = ConnectCommand {
             name: None,
             all: true,
-            config_dir: Some(tmp.path().to_path_buf()),
+            config_dir: None,
         };
-        let supervisor = RecordingSupervisor::with_failure("broken", "startup failed");
 
         let err = cmd
-            ._execute(&supervisor, &NoOpLogger)
+            ._execute(&RecordingUseCase::default().with_all_error("broken: spawn failed"))
             .expect_err("connect all should fail");
 
         assert!(matches!(err, crate::cli::Error::ConnectFailures { .. }));
-        assert!(supervisor.ensured().contains(&"healthy".to_owned()));
+    }
+
+    #[test]
+    fn execute_maps_application_failure_for_name() {
+        let cmd = ConnectCommand {
+            name: Some("demo".to_owned()),
+            all: false,
+            config_dir: None,
+        };
+
+        let err = cmd
+            ._execute(&RecordingUseCase::default().with_name_error("demo", "spawn failed"))
+            .expect_err("connect should fail");
+
+        assert!(matches!(err, crate::cli::Error::Validation(_)));
     }
 
     #[test]

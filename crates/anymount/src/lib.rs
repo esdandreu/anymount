@@ -1,3 +1,4 @@
+pub mod application;
 pub mod auth;
 pub mod cli;
 pub mod config;
@@ -11,7 +12,6 @@ pub mod storages;
 pub mod telemetry;
 pub mod tui;
 
-pub use cli::commands::connect::{DefaultProviderProcessSupervisor, ProviderProcessSupervisor};
 pub use config::{Config, ConfigDir, ProviderFileConfig, TelemetryFileConfig};
 pub use logger::{Logger, NoOpLogger, TracingLogger};
 pub use providers::{

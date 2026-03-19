@@ -1,15 +1,15 @@
 use super::{Error, Result};
 use crate::auth::{OneDriveAuthorizer, TokenResponse};
 use crate::cli::commands::config::ProviderType;
-use crate::cli::commands::connect::{ConnectCommand, DefaultProviderProcessSupervisor};
+use crate::cli::commands::connect::ConnectCommand;
 use crate::config::ConfigDir;
-use crate::{ProviderFileConfig, StorageConfig, TracingLogger};
+use crate::{ProviderFileConfig, StorageConfig};
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
     MouseEvent, MouseEventKind,
 };
 use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use crossterm::{cursor, execute};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -18,7 +18,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::{DefaultTerminal, Frame};
 use std::fs;
-use std::io::{Write, stdout};
+use std::io::{stdout, Write};
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -1443,9 +1443,7 @@ fn run_connect(name: Option<String>, all: bool, cd: &ConfigDir) -> Result<()> {
         all,
         config_dir: Some(cd.dir().to_path_buf()),
     };
-    let logger = TracingLogger::new();
-    cmd._execute(&DefaultProviderProcessSupervisor, &logger)
-        .map_err(Error::from)
+    cmd.execute().map_err(Error::from)
 }
 
 fn ensure_name_available(cd: &ConfigDir, name: &str, current_name: Option<&str>) -> Result<()> {
@@ -1630,16 +1628,12 @@ mod tests {
             .into_iter()
             .map(|line| line.to_string())
             .collect();
-        assert!(
-            local_rendered
-                .iter()
-                .any(|line| line.contains("storage.local.root"))
-        );
-        assert!(
-            !local_rendered
-                .iter()
-                .any(|line| line.contains("storage.onedrive.access_token"))
-        );
+        assert!(local_rendered
+            .iter()
+            .any(|line| line.contains("storage.local.root")));
+        assert!(!local_rendered
+            .iter()
+            .any(|line| line.contains("storage.onedrive.access_token")));
 
         draft.storage_type = ProviderType::OneDrive;
         let onedrive_lines = draft.lines(EditField::Name);
@@ -1653,11 +1647,9 @@ mod tests {
                 .any(|line| line.contains("storage.onedrive.access_token")
                     && line.contains("<unset>"))
         );
-        assert!(
-            !onedrive_rendered
-                .iter()
-                .any(|line| line.contains("storage.local.root"))
-        );
+        assert!(!onedrive_rendered
+            .iter()
+            .any(|line| line.contains("storage.local.root")));
     }
 
     #[test]
@@ -1741,11 +1733,9 @@ mod tests {
             .map(|line| line.to_string())
             .collect();
 
-        assert!(
-            rendered
-                .iter()
-                .any(|line| line.contains("l/o sign in to OneDrive"))
-        );
+        assert!(rendered
+            .iter()
+            .any(|line| line.contains("l/o sign in to OneDrive")));
     }
 
     #[test]
@@ -1758,11 +1748,9 @@ mod tests {
             .map(|line| line.to_string())
             .collect();
 
-        assert!(
-            rendered
-                .iter()
-                .any(|line| line.contains("Action: l or o signs in to OneDrive"))
-        );
+        assert!(rendered
+            .iter()
+            .any(|line| line.contains("Action: l or o signs in to OneDrive")));
     }
 
     #[test]

@@ -1,21 +1,13 @@
-use crate::config::{ConfigDir, Error as ConfigError};
+use crate::application::status::{
+    Application as StatusApplication, Error as StatusError, ServiceControl, StatusEntry,
+    StatusRepository, StatusUseCase,
+};
+use crate::application::types::ProviderStatusRow;
+use crate::config::ConfigDir;
+use crate::domain::provider::ProviderSpec;
 use clap::Args;
 use std::io::{self, Write};
 use std::path::PathBuf;
-
-/// Probes whether a named provider service responds on its control endpoint.
-pub(crate) trait ProviderDaemonProbe {
-    fn provider_daemon_ready(&self, provider_name: &str) -> bool;
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct DefaultProviderDaemonProbe;
-
-impl ProviderDaemonProbe for DefaultProviderDaemonProbe {
-    fn provider_daemon_ready(&self, provider_name: &str) -> bool {
-        crate::cli::provider_control::provider_daemon_ready(provider_name)
-    }
-}
 
 /// Show configured providers and whether each service responds on its control endpoint.
 #[derive(Args, Debug, Clone)]
@@ -28,45 +20,47 @@ pub struct StatusCommand {
 impl StatusCommand {
     pub fn execute(&self) -> crate::cli::Result<()> {
         let mut out = io::stdout().lock();
-        self._execute(&DefaultProviderDaemonProbe, &mut out)
+        let config_dir = self.config_dir();
+        let repository = ConfigRepository::new(config_dir);
+        let control = ProviderServiceControl;
+        let app = StatusApplication::new(&repository, &control);
+        self._execute(&app, &mut out)
     }
 
-    pub(crate) fn _execute<P: ProviderDaemonProbe, W: Write>(
+    pub(crate) fn _execute<U: StatusUseCase, W: Write>(
         &self,
-        probe: &P,
+        use_case: &U,
         out: &mut W,
     ) -> crate::cli::Result<()> {
-        let cd = self.config_dir();
-        let mut entries = cd.each_provider()?.peekable();
-        if entries.peek().is_none() {
+        let rows = use_case.list().map_err(map_status_error)?;
+        if rows.is_empty() {
             writeln!(out, "No configured providers.").map_err(write_cli_error)?;
             return Ok(());
         }
-        for (name, loaded) in entries {
-            Self::write_one_entry(probe, out, &name, loaded)?;
+
+        for row in rows {
+            Self::write_one_entry(out, row)?;
         }
         Ok(())
     }
 
-    fn write_one_entry<P: ProviderDaemonProbe, W: Write>(
-        probe: &P,
-        out: &mut W,
-        name: &str,
-        loaded: Result<crate::ProviderFileConfig, ConfigError>,
-    ) -> crate::cli::Result<()> {
-        match loaded {
-            Err(err) => {
-                writeln!(out, "{}", format_status_error(name, &err.to_string()))
-                    .map_err(write_cli_error)?;
-            }
-            Ok(cfg) => {
-                let storage = cfg.storage.label();
-                let path = cfg.path.display().to_string();
-                let running = probe.provider_daemon_ready(name);
-                writeln!(out, "{}", format_status_ok(name, storage, &path, running))
-                    .map_err(write_cli_error)?;
-            }
+    fn write_one_entry<W: Write>(out: &mut W, row: ProviderStatusRow) -> crate::cli::Result<()> {
+        if let Some(error) = row.error {
+            writeln!(out, "{}", format_status_error(&row.name, &error)).map_err(write_cli_error)?;
+            return Ok(());
         }
+
+        let storage = row.storage.unwrap_or_else(|| "unknown".to_owned());
+        let path = row
+            .path
+            .map(|value| value.display().to_string())
+            .unwrap_or_default();
+        writeln!(
+            out,
+            "{}",
+            format_status_ok(&row.name, &storage, &path, row.ready)
+        )
+        .map_err(write_cli_error)?;
         Ok(())
     }
 
@@ -75,6 +69,63 @@ impl StatusCommand {
             Some(path) => ConfigDir::new(path.clone()),
             None => ConfigDir::default(),
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ConfigRepository {
+    config_dir: ConfigDir,
+}
+
+impl ConfigRepository {
+    fn new(config_dir: ConfigDir) -> Self {
+        Self { config_dir }
+    }
+}
+
+impl StatusRepository for ConfigRepository {
+    fn list_entries(&self) -> crate::application::status::Result<Vec<StatusEntry>> {
+        let entries = self
+            .config_dir
+            .each_provider()?
+            .map(|(name, loaded)| match loaded {
+                Ok(config) => {
+                    let spec = ProviderSpec {
+                        name: name.clone(),
+                        path: config.path,
+                        storage: config.storage.into(),
+                        telemetry: config.telemetry.into(),
+                    };
+                    match spec.validate() {
+                        Ok(()) => StatusEntry::Loaded(spec),
+                        Err(error) => StatusEntry::Error {
+                            name,
+                            detail: error.to_string(),
+                        },
+                    }
+                }
+                Err(error) => StatusEntry::Error {
+                    name,
+                    detail: error.to_string(),
+                },
+            })
+            .collect();
+        Ok(entries)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct ProviderServiceControl;
+
+impl ServiceControl for ProviderServiceControl {
+    fn ready(&self, provider_name: &str) -> bool {
+        crate::cli::provider_control::provider_daemon_ready(provider_name)
+    }
+}
+
+fn map_status_error(error: StatusError) -> crate::cli::Error {
+    match error {
+        StatusError::Config(source) => crate::cli::Error::Config(source),
     }
 }
 
@@ -94,25 +145,26 @@ fn write_cli_error(err: std::io::Error) -> crate::cli::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ProviderFileConfig;
-    use crate::StorageConfig;
-    use std::path::PathBuf;
+    use crate::application::status::StatusUseCase;
 
-    #[derive(Clone, Copy)]
-    struct NeverRunningProbe;
+    #[derive(Default)]
+    struct StaticStatusUseCase {
+        rows: Vec<ProviderStatusRow>,
+    }
 
-    impl ProviderDaemonProbe for NeverRunningProbe {
-        fn provider_daemon_ready(&self, _provider_name: &str) -> bool {
-            false
+    impl StatusUseCase for StaticStatusUseCase {
+        fn list(&self) -> crate::application::status::Result<Vec<ProviderStatusRow>> {
+            Ok(self.rows.clone())
         }
     }
 
-    #[derive(Clone, Copy)]
-    struct AlwaysRunningProbe;
-
-    impl ProviderDaemonProbe for AlwaysRunningProbe {
-        fn provider_daemon_ready(&self, _provider_name: &str) -> bool {
-            true
+    fn local_row(name: &str, ready: bool) -> ProviderStatusRow {
+        ProviderStatusRow {
+            name: name.to_owned(),
+            storage: Some("local".to_owned()),
+            path: Some(PathBuf::from(format!("/mnt/{name}"))),
+            ready,
+            error: None,
         }
     }
 
@@ -140,104 +192,57 @@ mod tests {
 
     #[test]
     fn empty_config_dir_prints_message() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let cmd = StatusCommand {
-            config_dir: Some(tmp.path().to_path_buf()),
-        };
+        let cmd = StatusCommand { config_dir: None };
         let mut buf = Vec::new();
-        cmd._execute(&NeverRunningProbe, &mut buf).expect("status");
+        cmd._execute(&StaticStatusUseCase::default(), &mut buf)
+            .expect("status");
         let s = String::from_utf8(buf).expect("utf8");
         assert!(s.contains("No configured providers."));
     }
 
     #[test]
     fn probe_false_yields_not_running_lines() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let cd = ConfigDir::new(tmp.path().to_path_buf());
-        cd.write(
-            "alpha",
-            &ProviderFileConfig {
-                path: PathBuf::from("/mnt/a"),
-                storage: StorageConfig::Local {
-                    root: PathBuf::from("/data/a"),
-                },
-                telemetry: Default::default(),
-            },
-        )
-        .expect("write");
-
-        let cmd = StatusCommand {
-            config_dir: Some(tmp.path().to_path_buf()),
-        };
+        let cmd = StatusCommand { config_dir: None };
         let mut buf = Vec::new();
-        cmd._execute(&NeverRunningProbe, &mut buf).expect("status");
+        let use_case = StaticStatusUseCase {
+            rows: vec![local_row("alpha", false)],
+        };
+        cmd._execute(&use_case, &mut buf).expect("status");
         let s = String::from_utf8(buf).expect("utf8");
-        assert!(s.contains("- alpha (local, /mnt/a): not running"));
+        assert!(s.contains("- alpha (local, /mnt/alpha): not running"));
     }
 
     #[test]
     fn probe_true_yields_running() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let cd = ConfigDir::new(tmp.path().to_path_buf());
-        cd.write(
-            "beta",
-            &ProviderFileConfig {
-                path: PathBuf::from("/mnt/b"),
-                storage: StorageConfig::Local {
-                    root: PathBuf::from("/data/b"),
-                },
-                telemetry: Default::default(),
-            },
-        )
-        .expect("write");
-
-        let cmd = StatusCommand {
-            config_dir: Some(tmp.path().to_path_buf()),
-        };
+        let cmd = StatusCommand { config_dir: None };
         let mut buf = Vec::new();
-        cmd._execute(&AlwaysRunningProbe, &mut buf).expect("status");
+        let use_case = StaticStatusUseCase {
+            rows: vec![local_row("beta", true)],
+        };
+        cmd._execute(&use_case, &mut buf).expect("status");
         let s = String::from_utf8(buf).expect("utf8");
-        assert!(s.contains("- beta (local, /mnt/b): running"));
+        assert!(s.contains("- beta (local, /mnt/beta): running"));
     }
 
     #[test]
-    fn invalid_toml_still_lists_other_provider() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let cd = ConfigDir::new(tmp.path().to_path_buf());
-        std::fs::write(cd.dir().join("bad.toml"), "not valid toml {{{").expect("write bad");
-        cd.write(
-            "good",
-            &ProviderFileConfig {
-                path: PathBuf::from("/mnt/g"),
-                storage: StorageConfig::Local {
-                    root: PathBuf::from("/data/g"),
-                },
-                telemetry: Default::default(),
-            },
-        )
-        .expect("write good");
-
-        let cmd = StatusCommand {
-            config_dir: Some(tmp.path().to_path_buf()),
-        };
+    fn invalid_entry_still_lists_other_provider() {
+        let cmd = StatusCommand { config_dir: None };
         let mut buf = Vec::new();
-        cmd._execute(&NeverRunningProbe, &mut buf).expect("status");
+        let use_case = StaticStatusUseCase {
+            rows: vec![
+                ProviderStatusRow {
+                    name: "bad".to_owned(),
+                    storage: None,
+                    path: None,
+                    ready: false,
+                    error: Some("invalid TOML".to_owned()),
+                },
+                local_row("good", false),
+            ],
+        };
+        cmd._execute(&use_case, &mut buf).expect("status");
         let s = String::from_utf8(buf).expect("utf8");
-        assert!(
-            s.contains("- bad: error — "),
-            "expected error bullet for bad, got: {s}"
-        );
-        assert!(
-            s.contains("- good (local, /mnt/g): not running"),
-            "expected good line, got: {s}"
-        );
-        let err_detail = s
-            .lines()
-            .find(|l| l.starts_with("- bad: error — "))
-            .expect("error line");
-        assert!(
-            err_detail.len() > "- bad: error — ".len(),
-            "detail should be non-empty: {err_detail}"
-        );
+        assert!(s.contains("- bad: error — invalid TOML"));
+        assert!(s.contains("- good (local, /mnt/good): not running"));
     }
 }

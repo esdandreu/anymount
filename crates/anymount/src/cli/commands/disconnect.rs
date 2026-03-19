@@ -1,7 +1,8 @@
-use crate::cli::provider_control::try_disconnect_provider;
+use crate::application::disconnect::{
+    Application as DisconnectApplication, DisconnectRepository, DisconnectUseCase,
+    Error as DisconnectError, ServiceControl,
+};
 use crate::config::ConfigDir;
-use crate::Logger;
-use crate::TracingLogger;
 use clap::Args;
 use std::path::PathBuf;
 
@@ -23,38 +24,21 @@ pub struct DisconnectCommand {
 
 impl DisconnectCommand {
     pub fn execute(&self) -> crate::cli::Result<()> {
-        let logger = TracingLogger::new();
-        self._execute(try_disconnect_provider, &logger)
+        let config_dir = self.config_dir();
+        let repository = ConfigRepository::new(config_dir);
+        let control = ProviderServiceControl;
+        let app = DisconnectApplication::new(&repository, &control);
+        self._execute(&app)
     }
 
-    pub(crate) fn _execute<F, L>(&self, try_disconnect: F, logger: &L) -> crate::cli::Result<()>
+    pub(crate) fn _execute<U>(&self, use_case: &U) -> crate::cli::Result<()>
     where
-        F: Fn(&str) -> Result<(), String>,
-        L: Logger,
+        U: DisconnectUseCase,
     {
         if self.all {
-            let cd = self.config_dir();
-            let mut failures = Vec::new();
-            for (name, _) in cd.each_provider()? {
-                if let Err(error) = try_disconnect(&name) {
-                    failures.push(format!("{name}: {error}"));
-                } else {
-                    logger.info(format!("Disconnected (or already stopped) provider {name}"));
-                }
-            }
-            if failures.is_empty() {
-                Ok(())
-            } else {
-                Err(crate::cli::Error::DisconnectFailures {
-                    failures: failures.join(", "),
-                })
-            }
+            use_case.disconnect_all().map_err(map_disconnect_error)
         } else if let Some(name) = &self.name {
-            try_disconnect(name).map_err(|e| crate::cli::Error::DisconnectFailures {
-                failures: format!("{name}: {e}"),
-            })?;
-            logger.info(format!("Disconnected (or already stopped) provider {name}"));
-            Ok(())
+            use_case.disconnect_name(name).map_err(map_disconnect_error)
         } else {
             Err(crate::cli::Error::MissingDisconnectTarget)
         }
@@ -68,56 +52,122 @@ impl DisconnectCommand {
     }
 }
 
+#[derive(Debug, Clone)]
+struct ConfigRepository {
+    config_dir: ConfigDir,
+}
+
+impl ConfigRepository {
+    fn new(config_dir: ConfigDir) -> Self {
+        Self { config_dir }
+    }
+}
+
+impl DisconnectRepository for ConfigRepository {
+    fn list_names(&self) -> crate::application::disconnect::Result<Vec<String>> {
+        self.config_dir.list().map_err(Into::into)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct ProviderServiceControl;
+
+impl ServiceControl for ProviderServiceControl {
+    fn disconnect(&self, provider_name: &str) -> std::result::Result<(), String> {
+        crate::cli::provider_control::try_disconnect_provider(provider_name)
+    }
+}
+
+fn map_disconnect_error(error: DisconnectError) -> crate::cli::Error {
+    match error {
+        DisconnectError::Config(source) => crate::cli::Error::Config(source),
+        DisconnectError::DisconnectFailures { failures } => {
+            crate::cli::Error::DisconnectFailures { failures }
+        }
+        DisconnectError::Disconnect {
+            provider_name,
+            reason,
+        } => crate::cli::Error::DisconnectFailures {
+            failures: format!("{provider_name}: {reason}"),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::NoOpLogger;
+    use crate::application::disconnect::{DisconnectUseCase, Error as DisconnectError};
+    use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
-    #[test]
-    fn disconnect_all_uses_each_provider_order() {
-        let tmp = tempfile::tempdir().expect("tmp");
-        let cd = ConfigDir::new(tmp.path().to_path_buf());
-        cd.write(
-            "b",
-            &crate::ProviderFileConfig {
-                path: std::path::PathBuf::from("/b"),
-                storage: crate::StorageConfig::Local {
-                    root: std::path::PathBuf::from("/d/b"),
-                },
-                telemetry: Default::default(),
-            },
-        )
-        .expect("write");
-        cd.write(
-            "a",
-            &crate::ProviderFileConfig {
-                path: std::path::PathBuf::from("/a"),
-                storage: crate::StorageConfig::Local {
-                    root: std::path::PathBuf::from("/d/a"),
-                },
-                telemetry: Default::default(),
-            },
-        )
-        .expect("write");
+    #[derive(Default)]
+    struct RecordingUseCase {
+        calls: Arc<Mutex<Vec<String>>>,
+        disconnect_name_errors: HashMap<String, String>,
+        disconnect_all_error: Option<String>,
+    }
 
-        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
-        let calls_cb = Arc::clone(&calls);
+    impl RecordingUseCase {
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().expect("calls lock").clone()
+        }
+
+        fn with_name_error(mut self, provider_name: &str, reason: &str) -> Self {
+            self.disconnect_name_errors
+                .insert(provider_name.to_owned(), reason.to_owned());
+            self
+        }
+
+        fn with_all_error(mut self, failures: &str) -> Self {
+            self.disconnect_all_error = Some(failures.to_owned());
+            self
+        }
+    }
+
+    impl DisconnectUseCase for RecordingUseCase {
+        fn disconnect_name(
+            &self,
+            provider_name: &str,
+        ) -> crate::application::disconnect::Result<()> {
+            self.calls
+                .lock()
+                .expect("calls lock")
+                .push(format!("name:{provider_name}"));
+            match self.disconnect_name_errors.get(provider_name) {
+                Some(reason) => Err(DisconnectError::Disconnect {
+                    provider_name: provider_name.to_owned(),
+                    reason: reason.clone(),
+                }),
+                None => Ok(()),
+            }
+        }
+
+        fn disconnect_all(&self) -> crate::application::disconnect::Result<()> {
+            self.calls
+                .lock()
+                .expect("calls lock")
+                .push("all".to_owned());
+            match &self.disconnect_all_error {
+                Some(failures) => Err(DisconnectError::DisconnectFailures {
+                    failures: failures.clone(),
+                }),
+                None => Ok(()),
+            }
+        }
+    }
+
+    #[test]
+    fn disconnect_all_uses_application_use_case() {
         let cmd = DisconnectCommand {
             name: None,
             all: true,
-            config_dir: Some(tmp.path().to_path_buf()),
+            config_dir: None,
         };
-        cmd._execute(
-            move |n| {
-                calls_cb.lock().expect("lock").push(n.to_owned());
-                Ok(())
-            },
-            &NoOpLogger,
-        )
-        .expect("disconnect");
 
-        assert_eq!(*calls.lock().expect("lock"), vec!["a", "b"]);
+        let use_case = RecordingUseCase::default();
+        cmd._execute(&use_case).expect("disconnect should succeed");
+
+        assert_eq!(use_case.calls(), vec!["all"]);
     }
 
     #[test]
@@ -127,56 +177,38 @@ mod tests {
             all: false,
             config_dir: None,
         };
+
         let err = cmd
-            ._execute(|_| Ok(()), &NoOpLogger)
+            ._execute(&RecordingUseCase::default())
             .expect_err("missing target");
         assert!(matches!(err, crate::cli::Error::MissingDisconnectTarget));
     }
 
     #[test]
     fn disconnect_all_aggregates_failures() {
-        let tmp = tempfile::tempdir().expect("tmp");
-        let cd = ConfigDir::new(tmp.path().to_path_buf());
-        cd.write(
-            "ok",
-            &crate::ProviderFileConfig {
-                path: std::path::PathBuf::from("/o"),
-                storage: crate::StorageConfig::Local {
-                    root: std::path::PathBuf::from("/d/o"),
-                },
-                telemetry: Default::default(),
-            },
-        )
-        .expect("write");
-        cd.write(
-            "bad",
-            &crate::ProviderFileConfig {
-                path: std::path::PathBuf::from("/x"),
-                storage: crate::StorageConfig::Local {
-                    root: std::path::PathBuf::from("/d/x"),
-                },
-                telemetry: Default::default(),
-            },
-        )
-        .expect("write");
-
         let cmd = DisconnectCommand {
             name: None,
             all: true,
-            config_dir: Some(tmp.path().to_path_buf()),
+            config_dir: None,
         };
+
         let err = cmd
-            ._execute(
-                |n| {
-                    if n == "bad" {
-                        Err("nope".to_owned())
-                    } else {
-                        Ok(())
-                    }
-                },
-                &NoOpLogger,
-            )
+            ._execute(&RecordingUseCase::default().with_all_error("bad: nope"))
             .expect_err("partial failure");
+        assert!(matches!(err, crate::cli::Error::DisconnectFailures { .. }));
+    }
+
+    #[test]
+    fn disconnect_name_maps_single_failure() {
+        let cmd = DisconnectCommand {
+            name: Some("demo".to_owned()),
+            all: false,
+            config_dir: None,
+        };
+
+        let err = cmd
+            ._execute(&RecordingUseCase::default().with_name_error("demo", "nope"))
+            .expect_err("disconnect should fail");
         assert!(matches!(err, crate::cli::Error::DisconnectFailures { .. }));
     }
 }
