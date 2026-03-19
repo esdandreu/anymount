@@ -143,6 +143,21 @@ impl ConfigDir {
         Ok(names)
     }
 
+    /// Walk configured providers in sorted name order.
+    ///
+    /// The outer [`Result`] fails only when the directory cannot be listed. Each
+    /// item pairs the provider name with the result of reading its `.toml` file.
+    pub fn each_provider(
+        &self,
+    ) -> Result<impl Iterator<Item = (String, Result<ProviderFileConfig>)>> {
+        let names = self.list()?;
+        let this = self.clone();
+        Ok(names.into_iter().map(move |name| {
+            let loaded = this.read(&name);
+            (name, loaded)
+        }))
+    }
+
     /// Read a single provider config by name.
     pub fn read(&self, name: &str) -> Result<ProviderFileConfig> {
         let path = self.file_path(name);
@@ -172,11 +187,10 @@ impl ConfigDir {
 
     /// Load all provider configs from the directory.
     pub fn load_all(&self) -> Result<Config> {
-        let names = self.list()?;
-        let mut providers = Vec::with_capacity(names.len());
-        for name in &names {
-            providers.push(self.read(name)?);
-        }
+        let providers = self
+            .each_provider()?
+            .map(|(_name, loaded)| loaded)
+            .collect::<std::result::Result<Vec<_>, Error>>()?;
         Ok(Config { providers })
     }
 
@@ -270,6 +284,19 @@ mod tests {
         cd.write("alpha", &local_config()).expect("write failed");
         let names = cd.list().expect("list failed");
         assert_eq!(names, vec!["alpha", "bravo"]);
+    }
+
+    #[test]
+    fn each_provider_yields_sorted_name_and_config() {
+        let (_tmp, cd) = tmp_config_dir();
+        cd.write("bravo", &local_config()).expect("write failed");
+        cd.write("alpha", &onedrive_config()).expect("write failed");
+        let entries: Vec<_> = cd.each_provider().expect("each_provider").collect();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].0, "alpha");
+        assert!(entries[0].1.as_ref().expect("alpha load").storage.label() == "onedrive");
+        assert_eq!(entries[1].0, "bravo");
+        assert!(entries[1].1.as_ref().expect("bravo load").storage.label() == "local");
     }
 
     #[test]

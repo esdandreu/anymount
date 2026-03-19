@@ -26,6 +26,16 @@ pub enum StorageConfig {
     },
 }
 
+impl StorageConfig {
+    /// Short label for CLI and status output (`local`, `onedrive`, …).
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Local { .. } => "local",
+            Self::OneDrive { .. } => "onedrive",
+        }
+    }
+}
+
 pub trait ProvidersConfiguration {
     fn providers(&self) -> Vec<&impl ProviderConfiguration>;
 }
@@ -234,6 +244,23 @@ mod tests {
         fn providers(&self) -> Vec<&impl ProviderConfiguration> {
             self.providers.iter().collect::<Vec<_>>()
         }
+    }
+
+    #[test]
+    fn storage_config_label_matches_status_nomenclature() {
+        let local = StorageConfig::Local {
+            root: PathBuf::from("/data"),
+        };
+        assert_eq!(local.label(), "local");
+        let od = StorageConfig::OneDrive {
+            root: PathBuf::from("/"),
+            endpoint: "https://graph.microsoft.com/v1.0".to_owned(),
+            access_token: None,
+            refresh_token: None,
+            client_id: None,
+            token_expiry_buffer_secs: None,
+        };
+        assert_eq!(od.label(), "onedrive");
     }
 
     #[test]
