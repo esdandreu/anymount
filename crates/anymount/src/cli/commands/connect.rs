@@ -1,18 +1,12 @@
 use crate::Logger;
 use crate::TracingLogger;
+use crate::cli::provider_control::provider_daemon_ready;
 use crate::config::ConfigDir;
-use crate::daemon::messages::ControlMessage;
 use clap::Args;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
-
-#[cfg(unix)]
-use crate::daemon::control_unix::UnixControl;
-
-#[cfg(target_os = "windows")]
-use crate::daemon::control_windows::WindowsControl;
 
 /// Connect command ensures configured provider processes are running.
 #[derive(Args, Debug, Clone)]
@@ -96,7 +90,7 @@ impl ProviderProcessSupervisor for DefaultProviderProcessSupervisor {
     where
         L: Logger + 'static,
     {
-        if is_provider_running(provider_name)? {
+        if provider_daemon_ready(provider_name) {
             logger.info(format!("Provider {provider_name} is already running"));
             return Ok(());
         }
@@ -104,29 +98,6 @@ impl ProviderProcessSupervisor for DefaultProviderProcessSupervisor {
         let mut child = spawn_provider_process(provider_name, config_dir.dir())?;
         wait_until_ready(provider_name, &mut child, logger)
     }
-}
-
-#[cfg(unix)]
-fn is_provider_running(provider_name: &str) -> crate::cli::Result<bool> {
-    match UnixControl.send(provider_name, ControlMessage::Ping) {
-        Ok(ControlMessage::Ready) => Ok(true),
-        Ok(_) => Ok(false),
-        Err(_) => Ok(false),
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn is_provider_running(provider_name: &str) -> crate::cli::Result<bool> {
-    match WindowsControl.send(provider_name, ControlMessage::Ping) {
-        Ok(ControlMessage::Ready) => Ok(true),
-        Ok(_) => Ok(false),
-        Err(_) => Ok(false),
-    }
-}
-
-#[cfg(not(any(unix, target_os = "windows")))]
-fn is_provider_running(_provider_name: &str) -> crate::cli::Result<bool> {
-    Ok(false)
 }
 
 fn spawn_provider_process(
@@ -170,7 +141,7 @@ fn wait_until_ready<L: Logger>(
 
         match next_ready_action(
             provider_name,
-            is_provider_running(provider_name)?,
+            provider_daemon_ready(provider_name),
             child_status,
             Instant::now() >= deadline,
         ) {

@@ -1,0 +1,13 @@
+---
+description: Prefer mise for builds, tests, and project tasks
+alwaysApply: true
+---
+
+# Task execution
+
+Use **mise** as the preferred way to run project tasks when `.mise.toml` defines them.
+
+- Run tests: `mise run test`
+- Build: `mise run build`
+- App CLI: `mise run cli -- <args>`
+- Prefer `mise run <task>` over ad-hoc `cargo`/`npm` commands unless no task exists or the user asks otherwise.
