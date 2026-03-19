@@ -4,7 +4,9 @@
 
 **Goal:** Add `anymount disconnect` so users can stop background provider daemons
 cleanly via the existing control IPC (`Shutdown` → `Ack`), with **idempotent**
-semantics and **`ConfigDir::each_provider()`** for `--all`.
+semantics and **`ConfigDir::each_provider()`** for `--all`. **Windows and Unix
+must both support** the same control protocol and behavior (no Windows-only
+stub for this feature).
 
 ## Summary
 
@@ -26,8 +28,12 @@ directory logic.
 ## Relation to prior work
 
 [`2026-03-18-provider-daemon-design.md`](2026-03-18-provider-daemon-design.md)
-defines `Shutdown` / `Ack` for future disconnect; the Unix `provide` control
-server already implements this path.
+defines `Shutdown` / `Ack` for disconnect; the **Unix** `provide` control server
+already implements `Ping` / `Ready` and `Shutdown` / `Ack`. **Windows** must
+gain a matching control server and client so `connect`, `status`, and
+`disconnect` behave the same on both platforms (today `WindowsControl` is still
+a placeholder — this spec assumes that gap is closed as part of delivering
+`disconnect`, or immediately before it in the same effort).
 
 [`2026-03-19-provider-status-design.md`](2026-03-19-provider-status-design.md)
 shares config scope and naming; `disconnect` complements `status` (stop vs
@@ -52,15 +58,33 @@ observe).
     clean shutdown as specified).
 - **`--all`:** continue after per-name successes; aggregate **failures** into a
   single CLI error if any name failed (same spirit as `connect --all`).
-- Shared control client helper (extend or complement `cli::provider_control`) for
-  `Ping` / `Shutdown` round-trips on Unix.
+- Shared control client helper (extend or complement `cli::provider_control`)
+  for `Ping` / `Shutdown` round-trips, using the same **`cfg`** split as today
+  (`UnixControl` / `WindowsControl`) behind one API.
 
 **Out of scope**
 
 - Non-config “orphan” processes (no `each_provider()` row).
-- Windows until `WindowsControl` supports the same protocol (command may return
-  **not supported** with a clear message).
 - `disconnect` for inline `provide` without `--name` (no named endpoint).
+
+### Windows support (required)
+
+- **Same messages and semantics** as Unix: `Ping` → `Ready`, `Shutdown` → `Ack`,
+  then internal `DaemonMessage::Shutdown`; invalid / unsupported messages →
+  `Error` reply where the Unix server does today.
+- **Transport:** named pipe (or equivalent) wired to the same **provider name →
+  endpoint** derivation as `daemon::paths::provider_endpoint` / existing Windows
+  naming (e.g. `.pipe` metadata path must map to a real pipe name clients and
+  the `provide` server agree on — exact Win32 naming is an implementation
+  detail, but **behavior** must match Unix).
+- **`provide --name` on Windows** must run a control loop equivalent to the Unix
+  `spawn_control_server` thread (accept client, read one message, reply, handle
+  shutdown and ack, stop listening).
+- **`connect` / `status` on Windows** must use the implemented `WindowsControl`
+  so disconnect is not the only working client.
+- **Tests:** add Windows-appropriate tests (or shared tests behind `cfg`) so
+  client/server round-trip for `Ping` and `Shutdown` is covered on both
+  platforms where CI can run them.
 
 ## User-facing behavior
 
@@ -95,11 +119,12 @@ single info line under `--verbose` only).
 - **`cli/commands/disconnect.rs`:** args, `execute`, `_execute` with injectable
   control client for tests (same discipline as `connect` / `status`).
 - **`cli::provider_control` (or adjacent module):** functions such as
-  idempotent disconnect by name, built on `UnixControl::send` and
-  `ControlMessage` variants.
-- **Tests:** unit tests for idempotent branches (unreachable endpoint, not
-  `Ready`, `Ack` after shutdown); integration-style test with local Unix listener
-  if practical.
+  idempotent disconnect by name, built on `UnixControl::send` /
+  `WindowsControl::send` and `ControlMessage` variants.
+- **`daemon/control_windows.rs` + `provide` Windows control server:** implement
+  full protocol parity (prerequisite for `disconnect` on Windows).
+- **Tests:** unit tests for idempotent branches; integration-style round-trips
+  on **Unix** (listener) and **Windows** (named pipe) per platform CI.
 
 ## Idempotency (normative)
 
