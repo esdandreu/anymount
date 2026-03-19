@@ -6,17 +6,22 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use thiserror::Error;
 
 /// Provider domain validation failures.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum Error {
     /// The provider mount path is empty.
+    #[error("provider mount path is missing")]
     MissingMountPath,
     /// The local storage root is empty.
+    #[error("local storage root is missing")]
     MissingLocalRoot,
     /// The OneDrive root is empty.
+    #[error("OneDrive root is missing")]
     MissingOneDriveRoot,
     /// The OneDrive config has no access or refresh token.
+    #[error("OneDrive token material is missing")]
     MissingOneDriveTokenMaterial,
 }
 

@@ -1,3 +1,7 @@
+use crate::domain::provider::{
+    OtlpSpec as DomainOtlpSpec, OtlpTransport as DomainOtlpTransport, ProviderSpec, StorageSpec,
+    TelemetrySpec,
+};
 use crate::{ProviderConfiguration, ProvidersConfiguration, StorageConfig};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -54,6 +58,13 @@ pub enum Error {
 
     #[error("non-utf8 filename: {path}")]
     NonUtf8FileName { path: PathBuf },
+
+    #[error("invalid provider spec {name}: {source}")]
+    InvalidProviderSpec {
+        name: String,
+        #[source]
+        source: crate::domain::provider::Error,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -110,6 +121,129 @@ impl ProviderConfiguration for ProviderFileConfig {
 
     fn storage_config(&self) -> StorageConfig {
         self.storage.clone()
+    }
+}
+
+impl ProviderFileConfig {
+    fn into_spec(self, name: String) -> ProviderSpec {
+        ProviderSpec {
+            name,
+            path: self.path,
+            storage: self.storage.into(),
+            telemetry: self.telemetry.into(),
+        }
+    }
+
+    fn from_spec(spec: &ProviderSpec) -> Self {
+        Self {
+            path: spec.path.clone(),
+            storage: spec.storage.clone().into(),
+            telemetry: spec.telemetry.clone().into(),
+        }
+    }
+}
+
+impl From<StorageConfig> for StorageSpec {
+    fn from(value: StorageConfig) -> Self {
+        match value {
+            StorageConfig::Local { root } => Self::Local { root },
+            StorageConfig::OneDrive {
+                root,
+                endpoint,
+                access_token,
+                refresh_token,
+                client_id,
+                token_expiry_buffer_secs,
+            } => Self::OneDrive {
+                root,
+                endpoint,
+                access_token,
+                refresh_token,
+                client_id,
+                token_expiry_buffer_secs,
+            },
+        }
+    }
+}
+
+impl From<StorageSpec> for StorageConfig {
+    fn from(value: StorageSpec) -> Self {
+        match value {
+            StorageSpec::Local { root } => Self::Local { root },
+            StorageSpec::OneDrive {
+                root,
+                endpoint,
+                access_token,
+                refresh_token,
+                client_id,
+                token_expiry_buffer_secs,
+            } => Self::OneDrive {
+                root,
+                endpoint,
+                access_token,
+                refresh_token,
+                client_id,
+                token_expiry_buffer_secs,
+            },
+        }
+    }
+}
+
+impl From<TelemetryFileConfig> for TelemetrySpec {
+    fn from(value: TelemetryFileConfig) -> Self {
+        Self {
+            otlp: value.otlp.map(Into::into),
+        }
+    }
+}
+
+impl From<TelemetrySpec> for TelemetryFileConfig {
+    fn from(value: TelemetrySpec) -> Self {
+        Self {
+            otlp: value.otlp.map(Into::into),
+        }
+    }
+}
+
+impl From<OtlpTelemetryConfig> for DomainOtlpSpec {
+    fn from(value: OtlpTelemetryConfig) -> Self {
+        Self {
+            enabled: value.enabled,
+            endpoint: value.endpoint,
+            protocol: value.protocol.map(Into::into),
+            headers: value.headers,
+            resource_attributes: value.resource_attributes,
+        }
+    }
+}
+
+impl From<DomainOtlpSpec> for OtlpTelemetryConfig {
+    fn from(value: DomainOtlpSpec) -> Self {
+        Self {
+            enabled: value.enabled,
+            endpoint: value.endpoint,
+            protocol: value.protocol.map(Into::into),
+            headers: value.headers,
+            resource_attributes: value.resource_attributes,
+        }
+    }
+}
+
+impl From<OtlpTransport> for DomainOtlpTransport {
+    fn from(value: OtlpTransport) -> Self {
+        match value {
+            OtlpTransport::HttpProtobuf => Self::HttpProtobuf,
+            OtlpTransport::Grpc => Self::Grpc,
+        }
+    }
+}
+
+impl From<DomainOtlpTransport> for OtlpTransport {
+    fn from(value: DomainOtlpTransport) -> Self {
+        match value {
+            DomainOtlpTransport::HttpProtobuf => Self::HttpProtobuf,
+            DomainOtlpTransport::Grpc => Self::Grpc,
+        }
     }
 }
 
@@ -233,6 +367,35 @@ impl ConfigDir {
         Ok(Config { providers })
     }
 
+    /// Read a single provider spec by name.
+    pub fn read_spec(&self, name: &str) -> Result<ProviderSpec> {
+        let spec = self.read(name)?.into_spec(name.to_owned());
+        spec.validate()
+            .map_err(|source| Error::InvalidProviderSpec {
+                name: name.to_owned(),
+                source,
+            })?;
+        Ok(spec)
+    }
+
+    /// Write (create or overwrite) a provider spec.
+    pub fn write_spec(&self, spec: &ProviderSpec) -> Result<()> {
+        spec.validate()
+            .map_err(|source| Error::InvalidProviderSpec {
+                name: spec.name.clone(),
+                source,
+            })?;
+        self.write(&spec.name, &ProviderFileConfig::from_spec(spec))
+    }
+
+    /// Load all provider specs from the directory.
+    pub fn load_all_specs(&self) -> Result<Vec<ProviderSpec>> {
+        self.list()?
+            .into_iter()
+            .map(|name| self.read_spec(&name))
+            .collect()
+    }
+
     fn file_path(&self, name: &str) -> PathBuf {
         self.dir.join(format!("{name}.toml"))
     }
@@ -250,11 +413,23 @@ pub fn default_config_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::provider::{ProviderSpec, StorageSpec, TelemetrySpec};
 
     fn tmp_config_dir() -> (tempfile::TempDir, ConfigDir) {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
         let cd = ConfigDir::new(tmp.path().to_path_buf());
         (tmp, cd)
+    }
+
+    fn local_provider_spec(name: &str) -> ProviderSpec {
+        ProviderSpec {
+            name: name.to_owned(),
+            path: PathBuf::from(format!("/mnt/{name}")),
+            storage: StorageSpec::Local {
+                root: PathBuf::from(format!("/data/{name}")),
+            },
+            telemetry: TelemetrySpec::default(),
+        }
     }
 
     fn local_config() -> ProviderFileConfig {
@@ -452,5 +627,29 @@ mod tests {
             ProviderConfiguration::path(&cfg),
             PathBuf::from("/mnt/local")
         );
+    }
+
+    #[test]
+    fn write_spec_round_trips_provider_spec() {
+        let (_tmp, cd) = tmp_config_dir();
+        let spec = local_provider_spec("alpha");
+
+        cd.write_spec(&spec).expect("write should work");
+
+        let loaded = cd.read_spec("alpha").expect("read should work");
+        assert_eq!(loaded, spec);
+    }
+
+    #[test]
+    fn load_all_specs_preserves_provider_names() {
+        let (_tmp, cd) = tmp_config_dir();
+        cd.write_spec(&local_provider_spec("alpha"))
+            .expect("write alpha");
+        cd.write_spec(&local_provider_spec("beta"))
+            .expect("write beta");
+
+        let specs = cd.load_all_specs().expect("load should work");
+        let names = specs.into_iter().map(|spec| spec.name).collect::<Vec<_>>();
+        assert_eq!(names, vec!["alpha".to_owned(), "beta".to_owned()]);
     }
 }
