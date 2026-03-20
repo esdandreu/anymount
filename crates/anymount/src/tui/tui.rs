@@ -20,10 +20,9 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use crossterm::{cursor, execute};
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::prelude::Stylize;
 use ratatui::style::{Color, Style};
-use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 use std::fs;
@@ -35,7 +34,6 @@ use std::time::{Duration, Instant};
 
 const COLOR_CONNECTED: Color = Color::Green;
 const COLOR_DISCONNECTED: Color = Color::DarkGray;
-const COLOR_SELECTED: Color = Color::White;
 const COLOR_ROW_BG_NORMAL: Color = Color::Reset;
 const COLOR_ROW_BG_HOVERED: Color = Color::Rgb(30, 40, 60);
 const COLOR_ROW_BG_SELECTED: Color = Color::Rgb(45, 66, 99);
@@ -53,12 +51,6 @@ impl ProviderEntry {
     fn is_connected(&self) -> bool {
         crate::cli::provider_control::provider_daemon_ready(&self.name)
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ConnectionState {
-    Connected,
-    Disconnected,
 }
 
 #[derive(Debug, Clone)]
@@ -130,16 +122,6 @@ impl AppState {
 
     fn selected_provider(&self) -> Option<&ProviderEntry> {
         self.providers.get(self.selected)
-    }
-
-    fn hovered_name(&self) -> Option<&str> {
-        self.providers
-            .get(self.hovered)
-            .map(|provider| provider.name.as_str())
-    }
-
-    fn hovered_provider(&self) -> Option<&ProviderEntry> {
-        self.providers.get(self.hovered)
     }
 
     fn select_next(&mut self) {
@@ -296,23 +278,6 @@ impl EditField {
             Self::OneDriveRefreshToken => "storage.onedrive.refresh_token",
             Self::OneDriveClientId => "storage.onedrive.client_id",
             Self::OneDriveTokenExpiryBufferSecs => "storage.onedrive.token_expiry_buffer_secs",
-        }
-    }
-
-    fn description(self) -> &'static str {
-        match self {
-            Self::Name => "Provider filename without .toml.",
-            Self::Path => "Mount path where this provider is exposed locally.",
-            Self::StorageType => "Storage backend kind.",
-            Self::LocalRoot => "Local directory root exposed by the provider.",
-            Self::OneDriveRoot => "OneDrive path used as root (for example '/').",
-            Self::OneDriveEndpoint => "Microsoft Graph API base endpoint.",
-            Self::OneDriveAccessToken => "Optional short-lived access token.",
-            Self::OneDriveRefreshToken => "Refresh token used to obtain new access tokens.",
-            Self::OneDriveClientId => "OAuth client_id. Empty uses built-in default app.",
-            Self::OneDriveTokenExpiryBufferSecs => {
-                "Seconds before expiry to refresh token proactively."
-            }
         }
     }
 }
@@ -664,14 +629,6 @@ impl EditSession {
             }
         }
     }
-
-    fn context_line(&self) -> String {
-        format!(
-            "Field: {} - {}",
-            self.selected_field().label(),
-            self.selected_field().description()
-        )
-    }
 }
 
 enum EditAction {
@@ -946,83 +903,6 @@ fn run_loop(terminal: &mut DefaultTerminal, cd: &ConfigDir, state: &mut AppState
     }
 
     Ok(())
-}
-
-#[derive(Debug, Clone, Copy)]
-struct UiRects {
-    providers: Rect,
-    editor_fields: Option<Rect>,
-    editor_context: Option<Rect>,
-}
-
-fn ui_rects(area: Rect, mode: &UiMode) -> UiRects {
-    let sections = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(8),
-            Constraint::Length(4),
-        ])
-        .split(area);
-    let main = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
-        .split(sections[1]);
-    if matches!(mode, UiMode::Edit(_)) {
-        let editor = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
-            .split(main[1]);
-        UiRects {
-            providers: main[0],
-            editor_fields: Some(editor[0]),
-            editor_context: Some(editor[1]),
-        }
-    } else {
-        UiRects {
-            providers: main[0],
-            editor_fields: None,
-            editor_context: None,
-        }
-    }
-}
-
-fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
-    x >= rect.x
-        && x < rect.x.saturating_add(rect.width)
-        && y >= rect.y
-        && y < rect.y.saturating_add(rect.height)
-}
-
-fn content_row(rect: Rect, y: u16) -> Option<usize> {
-    if rect.height <= 2 {
-        return None;
-    }
-    let start = rect.y.saturating_add(1);
-    let end = rect.y.saturating_add(rect.height.saturating_sub(1));
-    if y < start || y >= end {
-        return None;
-    }
-    Some(usize::from(y.saturating_sub(start)))
-}
-
-fn choice_provider_type_from_context_row(
-    session: &EditSession,
-    row: usize,
-) -> Option<ProviderType> {
-    if !matches!(session.selected_field(), EditField::StorageType) {
-        return None;
-    }
-    let choices_offset = 3usize;
-    if row < choices_offset {
-        return None;
-    }
-    let choice_row = row - choices_offset;
-    let choices = EditSession::storage_choices();
-    if choice_row >= choices.len() {
-        return None;
-    }
-    Some(choices[choice_row])
 }
 
 fn handle_mouse_event(
@@ -1584,27 +1464,6 @@ fn draw_delete_dialog(frame: &mut Frame, name: &str) {
     );
 }
 
-fn help_lines(state: &AppState) -> Vec<Line<'static>> {
-    let mut lines = match state.mode {
-        UiMode::Browse => vec![Line::from("j↑ select ↓k  c connect  d disconnect  ↵ edit")],
-        UiMode::Edit(ref session) => {
-            let mut line = String::from("j↑ ⇓↓ select  type to edit  Tab complete  Esc back  c save  d disconnect  x delete");
-            if matches!(session.draft.storage_type, ProviderType::OneDrive) {
-                line.push_str("  l/o OneDrive auth");
-            }
-            vec![Line::from(line)]
-        }
-        UiMode::DeleteConfirm { .. } => {
-            vec![Line::from("Delete confirmation: y confirm  n/Esc cancel")]
-        }
-    };
-    lines.push(Line::from(vec![
-        Span::styled("Status: ", Style::default().fg(COLOR_CONNECTED)),
-        Span::raw(state.status.clone()),
-    ]));
-    lines
-}
-
 fn is_onedrive_auth_key(code: KeyCode) -> bool {
     matches!(
         code,
@@ -1642,6 +1501,19 @@ where
     Ok(Some(name))
 }
 
+fn run_connect<U>(use_case: &U, name: Option<String>, all: bool) -> Result<()>
+where
+    U: ConnectUseCase,
+{
+    if all {
+        use_case.connect_all().map_err(Error::from)
+    } else if let Some(name) = name {
+        use_case.connect_name(&name).map_err(Error::from)
+    } else {
+        Ok(())
+    }
+}
+
 fn connect_selected_provider_for_config(
     cd: &ConfigDir,
     state: &AppState,
@@ -1654,30 +1526,6 @@ fn connect_selected_provider_for_config(
         let app = ConnectApplication::new(cd.dir(), &repository, &control, &launcher);
         connect_selected_provider(&app, state)
     })
-}
-
-fn connect_all_providers(cd: &ConfigDir) -> Result<()> {
-    suspend_terminal(|| {
-        let logger = TracingLogger::new();
-        let repository = TuiConnectRepository::new(cd.clone());
-        let control = TuiServiceControl;
-        let launcher = ProcessServiceLauncher::new(logger);
-        let app = ConnectApplication::new(cd.dir(), &repository, &control, &launcher);
-        run_connect(&app, None, true)
-    })
-}
-
-fn run_connect<U>(use_case: &U, name: Option<String>, all: bool) -> Result<()>
-where
-    U: ConnectUseCase,
-{
-    if all {
-        use_case.connect_all().map_err(Error::from)
-    } else if let Some(name) = name {
-        use_case.connect_name(&name).map_err(Error::from)
-    } else {
-        Ok(())
-    }
 }
 
 fn disconnect_selected_provider(_cd: &ConfigDir, state: &AppState) -> Result<Option<String>> {
@@ -2111,36 +1959,6 @@ mod tests {
     }
 
     #[test]
-    fn edit_help_mentions_onedrive_login_when_editing_onedrive() {
-        let session = EditSession {
-            original_name: None,
-            draft: EditDraft {
-                storage_type: ProviderType::OneDrive,
-                ..EditDraft::new_empty("new-provider".to_owned())
-            },
-            selected_field: EditField::Name,
-            mode: EditMode::Navigate,
-        };
-        let state = AppState {
-            providers: Vec::new(),
-            selected: 0,
-            hovered: 0,
-            is_keyboard_mode: true,
-            status: String::new(),
-            mode: UiMode::Edit(session),
-        };
-
-        let rendered: Vec<String> = help_lines(&state)
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect();
-
-        assert!(rendered
-            .iter()
-            .any(|line| line.contains("l/o OneDrive auth")));
-    }
-
-    #[test]
     fn edit_text_requires_enter_before_typing() {
         let (_tmp, cd) = tmp_config_dir();
         let mut session = EditSession::new_for_add("provider-1".to_owned());
@@ -2221,29 +2039,5 @@ mod tests {
         let input = tmp.path().join("z").display().to_string();
         let output = complete_filesystem_path(&input).expect("completion failed");
         assert!(matches!(output, PathCompletion::NoMatch));
-    }
-
-    #[test]
-    fn choice_mapping_from_context_row_works_for_storage_type() {
-        let mut session = EditSession::new_for_add("provider-1".to_owned());
-        session.selected_field = EditField::StorageType;
-        assert_eq!(
-            choice_provider_type_from_context_row(&session, 3),
-            Some(ProviderType::Local)
-        );
-        assert_eq!(
-            choice_provider_type_from_context_row(&session, 4),
-            Some(ProviderType::OneDrive)
-        );
-        assert_eq!(choice_provider_type_from_context_row(&session, 2), None);
-    }
-
-    #[test]
-    fn content_row_skips_panel_borders() {
-        let rect = Rect::new(10, 5, 30, 6);
-        assert_eq!(content_row(rect, 5), None);
-        assert_eq!(content_row(rect, 6), Some(0));
-        assert_eq!(content_row(rect, 9), Some(3));
-        assert_eq!(content_row(rect, 10), None);
     }
 }
