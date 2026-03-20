@@ -32,15 +32,40 @@ use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
-const COLOR_BORDER: Color = Color::Blue;
-const COLOR_HIGHLIGHT: Color = Color::Yellow;
-const COLOR_CONTEXT: Color = Color::Cyan;
-const COLOR_STATUS: Color = Color::Green;
+const COLOR_CONNECTED: Color = Color::Green;
+const COLOR_DISCONNECTED: Color = Color::DarkGray;
+const COLOR_SELECTED: Color = Color::White;
+const COLOR_ROW_BG_NORMAL: Color = Color::Reset;
+const COLOR_ROW_BG_HOVERED: Color = Color::Rgb {
+    r: 30,
+    g: 40,
+    b: 60,
+};
+const COLOR_ROW_BG_SELECTED: Color = Color::Rgb {
+    r: 45,
+    g: 66,
+    b: 99,
+};
+const COLOR_ROW_3D_SHADOW: Color = Color::DarkGray;
+const COLOR_BUTTON: Color = Color::Cyan;
+const COLOR_BUTTON_TEXT: Color = Color::Black;
 
 #[derive(Debug, Clone)]
 struct ProviderEntry {
     name: String,
     config: DriverFileConfig,
+}
+
+impl ProviderEntry {
+    fn is_connected(&self) -> bool {
+        crate::cli::provider_control::provider_daemon_ready(&self.name)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectionState {
+    Connected,
+    Disconnected,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +79,8 @@ enum UiMode {
 struct AppState {
     providers: Vec<ProviderEntry>,
     selected: usize,
+    hovered: usize,
+    is_keyboard_mode: bool,
     status: String,
     mode: UiMode,
 }
@@ -72,7 +99,9 @@ impl AppState {
         Ok(Self {
             providers,
             selected: 0,
-            status: "Press a/e/d/c/C/r/q".to_owned(),
+            hovered: 0,
+            is_keyboard_mode: true,
+            status: "j↑ select ↓k  c connect  d disconnect  ↵ edit".to_owned(),
             mode: UiMode::Browse,
         })
     }
@@ -85,6 +114,7 @@ impl AppState {
         let refreshed = Self::load(use_case)?;
         self.providers = refreshed.providers;
         self.status = refreshed.status;
+        self.hovered = 0;
         if let Some(name) = selected_name {
             if let Some(pos) = self
                 .providers
@@ -109,22 +139,38 @@ impl AppState {
         self.providers.get(self.selected)
     }
 
+    fn hovered_name(&self) -> Option<&str> {
+        self.providers
+            .get(self.hovered)
+            .map(|provider| provider.name.as_str())
+    }
+
+    fn hovered_provider(&self) -> Option<&ProviderEntry> {
+        self.providers.get(self.hovered)
+    }
+
     fn select_next(&mut self) {
         if self.providers.is_empty() {
             return;
         }
-        self.selected = (self.selected + 1) % self.providers.len();
+        self.hovered = (self.hovered + 1) % (self.providers.len() + 1);
+        self.selected = self.hovered;
     }
 
     fn select_prev(&mut self) {
         if self.providers.is_empty() {
             return;
         }
-        if self.selected == 0 {
-            self.selected = self.providers.len() - 1;
+        if self.hovered == 0 {
+            self.hovered = self.providers.len();
         } else {
-            self.selected -= 1;
+            self.hovered -= 1;
         }
+        self.selected = self.hovered;
+    }
+
+    fn is_add_row(&self) -> bool {
+        self.hovered >= self.providers.len()
     }
 }
 
