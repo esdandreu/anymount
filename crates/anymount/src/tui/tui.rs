@@ -1361,6 +1361,171 @@ fn save_edit_session(cd: &ConfigDir, session: &EditSession) -> Result<String> {
     Ok(new_name)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RowStyle {
+    Normal,
+    Disconnected,
+    HoveredConnected,
+    HoveredDisconnected,
+}
+
+fn render_mount_row(
+    frame: &mut Frame,
+    entry: &ProviderEntry,
+    rect: Rect,
+    style: RowStyle,
+    show_buttons: bool,
+    is_keyboard_mode: bool,
+) {
+    let is_hovered = matches!(
+        style,
+        RowStyle::HoveredConnected | RowStyle::HoveredDisconnected
+    );
+    let is_connected = entry.is_connected();
+
+    let (displacement, shadow_width) = match style {
+        RowStyle::Normal => (0, 0),
+        RowStyle::Disconnected => (1, 1),
+        RowStyle::HoveredConnected => (2, 2),
+        RowStyle::HoveredDisconnected => (2, 2),
+    };
+
+    let bg_color = if is_hovered {
+        COLOR_ROW_BG_HOVERED
+    } else {
+        COLOR_ROW_BG_NORMAL
+    };
+
+    let status_icon = if is_connected { "●" } else { "○" };
+    let status_color = if is_connected {
+        COLOR_CONNECTED
+    } else {
+        COLOR_DISCONNECTED
+    };
+
+    if shadow_width > 0 {
+        let shadow_rect = Rect::new(
+            rect.x.saturating_sub(shadow_width),
+            rect.y,
+            shadow_width,
+            rect.height,
+        );
+        frame.render_widget(
+            Paragraph::new(" ".repeat(shadow_width as usize))
+                .style(Style::default().bg(COLOR_ROW_3D_SHADOW)),
+            shadow_rect,
+        );
+    }
+
+    let row_rect = Rect::new(rect.x + displacement, rect.y, rect.width, rect.height);
+    let row_block = Block::default()
+        .bg(bg_color)
+        .border_bottom(Borders::BOT)
+        .border_left(Borders::LEFT)
+        .border_right(Borders::RIGHT);
+    frame.render_widget(row_block, row_rect);
+
+    let keyboard_indicator = if is_keyboard_mode && is_hovered {
+        "⇅"
+    } else {
+        " "
+    };
+    let content = format!(
+        "{}{}  {:12}  {:25}  {:10}",
+        keyboard_indicator,
+        status_icon,
+        entry.name,
+        entry.config.path.display(),
+        get_storage_type_label(&entry.config.storage),
+    );
+    let text_style = Style::default().fg(status_color);
+
+    frame.render_widget(
+        Paragraph::new(content).style(text_style),
+        Rect::new(
+            row_rect.x + 1,
+            row_rect.y,
+            row_rect.width.saturating_sub(2),
+            row_rect.height,
+        ),
+    );
+
+    if show_buttons {
+        let buttons = if is_connected {
+            "[ ⇐ ] [ ↵ ]"
+        } else {
+            "[ ⇒ ] [ ↵ ]"
+        };
+        frame.render_widget(
+            Paragraph::new(buttons)
+                .style(Style::default().fg(COLOR_BUTTON))
+                .alignment(ratatui::layout::Alignment::Right),
+            Rect::new(
+                row_rect.x + 1,
+                row_rect.y,
+                row_rect.width.saturating_sub(2),
+                row_rect.height,
+            ),
+        );
+    }
+}
+
+fn get_storage_type_label(storage: &StorageConfig) -> &'static str {
+    match storage {
+        StorageConfig::Local { .. } => "local",
+        StorageConfig::OneDrive { .. } => "onedrive",
+    }
+}
+
+fn render_add_row(frame: &mut Frame, rect: Rect, is_hovered: bool) {
+    let bg_color = if is_hovered {
+        COLOR_ROW_BG_HOVERED
+    } else {
+        COLOR_ROW_BG_NORMAL
+    };
+
+    let displacement = if is_hovered { 2 } else { 0 };
+    let shadow_width = if is_hovered { 2 } else { 0 };
+
+    if shadow_width > 0 {
+        let shadow_rect = Rect::new(
+            rect.x.saturating_sub(shadow_width),
+            rect.y,
+            shadow_width,
+            rect.height,
+        );
+        frame.render_widget(
+            Paragraph::new(" ".repeat(shadow_width as usize))
+                .style(Style::default().bg(COLOR_ROW_3D_SHADOW)),
+            shadow_rect,
+        );
+    }
+
+    let row_rect = Rect::new(rect.x + displacement, rect.y, rect.width, rect.height);
+    let row_block = Block::default()
+        .bg(bg_color)
+        .border_bottom(Borders::BOT)
+        .border_left(Borders::LEFT)
+        .border_right(Borders::RIGHT);
+    frame.render_widget(row_block, row_rect);
+
+    let content = if is_hovered {
+        "+                                                  [ ↵ Add ]"
+    } else {
+        "+"
+    };
+
+    frame.render_widget(
+        Paragraph::new(content).style(Style::default().fg(COLOR_BUTTON)),
+        Rect::new(
+            row_rect.x + 1,
+            row_rect.y,
+            row_rect.width.saturating_sub(2),
+            row_rect.height,
+        ),
+    );
+}
+
 fn draw_ui(frame: &mut Frame, cd: &ConfigDir, state: &AppState) {
     let sections = Layout::default()
         .direction(Direction::Vertical)
