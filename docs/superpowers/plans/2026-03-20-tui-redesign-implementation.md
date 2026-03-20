@@ -235,10 +235,14 @@ fn render_mount_row(
     );
     let is_connected = entry.is_connected();
 
+    // Per spec: All disconnected rows have 3D effect, hovered rows have more
     // Calculate 3D effect dimensions
-    // All rows have some 3D effect; hovered rows have more
-    let displacement = if is_hovered { 2 } else { 0 };
-    let shadow_width = if is_hovered { 2 } else { 0 };
+    let (displacement, shadow_width) = match style {
+        RowStyle::Normal => (0, 0),                     // Connected, not hovered
+        RowStyle::Disconnected => (1, 1),                // Disconnected, not hovered - subtle 3D
+        RowStyle::HoveredConnected => (2, 2),           // Connected, hovered - pronounced 3D
+        RowStyle::HoveredDisconnected => (2, 2),        // Disconnected, hovered - pronounced 3D
+    };
 
     let bg_color = if is_hovered {
         COLOR_ROW_BG_HOVERED
@@ -465,7 +469,10 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &AppState) {
 }
 ```
 
-Note: Added `RowStyle::Disconnected` for disconnected rows that are not hovered. Also note that the `⇅` keyboard indicator will be shown for the currently selected/hovered row - implement by passing an additional flag to `render_mount_row`.
+Note: The `⇅` keyboard indicator in the spec shows when keyboard is used. To implement this:
+1. Add `is_keyboard_mode: bool` to AppState
+2. Set to `true` when j/k/arrows are pressed, `false` when mouse moves
+3. Pass this flag to render_mount_row to show `⇅` indicator
 
 - [ ] **Step 2: Commit**
 
@@ -668,15 +675,15 @@ fn draw_edit_menu(frame: &mut Frame, session: &EditSession) {
     }
 
     // Draw buttons in bottom-right per spec
-    // Buttons: [ d Disc. ] [ x ] [ c Save ] or [ c Create ] for new mounts
+    // Buttons: [ ⇑ ] [ ⇓ ] [ d Disc. ] [ x ] [ c Save ] or [ c Create ] for new mounts
     let is_new = session.original_name.is_none();
     let save_label = if is_new { "Create" } else { "Save" };
 
     let button_text = format!(
-        "{:>width$}[ d Disc. ] [ x ] [ c {} ]",
+        "{:>width$}[ ⇑ ] [ ⇓ ] [ d Disc. ] [ x ] [ c {} ]",
         "",
         save_label,
-        width = edit_area.width.saturating_sub(45)
+        width = edit_area.width.saturating_sub(60)
     );
 
     let block = Block::default()
@@ -847,7 +854,7 @@ let should_quit = match state.mode {
 };
 ```
 
-- [ ] **Step 6: Add Delete action to EditAction enum**
+- [ ] **Step 6: Add actions to EditAction enum**
 
 ```rust
 enum EditAction {
@@ -855,6 +862,7 @@ enum EditAction {
     Cancel,
     Saved(String),
     Deleted,
+    Disconnected(String),
     Message(String),
 }
 ```
@@ -868,17 +876,50 @@ KeyCode::Char('x') => {
     Ok(EditAction::Deleted)
 }
 KeyCode::Char('d') => {
-    // Disconnect - trigger from edit menu
-    // Similar to c connect, but disconnect
-    Ok(EditAction::Message("Use c to connect, d to disconnect in main menu".to_owned()))
+    // Disconnect the mount being edited, return to browse mode
+    let name = session.draft.name.clone();
+    Ok(EditAction::Disconnected(name))
 }
 ```
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 8: Update run_loop to handle Disconnected action**
+
+In the Edit match arm:
+
+```rust
+EditAction::Disconnected(name) => {
+    match disconnect_provider(cd, &name) {
+        Ok(()) => {
+            state.mode = UiMode::Browse;
+            state.status = format!("Disconnected '{}'", name);
+        }
+        Err(e) => {
+            state.status = format!("Disconnect failed: {}", e);
+        }
+    }
+}
+```
+
+Also add the disconnect_provider helper:
+
+```rust
+fn disconnect_provider(cd: &ConfigDir, name: &str) -> Result<()> {
+    suspend_terminal(|| {
+        let logger = TracingLogger::new();
+        let repository = TuiConnectRepository::new(cd.clone());
+        let control = TuiServiceControl;
+        let launcher = ProcessServiceLauncher::new(logger);
+        let app = ConnectApplication::new(cd.dir(), &repository, &control, &launcher);
+        app.disconnect_name(name).map_err(Error::from)
+    })
+}
+```
+
+- [ ] **Step 9: Commit**
 
 ```bash
 git add crates/anymount/src/tui/tui.rs
-git commit -m "feat(tui): add delete confirmation dialog"
+git commit -m "feat(tui): add delete confirmation dialog and disconnect action"
 ```
 
 ---
