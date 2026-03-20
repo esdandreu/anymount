@@ -473,6 +473,11 @@ Note: The `⇅` keyboard indicator in the spec shows when keyboard is used. To i
 1. Add `is_keyboard_mode: bool` to AppState
 2. Set to `true` when j/k/arrows are pressed, `false` when mouse moves
 3. Pass this flag to render_mount_row to show `⇅` indicator
+4. Use different button labels based on is_keyboard_mode:
+   - Mouse hover: `[ ⇐ ]` (disconnect) or `[ ⇒ ]` (connect)
+   - Keyboard focus: `[ ⇐ ]` or `[ ⇒ ]` (same buttons, different context)
+
+Also note: Storage type field visibility (show local vs onedrive fields) is already handled by the existing `EditDraft::field_active` and `visible_fields` methods in the codebase - no changes needed for this feature.
 
 - [ ] **Step 2: Commit**
 
@@ -685,6 +690,9 @@ fn draw_edit_menu(frame: &mut Frame, session: &EditSession) {
         save_label,
         width = edit_area.width.saturating_sub(60)
     );
+
+    // Note: Valid Rust format syntax is {:>width$} where width is a runtime value
+    // Use: format!("{:>width$}[ ⇑ ]...", "", width = edit_area.width.saturating_sub(60))
 
     let block = Block::default()
         .bg(COLOR_ROW_BG_NORMAL)
