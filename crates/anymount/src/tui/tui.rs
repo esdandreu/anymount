@@ -1558,22 +1558,63 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &AppState) {
     frame.render_widget(Paragraph::new(content), block);
 }
 
+fn draw_edit_menu(frame: &mut Frame, session: &EditSession) {
+    let size = frame.area();
+    let edit_area = Rect::new(0, 0, size.width, size.height.saturating_sub(2));
+    let button_area = Rect::new(0, size.height.saturating_sub(2), size.width, 2);
+
+    let visible_fields = session.draft.visible_fields();
+    let mut y = edit_area.y + 1;
+
+    for field in &visible_fields {
+        let is_active = *field == session.selected_field();
+        let value = session.draft.field_value(*field);
+        let shown = if value.is_empty() {
+            "<unset>".to_owned()
+        } else {
+            value
+        };
+
+        let bg = if is_active {
+            COLOR_ROW_BG_SELECTED
+        } else {
+            COLOR_ROW_BG_NORMAL
+        };
+        let cursor = if is_active { "█" } else { "" };
+        let content = format!("  {:25}  {}{}", field.label(), shown, cursor);
+
+        let rect = Rect::new(edit_area.x, y, edit_area.width, 1);
+        let block = Block::default().bg(bg);
+        frame.render_widget(Paragraph::new(content), block);
+        y += 1;
+    }
+
+    let is_new = session.original_name.is_none();
+    let save_label = if is_new { "Create" } else { "Save" };
+    let padding = " ".repeat((edit_area.width.saturating_sub(60)) as usize);
+    let button_text = format!(
+        "{}[ ⇑ ] [ ⇓ ] [ d Disc. ] [ x ] [ c {} ]",
+        padding, save_label
+    );
+
+    let block = Block::default()
+        .bg(COLOR_ROW_BG_NORMAL)
+        .borders(Borders::TOP);
+    frame.render_widget(
+        Paragraph::new(button_text).style(Style::default().fg(COLOR_BUTTON)),
+        block,
+    );
+}
+
 fn help_lines(state: &AppState) -> Vec<Line<'static>> {
-    let mut lines = match state.mode {
-        UiMode::Browse => vec![
-            Line::from("Keys: j/k or arrows move, a add, e edit, d remove"),
-            Line::from("      c connect selected, C connect all, r refresh, q quit"),
-        ],
+    let lines = match state.mode {
+        UiMode::Browse => vec![Line::from("j↑ select ↓k  c connect  d disconnect  ↵ edit")],
         UiMode::Edit(ref session) => {
-            let mut lines = vec![Line::from(
-                "Edit: Enter edit/select, Tab complete path, s save, Esc close editor",
-            )];
+            let mut line = String::from("j↑ ⇓↓ select  type to edit  Tab complete  Esc back  c save  d disconnect  x delete");
             if matches!(session.draft.storage_type, ProviderType::OneDrive) {
-                lines.push(Line::from(
-                    "      l/o sign in to OneDrive and fill refresh token",
-                ));
+                line.push_str("  l/o OneDrive auth");
             }
-            lines
+            vec![Line::from(line)]
         }
         UiMode::ConfirmDelete => vec![
             Line::from("Delete confirmation: y remove selected provider"),
