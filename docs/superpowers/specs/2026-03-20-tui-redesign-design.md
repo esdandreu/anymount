@@ -89,17 +89,18 @@ Each mount row displays:
 ### Footer
 
 ```
-j↑ select ↓k       ⇐ disconnect connect ⇒      info ↵
+j↑ select ↓k       c connect   d disconnect      ↵ edit
 ```
 
 | Key | Action |
 |-----|--------|
 | `j` / `↓` | Select next row |
 | `k` / `↑` | Select previous row |
-| `←` | Disconnect selected mount |
-| `→` | Connect selected mount |
+| `c` | Connect selected mount |
+| `d` | Disconnect selected mount |
 | `↵` | Edit selected mount / Add new mount |
-| `d` | Delete selected mount |
+| `r` | Refresh list |
+| `q` | Quit |
 
 ## Edit Menu
 
@@ -113,7 +114,18 @@ j↑ select ↓k       ⇐ disconnect connect ⇒      info ↵
 │  storage.type     local                                │
 │  storage.root     /data/backup                         │
 │                                                        │
+│                              [ d Disc. ] [ ⌫ Del ] [ c Save ] │
 └────────────────────────────────────────────────────────┘
+```
+
+Buttons in bottom-right:
+- `[ d Disc. ]` — Disconnect mount
+- `[ ⌫ Del ]` — Delete mount
+- `[ c Save ]` — Save changes
+
+Or for new mounts (not yet saved):
+```
+│                              [ d Disc. ] [ ⌫ Del ] [ c Create ] │
 ```
 
 ### Layout Rules
@@ -145,7 +157,9 @@ The active field (currently being edited):
 | `k` / `↑` / `Shift-Tab` | Previous field |
 | `Enter` | Confirm edit / Enter text input mode |
 | `Esc` | Exit edit mode (cancel) |
-| `s` | Save changes |
+| `c` | Save changes |
+| `d` | Disconnect mount |
+| `⌫` | Delete mount |
 | `Tab` | Path completion (for path fields) |
 
 ### Editable Fields
@@ -183,6 +197,27 @@ When editing OneDrive mounts:
 - Suspends TUI, opens browser for auth
 - Populates `refresh_token` on success
 - Shows status message: "OneDrive authentication completed"
+
+### Delete Confirmation
+
+When delete is triggered:
+```
+┌────────────────────────────────────────────────────────┐
+│                                                        │
+│  name             backup█                              │
+│  path             /mnt/backup                          │
+│  ...                                                 │
+│                                                        │
+│  ┌────────────────────────────────────────────────┐   │
+│  │  Delete 'backup'? [y Yes] [n No]               │   │
+│  └────────────────────────────────────────────────┘   │
+└────────────────────────────────────────────────────────┘
+```
+
+| Key | Action |
+|-----|--------|
+| `y` | Confirm delete |
+| `n` / `Esc` | Cancel |
 
 ## Navigation Flow
 
@@ -224,10 +259,9 @@ Main Menu ──[Enter]──> Edit Menu
 |-----|--------|
 | `j` / `↓` | Next row |
 | `k` / `↑` | Previous row |
-| `←` | Disconnect |
-| `→` | Connect |
+| `c` | Connect |
+| `d` | Disconnect |
 | `Enter` | Edit / Add |
-| `d` | Delete |
 | `r` | Refresh list |
 | `q` | Quit |
 
@@ -238,7 +272,9 @@ Main Menu ──[Enter]──> Edit Menu
 | `k` / `↑` / `Shift-Tab` | Previous field |
 | `Enter` | Confirm / Edit field |
 | `Esc` | Cancel / Exit |
-| `s` | Save |
+| `c` | Save |
+| `d` | Disconnect |
+| `⌫` | Delete |
 | `Tab` | Path completion |
 | `Backspace` | Delete char |
 | `l` / `o` | OneDrive auth |
