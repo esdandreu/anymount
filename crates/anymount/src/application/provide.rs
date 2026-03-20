@@ -1,5 +1,5 @@
 use crate::application::types::ProvideRequest;
-use crate::domain::provider::ProviderSpec;
+use crate::domain::driver::Driver;
 use crate::telemetry::OtelHandles;
 
 #[derive(Debug, thiserror::Error)]
@@ -10,36 +10,30 @@ pub enum Error {
     #[error(transparent)]
     Telemetry(#[from] crate::telemetry::OtlpInitError),
 
-    #[error("failed to load provider spec {provider_name}: {reason}")]
-    Repository {
-        provider_name: String,
-        reason: String,
-    },
+    #[error("failed to load driver spec {driver_name}: {reason}")]
+    Repository { driver_name: String, reason: String },
 
-    #[error("failed to host provider {provider_name}: {reason}")]
-    Host {
-        provider_name: String,
-        reason: String,
-    },
+    #[error("failed to host driver {driver_name}: {reason}")]
+    Host { driver_name: String, reason: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
 pub trait ProvideRepository {
-    fn read_spec(&self, name: &str) -> Result<ProviderSpec>;
+    fn read_spec(&self, name: &str) -> Result<Driver>;
 }
 
 pub trait TelemetryFactory {
-    fn build(&self, spec: &ProviderSpec) -> Result<Option<OtelHandles>>;
+    fn build(&self, spec: &Driver) -> Result<Option<OtelHandles>>;
 }
 
-pub trait ProviderRuntimeHost {
+pub trait DriverRuntimeHost {
     fn run(&self, request: ProvideRequest, telemetry: Option<OtelHandles>) -> Result<()>;
 }
 
 pub trait ProvideUseCase {
     fn run_named(&self, name: &str) -> Result<()>;
-    fn run_inline(&self, spec: ProviderSpec) -> Result<()>;
+    fn run_inline(&self, spec: Driver) -> Result<()>;
 }
 
 pub struct Application<'a, R, T, H> {
@@ -62,7 +56,7 @@ impl<R, T, H> ProvideUseCase for Application<'_, R, T, H>
 where
     R: ProvideRepository,
     T: TelemetryFactory,
-    H: ProviderRuntimeHost,
+    H: DriverRuntimeHost,
 {
     fn run_named(&self, name: &str) -> Result<()> {
         let spec = self.repository.read_spec(name)?;
@@ -72,7 +66,7 @@ where
         })
     }
 
-    fn run_inline(&self, spec: ProviderSpec) -> Result<()> {
+    fn run_inline(&self, spec: Driver) -> Result<()> {
         self.run_request(ProvideRequest {
             spec,
             control_name: None,
@@ -83,7 +77,7 @@ where
 impl<R, T, H> Application<'_, R, T, H>
 where
     T: TelemetryFactory,
-    H: ProviderRuntimeHost,
+    H: DriverRuntimeHost,
 {
     fn run_request(&self, request: ProvideRequest) -> Result<()> {
         let telemetry = self.telemetry.build(&request.spec)?;
@@ -94,11 +88,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        Application, Error, ProvideRepository, ProvideUseCase, ProviderRuntimeHost, Result,
+        Application, DriverRuntimeHost, Error, ProvideRepository, ProvideUseCase, Result,
         TelemetryFactory,
     };
     use crate::application::types::ProvideRequest;
-    use crate::domain::provider::{ProviderSpec, StorageSpec, TelemetrySpec};
+    use crate::domain::driver::{Driver, StorageSpec, TelemetrySpec};
     use crate::telemetry::OtelHandles;
     use std::cell::{Cell, RefCell};
     use std::collections::HashMap;
@@ -106,18 +100,18 @@ mod tests {
 
     #[derive(Default)]
     struct TestRepository {
-        specs: HashMap<String, ProviderSpec>,
+        specs: HashMap<String, Driver>,
         reads: Cell<usize>,
     }
 
     impl ProvideRepository for TestRepository {
-        fn read_spec(&self, name: &str) -> Result<ProviderSpec> {
+        fn read_spec(&self, name: &str) -> Result<Driver> {
             self.reads.set(self.reads.get() + 1);
             self.specs
                 .get(name)
                 .cloned()
                 .ok_or_else(|| Error::Repository {
-                    provider_name: name.to_owned(),
+                    driver_name: name.to_owned(),
                     reason: "missing spec".to_owned(),
                 })
         }
@@ -127,7 +121,7 @@ mod tests {
     struct TestTelemetryFactory;
 
     impl TelemetryFactory for TestTelemetryFactory {
-        fn build(&self, _spec: &ProviderSpec) -> Result<Option<OtelHandles>> {
+        fn build(&self, _spec: &Driver) -> Result<Option<OtelHandles>> {
             Ok(None)
         }
     }
@@ -137,7 +131,7 @@ mod tests {
         hosted: RefCell<Vec<String>>,
     }
 
-    impl ProviderRuntimeHost for TestHost {
+    impl DriverRuntimeHost for TestHost {
         fn run(&self, request: ProvideRequest, _telemetry: Option<OtelHandles>) -> Result<()> {
             self.hosted.borrow_mut().push(request.spec.name);
             Ok(())
@@ -151,7 +145,7 @@ mod tests {
     }
 
     impl TestProvideApp {
-        fn with_spec(mut self, spec: ProviderSpec) -> Self {
+        fn with_spec(mut self, spec: Driver) -> Self {
             self.repository.specs.insert(spec.name.clone(), spec);
             self
         }
@@ -160,7 +154,7 @@ mod tests {
             self.application().run_named(name)
         }
 
-        fn run_inline(&self, spec: ProviderSpec) -> Result<()> {
+        fn run_inline(&self, spec: Driver) -> Result<()> {
             self.application().run_inline(spec)
         }
 
@@ -185,8 +179,8 @@ mod tests {
         }
     }
 
-    fn local_provider_spec(name: &str) -> ProviderSpec {
-        ProviderSpec {
+    fn local_driver_spec(name: &str) -> Driver {
+        Driver {
             name: name.to_owned(),
             path: PathBuf::from(format!("/mnt/{name}")),
             storage: StorageSpec::Local {
@@ -198,7 +192,7 @@ mod tests {
 
     #[test]
     fn named_provide_loads_spec_and_starts_host() {
-        let app = test_provide_app().with_spec(local_provider_spec("demo"));
+        let app = test_provide_app().with_spec(local_driver_spec("demo"));
         app.run_named("demo").expect("provide should work");
         assert_eq!(app.hosted_specs(), vec!["demo".to_owned()]);
     }
@@ -206,7 +200,7 @@ mod tests {
     #[test]
     fn inline_provide_skips_repository_lookup() {
         let app = test_provide_app();
-        app.run_inline(local_provider_spec("inline"))
+        app.run_inline(local_driver_spec("inline"))
             .expect("inline provide should work");
         assert_eq!(app.repository_reads(), 0);
     }

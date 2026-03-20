@@ -5,8 +5,8 @@ pub enum Error {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("Provider error: {0}")]
-    Provider(String),
+    #[error("Driver error: {0}")]
+    Driver(String),
 
     #[error("Mount error: {0}")]
     Mount(String),

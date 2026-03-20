@@ -5,13 +5,13 @@ pub enum Error {
 
     #[cfg(target_os = "windows")]
     #[error(transparent)]
-    CloudFilter(#[from] crate::providers::cloudfilter::Error),
+    CloudFilter(#[from] crate::drivers::windows::Error),
 
     #[cfg(target_os = "linux")]
     #[error(transparent)]
-    LibCloudProvider(#[from] crate::providers::libcloudprovider::Error),
+    LibCloudProvider(#[from] crate::drivers::linux::Error),
 
-    #[error("provider runtime not supported on this platform")]
+    #[error("driver runtime not supported on this platform")]
     NotSupported,
 }
 

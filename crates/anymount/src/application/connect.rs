@@ -5,13 +5,10 @@ pub enum Error {
     #[error(transparent)]
     Config(#[from] crate::config::Error),
 
-    #[error("failed to connect provider {provider_name}: {reason}")]
-    Launch {
-        provider_name: String,
-        reason: String,
-    },
+    #[error("failed to connect driver {driver_name}: {reason}")]
+    Launch { driver_name: String, reason: String },
 
-    #[error("failed to connect providers: {failures}")]
+    #[error("failed to connect drivers: {failures}")]
     ConnectFailures { failures: String },
 }
 
@@ -22,15 +19,15 @@ pub trait ConnectRepository {
 }
 
 pub trait ServiceControl {
-    fn ready(&self, provider_name: &str) -> bool;
+    fn ready(&self, driver_name: &str) -> bool;
 }
 
 pub trait ServiceLauncher {
-    fn launch(&self, provider_name: &str, config_dir: &Path) -> std::result::Result<(), String>;
+    fn launch(&self, driver_name: &str, config_dir: &Path) -> std::result::Result<(), String>;
 }
 
 pub trait ConnectUseCase {
-    fn connect_name(&self, provider_name: &str) -> Result<()>;
+    fn connect_name(&self, driver_name: &str) -> Result<()>;
     fn connect_all(&self) -> Result<()>;
 }
 
@@ -58,12 +55,12 @@ where
     C: ServiceControl,
     L: ServiceLauncher,
 {
-    fn connect_one(&self, provider_name: &str) -> std::result::Result<(), String> {
-        if self.control.ready(provider_name) {
+    fn connect_one(&self, driver_name: &str) -> std::result::Result<(), String> {
+        if self.control.ready(driver_name) {
             return Ok(());
         }
 
-        self.launcher.launch(provider_name, self.config_dir)
+        self.launcher.launch(driver_name, self.config_dir)
     }
 }
 
@@ -73,10 +70,10 @@ where
     C: ServiceControl,
     L: ServiceLauncher,
 {
-    fn connect_name(&self, provider_name: &str) -> Result<()> {
-        self.connect_one(provider_name)
+    fn connect_name(&self, driver_name: &str) -> Result<()> {
+        self.connect_one(driver_name)
             .map_err(|reason| Error::Launch {
-                provider_name: provider_name.to_owned(),
+                driver_name: driver_name.to_owned(),
                 reason,
             })
     }
@@ -124,8 +121,8 @@ mod tests {
     }
 
     impl ServiceControl for TestControl {
-        fn ready(&self, provider_name: &str) -> bool {
-            self.ready_names.contains(provider_name)
+        fn ready(&self, driver_name: &str) -> bool {
+            self.ready_names.contains(driver_name)
         }
     }
 
@@ -135,12 +132,8 @@ mod tests {
     }
 
     impl ServiceLauncher for TestLauncher {
-        fn launch(
-            &self,
-            provider_name: &str,
-            _config_dir: &Path,
-        ) -> std::result::Result<(), String> {
-            match self.failures.get(provider_name) {
+        fn launch(&self, driver_name: &str, _config_dir: &Path) -> std::result::Result<(), String> {
+            match self.failures.get(driver_name) {
                 Some(reason) => Err(reason.clone()),
                 None => Ok(()),
             }
@@ -167,15 +160,15 @@ mod tests {
             self
         }
 
-        fn with_ready(mut self, provider_name: &str) -> Self {
-            self.control.ready_names.insert(provider_name.to_owned());
+        fn with_ready(mut self, driver_name: &str) -> Self {
+            self.control.ready_names.insert(driver_name.to_owned());
             self
         }
 
-        fn with_launch_failure(mut self, provider_name: &str, reason: &str) -> Self {
+        fn with_launch_failure(mut self, driver_name: &str, reason: &str) -> Self {
             self.launcher
                 .failures
-                .insert(provider_name.to_owned(), reason.to_owned());
+                .insert(driver_name.to_owned(), reason.to_owned());
             self
         }
 

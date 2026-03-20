@@ -1,43 +1,43 @@
 use super::Result;
-use crate::domain::provider::{ProviderSpec, StorageSpec};
+use crate::domain::driver::{Driver as DomainDriver, StorageSpec};
 use crate::service::control::messages::ServiceMessage;
 use crate::storages::{LocalStorage, OneDriveConfig};
 use crate::Logger;
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 
-pub trait Provider {
+pub trait Driver {
     fn kind(&self) -> &'static str;
     fn path(&self) -> &PathBuf;
 }
 
 #[cfg(target_os = "windows")]
-pub fn connect_providers(
-    specs: &[ProviderSpec],
+pub fn connect_drivers(
+    specs: &[DomainDriver],
     logger: &(impl Logger + 'static),
-) -> Result<Vec<Box<dyn Provider>>> {
-    connect_providers_with_telemetry(specs, logger, None)
+) -> Result<Vec<Box<dyn Driver>>> {
+    connect_drivers_with_telemetry(specs, logger, None)
 }
 
 #[cfg(target_os = "windows")]
-pub fn connect_providers_with_telemetry(
-    specs: &[ProviderSpec],
+pub fn connect_drivers_with_telemetry(
+    specs: &[DomainDriver],
     logger: &(impl Logger + 'static),
     service_tx: Option<Sender<ServiceMessage>>,
-) -> Result<Vec<Box<dyn Provider>>> {
-    use super::cloudfilter::{cleanup_registry, CloudFilterProvider};
-    let mut providers: Vec<Box<dyn Provider>> = Vec::new();
+) -> Result<Vec<Box<dyn Driver>>> {
+    use super::windows::{cleanup_registry, WindowsDriver};
+    let mut drivers: Vec<Box<dyn Driver>> = Vec::new();
     for spec in specs {
         match &spec.storage {
             StorageSpec::Local { root } => {
                 let storage = LocalStorage::new(root.clone());
-                let provider = CloudFilterProvider::connect(
+                let driver = WindowsDriver::connect(
                     spec.path.clone(),
                     storage,
                     logger.clone(),
                     service_tx.clone(),
                 )?;
-                providers.push(Box::new(provider) as Box<dyn Provider>);
+                drivers.push(Box::new(driver) as Box<dyn Driver>);
             }
             StorageSpec::OneDrive {
                 root,
@@ -56,38 +56,36 @@ pub fn connect_providers_with_telemetry(
                     token_expiry_buffer_secs: *token_expiry_buffer_secs,
                 };
                 let storage = config.connect()?;
-                let provider = CloudFilterProvider::connect(
+                let driver = WindowsDriver::connect(
                     spec.path.clone(),
                     storage,
                     logger.clone(),
                     service_tx.clone(),
                 )?;
-                providers.push(Box::new(provider) as Box<dyn Provider>);
+                drivers.push(Box::new(driver) as Box<dyn Driver>);
             }
         }
     }
     cleanup_registry(specs, logger)?;
-    Ok(providers)
+    Ok(drivers)
 }
 
 #[cfg(target_os = "linux")]
-pub fn connect_providers(
-    specs: &[ProviderSpec],
+pub fn connect_drivers(
+    specs: &[DomainDriver],
     logger: &(impl Logger + 'static),
-) -> Result<Vec<Box<dyn Provider>>> {
-    connect_providers_with_telemetry(specs, logger, None)
+) -> Result<Vec<Box<dyn Driver>>> {
+    connect_drivers_with_telemetry(specs, logger, None)
 }
 
 #[cfg(target_os = "linux")]
-pub fn connect_providers_with_telemetry(
-    specs: &[ProviderSpec],
+pub fn connect_drivers_with_telemetry(
+    specs: &[DomainDriver],
     logger: &(impl Logger + 'static),
     _service_tx: Option<Sender<ServiceMessage>>,
-) -> Result<Vec<Box<dyn Provider>>> {
-    use super::libcloudprovider::dbus::AccountExporter;
-    use super::libcloudprovider::provider::{
-        export_on_dbus, mount_storage, new_runtime, LibCloudProvider,
-    };
+) -> Result<Vec<Box<dyn Driver>>> {
+    use super::linux::dbus::AccountExporter;
+    use super::linux::{export_on_dbus, mount_storage, new_runtime, LinuxDriver};
     let rt = new_runtime()?;
     let mut accounts: Vec<(std::path::PathBuf, AccountExporter)> = Vec::new();
     let mut sessions: Vec<(std::path::PathBuf, fuser::BackgroundSession)> = Vec::new();
@@ -152,34 +150,34 @@ pub fn connect_providers_with_telemetry(
         }
     }
     rt.block_on(export_on_dbus(&accounts, logger))?;
-    let providers: Vec<Box<dyn Provider>> = sessions
+    let drivers: Vec<Box<dyn Driver>> = sessions
         .into_iter()
-        .map(|(path, session)| Box::new(LibCloudProvider::new(path, session)) as Box<dyn Provider>)
+        .map(|(path, session)| Box::new(LinuxDriver::new(path, session)) as Box<dyn Driver>)
         .collect();
-    Ok(providers)
+    Ok(drivers)
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "linux")))]
-pub fn connect_providers(
-    _specs: &[ProviderSpec],
+pub fn connect_drivers(
+    _specs: &[DomainDriver],
     _logger: &impl Logger,
-) -> Result<Vec<Box<dyn Provider>>> {
-    connect_providers_with_telemetry(_specs, _logger, None)
+) -> Result<Vec<Box<dyn Driver>>> {
+    connect_drivers_with_telemetry(_specs, _logger, None)
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "linux")))]
-pub fn connect_providers_with_telemetry(
-    _specs: &[ProviderSpec],
+pub fn connect_drivers_with_telemetry(
+    _specs: &[DomainDriver],
     _logger: &impl Logger,
     _service_tx: Option<Sender<ServiceMessage>>,
-) -> Result<Vec<Box<dyn Provider>>> {
+) -> Result<Vec<Box<dyn Driver>>> {
     Err(super::Error::NotSupported)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::provider::{ProviderSpec, StorageSpec, TelemetrySpec};
+    use crate::domain::driver::{Driver as DomainDriver, StorageSpec, TelemetrySpec};
     use crate::NoOpLogger;
 
     #[test]
@@ -199,8 +197,8 @@ mod tests {
         assert_eq!(onedrive.label(), "onedrive");
     }
 
-    fn local_provider_spec(name: &str) -> ProviderSpec {
-        ProviderSpec {
+    fn local_driver_spec(name: &str) -> DomainDriver {
+        DomainDriver {
             name: name.to_owned(),
             path: PathBuf::from(format!("/mnt/{name}")),
             storage: StorageSpec::Local {
@@ -211,9 +209,9 @@ mod tests {
     }
 
     #[test]
-    fn connect_providers_accepts_resolved_specs() {
-        let spec = local_provider_spec("demo");
-        let result = connect_providers(&[spec], &NoOpLogger::default());
-        assert!(!matches!(result, Err(crate::providers::Error::Storage(_))));
+    fn connect_drivers_accepts_resolved_specs() {
+        let spec = local_driver_spec("demo");
+        let result = connect_drivers(&[spec], &NoOpLogger::default());
+        assert!(!matches!(result, Err(crate::drivers::Error::Storage(_))));
     }
 }

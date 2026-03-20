@@ -1,4 +1,4 @@
-//! D-Bus implementation of org.freedesktop.CloudProviders (Provider and Account)
+//! D-Bus implementation of org.freedesktop.CloudProviders (Driver and Account)
 //! and org.gtk.Actions / org.gtk.Menus for account context menu.
 
 use std::collections::HashMap;
@@ -15,7 +15,6 @@ const PROVIDER_NAME: &str = "Anymount";
 pub const PROVIDER_PATH: &str = "/org/anymount/CloudProviders";
 pub const BUS_NAME: &str = "org.anymount.CloudProviders";
 
-/// Exposes org.freedesktop.CloudProviders.Provider at the root path.
 #[derive(Clone, Default)]
 pub struct ProviderExporter;
 
@@ -27,7 +26,6 @@ impl ProviderExporter {
     }
 }
 
-/// Exposes org.freedesktop.CloudProviders.Account for one account.
 #[derive(Clone)]
 pub struct AccountExporter {
     pub name: String,
@@ -65,7 +63,6 @@ impl AccountExporter {
     }
 }
 
-/// Message sent to the action runner: (mount_path, cache_root, action_name).
 pub type ActionMessage = (String, PathBuf, String);
 
 fn dir_size_bytes(path: &std::path::Path) -> Option<u64> {
@@ -114,7 +111,6 @@ fn format_size_units() {
     assert!(format_size(1024 * 1024 * 1024).starts_with("1.0 GB"));
 }
 
-/// Shared state for one account; three interface types wrap this.
 pub struct AccountShared {
     account: AccountExporter,
     mount_path: String,
@@ -122,7 +118,6 @@ pub struct AccountShared {
     action_tx: UnboundedSender<ActionMessage>,
 }
 
-/// Exposes org.freedesktop.CloudProviders.Account at an account path.
 pub struct AccountCloudProvider(pub Arc<AccountShared>);
 
 #[interface(name = "org.freedesktop.CloudProviders.Account")]
@@ -160,7 +155,6 @@ impl AccountCloudProvider {
     }
 }
 
-/// Exposes org.gtk.Actions at an account path.
 pub struct AccountGtkActions(pub Arc<AccountShared>);
 
 #[interface(name = "org.gtk.Actions")]
@@ -202,7 +196,6 @@ impl AccountGtkActions {
     }
 }
 
-/// Exposes org.gtk.Menus at an account path.
 pub struct AccountGtkMenus(pub Arc<AccountShared>);
 
 #[interface(name = "org.gtk.Menus")]
@@ -219,7 +212,6 @@ impl AccountGtkMenus {
     }
 }
 
-/// Build the three interface objects for one account; register all at the same path.
 pub fn new_account_interfaces(
     account: AccountExporter,
     mount_path: String,
@@ -239,7 +231,6 @@ pub fn new_account_interfaces(
     )
 }
 
-/// Request the well-known bus name for the cloud provider.
 pub async fn request_bus_name(connection: &zbus::Connection) -> zbus::Result<()> {
     connection.request_name(BUS_NAME).await?;
     Ok(())

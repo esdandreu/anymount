@@ -1,50 +1,31 @@
-use super::CloudFilterProvider;
+use super::WindowsDriver;
 use super::{Error, Result};
-use crate::Logger;
 use crate::storages::Storage;
+use crate::Logger;
 use std::path::{Path, PathBuf};
+use windows::core::HSTRING;
 use windows::Storage::Provider::*;
 use windows::Storage::StorageFolder;
 use windows::Win32::Storage::CloudFilters::{
-    CF_CONNECT_FLAGS, CF_CONNECTION_KEY, CfConnectSyncRoot, CfDisconnectSyncRoot,
+    CfConnectSyncRoot, CfDisconnectSyncRoot, CF_CONNECTION_KEY, CF_CONNECT_FLAGS,
 };
-use windows::core::HSTRING;
 
-/// Configuration for registering a Windows sync root
 #[derive(Debug, Clone)]
 pub struct RegistrationConfig {
-    /// Path where files will be synchronized
     pub sync_root_path: PathBuf,
-
-    /// Display name shown in File Explorer
     pub display_name: String,
-
-    /// Unique provider identifier (GUID format recommended)
     pub provider_id: String,
-
-    /// Provider version
     pub provider_version: String,
-
-    /// Icon resource path (optional)
     pub icon_resource: Option<String>,
-
-    /// Whether to show overlays in File Explorer
     pub show_overlays: bool,
-
-    /// Population policy - whether to auto-populate placeholders
     pub auto_populate: bool,
-
-    /// Hydration policy - when to download file contents
     pub hydration_policy: HydrationPolicy,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum HydrationPolicy {
-    /// Download files when first accessed
     Progressive,
-    /// Download files fully when opened
     Full,
-    /// Always keep files online until explicitly downloaded
     AlwaysFull,
 }
 
@@ -63,29 +44,25 @@ impl Default for RegistrationConfig {
     }
 }
 
-/// Register a sync root with Windows Cloud Filter API
-impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
+impl<S: Storage, L: Logger> WindowsDriver<S, L> {
     pub fn register_sync_root(&self, config: &RegistrationConfig) -> Result<()> {
         self.logger.info(format!(
             "Registering sync root: {} at {:?}",
             config.display_name, config.sync_root_path
         ));
 
-        // Ensure the sync root directory exists
         std::fs::create_dir_all(&config.sync_root_path).map_err(|source| Error::Io {
             operation: "create sync root directory",
             path: config.sync_root_path.clone(),
             source,
         })?;
 
-        // Create StorageProviderSyncRootInfo using WinRT API
         let sync_root_info =
             StorageProviderSyncRootInfo::new().map_err(|source| Error::WindowsOperation {
                 operation: "create sync root info",
                 source,
             })?;
 
-        // Set the ID (use folder name as ID)
         let folder_name = config
             .sync_root_path
             .file_name()
@@ -98,7 +75,6 @@ impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
                 source,
             })?;
 
-        // Set the path using StorageFolder
         let path_hstring = HSTRING::from(config.sync_root_path.to_string_lossy().as_ref());
         let folder = StorageFolder::GetFolderFromPathAsync(&path_hstring)
             .map_err(|source| Error::WindowsOperation {
@@ -117,7 +93,6 @@ impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
                 source,
             })?;
 
-        // Set display name
         sync_root_info
             .SetDisplayNameResource(&HSTRING::from(&config.display_name))
             .map_err(|source| Error::WindowsOperation {
@@ -125,7 +100,6 @@ impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
                 source,
             })?;
 
-        // Set icon resource (optional)
         if let Some(icon) = &config.icon_resource {
             sync_root_info
                 .SetIconResource(&HSTRING::from(icon))
@@ -134,7 +108,6 @@ impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
                     source,
                 })?;
         } else {
-            // Use default Windows folder icon
             sync_root_info
                 .SetIconResource(&HSTRING::from("%SystemRoot%\\system32\\shell32.dll,13"))
                 .map_err(|source| Error::WindowsOperation {
@@ -143,7 +116,6 @@ impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
                 })?;
         }
 
-        // Set hydration policy
         let hydration_policy = match config.hydration_policy {
             HydrationPolicy::Progressive => StorageProviderHydrationPolicy::Progressive,
             HydrationPolicy::Full => StorageProviderHydrationPolicy::Full,
@@ -162,7 +134,6 @@ impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
                 source,
             })?;
 
-        // Set population policy
         let population_policy = if config.auto_populate {
             StorageProviderPopulationPolicy::Full
         } else {
@@ -175,7 +146,6 @@ impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
                 source,
             })?;
 
-        // Set other policies
         sync_root_info
             .SetInSyncPolicy(StorageProviderInSyncPolicy::PreserveInsyncForSyncEngine)
             .map_err(|source| Error::WindowsOperation {
@@ -201,7 +171,6 @@ impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
                 source,
             })?;
 
-        // Register using WinRT API
         match StorageProviderSyncRootManager::Register(&sync_root_info) {
             Ok(_) => {
                 self.logger.info("Sync root registered successfully");
@@ -218,12 +187,10 @@ impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
         }
     }
 
-    /// Unregister a sync root
     pub fn unregister_sync_root(&self, sync_root_path: &Path) -> Result<()> {
         self.logger
             .info(format!("Unregistering sync root: {:?}", sync_root_path));
 
-        // Get the folder name as ID
         let folder_name = sync_root_path
             .file_name()
             .and_then(|n| n.to_str())
@@ -237,9 +204,7 @@ impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
             Err(e) => {
                 let err_str = format!("{:?}", e);
 
-                // Check for specific error codes
                 if err_str.contains("0x8007017C") {
-                    // ERROR_CLOUD_FILE_INVALID_REQUEST - sync root is still connected
                     self.logger
                         .error(format!("Failed to unregister sync root: {:?}", e));
                     self.logger
@@ -255,7 +220,6 @@ impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
                         source: e,
                     })
                 } else if err_str.contains("0x8007018B") {
-                    // ERROR_CLOUD_FILE_ACCESS_DENIED - permission issue
                     self.logger
                         .error(format!("Failed to unregister sync root: {:?}", e));
                     self.logger
@@ -276,7 +240,6 @@ impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
         }
     }
 
-    /// Check if a path is a registered sync root
     pub fn is_sync_root_registered(&self, _path: &Path) -> Result<bool> {
         let id = HSTRING::from("Anymount");
 
@@ -286,7 +249,6 @@ impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
         }
     }
 
-    /// Connect to an existing sync root to start receiving callbacks
     pub fn connect_sync_root(&self, sync_root_path: &Path) -> Result<CF_CONNECTION_KEY> {
         self.logger
             .info(format!("Connecting to sync root: {:?}", sync_root_path));
@@ -294,7 +256,6 @@ impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
         unsafe {
             let path = HSTRING::from(sync_root_path.to_string_lossy().as_ref());
 
-            // Connect to sync root (returns CF_CONNECTION_KEY directly in newer API)
             match CfConnectSyncRoot(&path, std::ptr::null(), None, CF_CONNECT_FLAGS(0)) {
                 Ok(key) => {
                     self.logger.info("Connected to sync root successfully");
@@ -312,7 +273,6 @@ impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
         }
     }
 
-    /// Disconnect from a sync root
     pub fn disconnect_sync_root(&self, connection_key: CF_CONNECTION_KEY) -> Result<()> {
         self.logger.info("Disconnecting from sync root");
 
@@ -324,7 +284,7 @@ impl<S: Storage, L: Logger> CloudFilterProvider<S, L> {
                 }
                 Err(e) => {
                     self.logger.warn(format!("Failed to disconnect: {:?}", e));
-                    Ok(()) // Don't fail on disconnect errors
+                    Ok(())
                 }
             }
         }

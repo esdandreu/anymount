@@ -10,14 +10,14 @@ use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// Connect command ensures configured provider processes are running.
+/// Connect command ensures configured driver processes are running.
 #[derive(Args, Debug, Clone)]
 pub struct ConnectCommand {
-    /// Connect a named provider from config.
+    /// Connect a named driver from config.
     #[arg(long, conflicts_with = "all")]
     pub name: Option<String>,
 
-    /// Connect all configured providers.
+    /// Connect all configured drivers.
     #[arg(long, conflicts_with = "name")]
     pub all: bool,
 
@@ -79,8 +79,8 @@ impl ConnectRepository for ConfigRepository {
 struct ProviderServiceControl;
 
 impl ServiceControl for ProviderServiceControl {
-    fn ready(&self, provider_name: &str) -> bool {
-        crate::cli::provider_control::provider_daemon_ready(provider_name)
+    fn ready(&self, driver_name: &str) -> bool {
+        crate::cli::provider_control::provider_daemon_ready(driver_name)
     }
 }
 
@@ -96,10 +96,10 @@ impl<L: Logger> ProcessServiceLauncher<L> {
 }
 
 impl<L: Logger> ServiceLauncher for ProcessServiceLauncher<L> {
-    fn launch(&self, provider_name: &str, config_dir: &Path) -> std::result::Result<(), String> {
+    fn launch(&self, driver_name: &str, config_dir: &Path) -> std::result::Result<(), String> {
         let mut child =
-            spawn_provider_process(provider_name, config_dir).map_err(|error| error.to_string())?;
-        wait_until_ready(provider_name, &mut child, &self.logger).map_err(|error| error.to_string())
+            spawn_driver_process(driver_name, config_dir).map_err(|error| error.to_string())?;
+        wait_until_ready(driver_name, &mut child, &self.logger).map_err(|error| error.to_string())
     }
 }
 
@@ -110,14 +110,14 @@ fn map_connect_error(error: ConnectError) -> crate::cli::Error {
             crate::cli::Error::ConnectFailures { failures }
         }
         ConnectError::Launch {
-            provider_name,
+            driver_name,
             reason,
-        } => crate::cli::Error::Validation(format!("{provider_name}: {reason}")),
+        } => crate::cli::Error::Validation(format!("{driver_name}: {reason}")),
     }
 }
 
-fn spawn_provider_process(
-    provider_name: &str,
+fn spawn_driver_process(
+    driver_name: &str,
     config_dir: &Path,
 ) -> crate::cli::Result<std::process::Child> {
     let current_exe = std::env::current_exe()
@@ -125,12 +125,12 @@ fn spawn_provider_process(
     Command::new(current_exe)
         .arg("provide")
         .arg("--name")
-        .arg(provider_name)
+        .arg(driver_name)
         .arg("--config-dir")
         .arg(config_dir)
         .spawn()
-        .map_err(|source| crate::cli::Error::SpawnProvider {
-            provider_name: provider_name.to_owned(),
+        .map_err(|source| crate::cli::Error::SpawnDriver {
+            driver_name: driver_name.to_owned(),
             source,
         })
 }
@@ -141,7 +141,7 @@ const READY_TIMEOUT: Duration = Duration::from_secs(5);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 fn wait_until_ready<L: Logger>(
-    provider_name: &str,
+    driver_name: &str,
     child: &mut std::process::Child,
     logger: &L,
 ) -> crate::cli::Result<()> {
@@ -150,19 +150,19 @@ fn wait_until_ready<L: Logger>(
         let child_status = child
             .try_wait()
             .map(|status| status.map(|value| value.to_string()))
-            .map_err(|source| crate::cli::Error::WaitForProvider {
-                provider_name: provider_name.to_owned(),
+            .map_err(|source| crate::cli::Error::WaitForDriver {
+                driver_name: driver_name.to_owned(),
                 source,
             })?;
 
         match next_ready_action(
-            provider_name,
-            crate::cli::provider_control::provider_daemon_ready(provider_name),
+            driver_name,
+            crate::cli::provider_control::provider_daemon_ready(driver_name),
             child_status,
             Instant::now() >= deadline,
         ) {
             Ok(ReadyAction::Ready) => {
-                logger.info(format!("Provider {provider_name} is ready"));
+                logger.info(format!("Driver {driver_name} is ready"));
                 return Ok(());
             }
             Ok(ReadyAction::Wait) => {}
@@ -180,7 +180,7 @@ enum ReadyAction {
 }
 
 fn next_ready_action(
-    provider_name: &str,
+    driver_name: &str,
     is_running: bool,
     child_status: Option<String>,
     deadline_expired: bool,
@@ -190,15 +190,15 @@ fn next_ready_action(
     }
 
     if let Some(status) = child_status {
-        return Err(crate::cli::Error::ProviderExitedBeforeReady {
-            provider_name: provider_name.to_owned(),
+        return Err(crate::cli::Error::DriverExitedBeforeReady {
+            driver_name: driver_name.to_owned(),
             status,
         });
     }
 
     if deadline_expired {
-        return Err(crate::cli::Error::ProviderDidNotBecomeReady {
-            provider_name: provider_name.to_owned(),
+        return Err(crate::cli::Error::DriverDidNotBecomeReady {
+            driver_name: driver_name.to_owned(),
         });
     }
 
@@ -237,14 +237,14 @@ mod tests {
     }
 
     impl ConnectUseCase for RecordingUseCase {
-        fn connect_name(&self, provider_name: &str) -> crate::application::connect::Result<()> {
+        fn connect_name(&self, driver_name: &str) -> crate::application::connect::Result<()> {
             self.calls
                 .lock()
                 .expect("calls lock")
-                .push(format!("name:{provider_name}"));
-            match self.connect_name_errors.get(provider_name) {
+                .push(format!("name:{driver_name}"));
+            match self.connect_name_errors.get(driver_name) {
                 Some(reason) => Err(ConnectError::Launch {
-                    provider_name: provider_name.to_owned(),
+                    driver_name: driver_name.to_owned(),
                     reason: reason.clone(),
                 }),
                 None => Ok(()),
@@ -344,7 +344,7 @@ mod tests {
 
         assert!(matches!(
             outcome,
-            crate::cli::Error::ProviderExitedBeforeReady { .. }
+            crate::cli::Error::DriverExitedBeforeReady { .. }
         ));
     }
 
@@ -355,7 +355,7 @@ mod tests {
 
         assert!(matches!(
             outcome,
-            crate::cli::Error::ProviderDidNotBecomeReady { .. }
+            crate::cli::Error::DriverDidNotBecomeReady { .. }
         ));
     }
 }

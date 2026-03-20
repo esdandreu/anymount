@@ -65,5 +65,5 @@ fn provide_otel_handles(cli: &Cli) -> super::Result<Option<crate::telemetry::Ote
         .map(crate::ConfigDir::new)
         .unwrap_or_default();
     let spec = config_dir.read_spec(name)?;
-    crate::telemetry::OtelHandles::from_provider_spec(&spec).map_err(super::Error::from)
+    crate::telemetry::OtelHandles::from_driver_spec(&spec).map_err(super::Error::from)
 }

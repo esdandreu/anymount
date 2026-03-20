@@ -10,8 +10,8 @@ use crate::application::connect::{
 use crate::auth::{OneDriveAuthFlow, TokenResponse};
 use crate::cli::commands::config::ProviderType;
 use crate::config::ConfigDir;
-use crate::domain::provider::ProviderSpec;
-use crate::{Logger, ProviderFileConfig, StorageConfig, TracingLogger};
+use crate::domain::driver::Driver;
+use crate::{DriverFileConfig, Logger, StorageConfig, TracingLogger};
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
     MouseEvent, MouseEventKind,
@@ -40,7 +40,7 @@ const COLOR_STATUS: Color = Color::Green;
 #[derive(Debug, Clone)]
 struct ProviderEntry {
     name: String,
-    config: ProviderFileConfig,
+    config: DriverFileConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -128,11 +128,11 @@ impl AppState {
     }
 }
 
-fn provider_entry_from_spec(spec: ProviderSpec) -> ProviderEntry {
+fn provider_entry_from_spec(spec: Driver) -> ProviderEntry {
     let name = spec.name.clone();
     ProviderEntry {
         name,
-        config: ProviderFileConfig {
+        config: DriverFileConfig {
             path: spec.path,
             storage: spec.storage.into(),
             telemetry: spec.telemetry.into(),
@@ -156,11 +156,11 @@ impl ConfigRepository for TuiConfigRepository {
         self.config_dir.list().map_err(Into::into)
     }
 
-    fn read_spec(&self, name: &str) -> crate::application::config::Result<ProviderSpec> {
+    fn read_spec(&self, name: &str) -> crate::application::config::Result<Driver> {
         self.config_dir.read_spec(name).map_err(Into::into)
     }
 
-    fn write_spec(&self, spec: &ProviderSpec) -> crate::application::config::Result<()> {
+    fn write_spec(&self, spec: &Driver) -> crate::application::config::Result<()> {
         self.config_dir.write_spec(spec).map_err(Into::into)
     }
 
@@ -451,11 +451,9 @@ impl EditDraft {
         Ok(())
     }
 
-    fn to_provider_config(&self) -> Result<ProviderFileConfig> {
+    fn to_provider_config(&self) -> Result<DriverFileConfig> {
         if self.name.trim().is_empty() {
-            return Err(Error::Validation(
-                "provider.name cannot be empty".to_owned(),
-            ));
+            return Err(Error::Validation("driver.name cannot be empty".to_owned()));
         }
         if self.path.trim().is_empty() {
             return Err(Error::Validation("path cannot be empty".to_owned()));
@@ -498,7 +496,7 @@ impl EditDraft {
             }
         };
 
-        Ok(ProviderFileConfig {
+        Ok(DriverFileConfig {
             path: PathBuf::from(self.path.trim()),
             storage,
             telemetry: Default::default(),
@@ -1623,8 +1621,8 @@ fn spawn_provider_process(provider_name: &str, config_dir: &Path) -> Result<std:
         .arg("--config-dir")
         .arg(config_dir)
         .spawn()
-        .map_err(|source| crate::cli::Error::SpawnProvider {
-            provider_name: provider_name.to_owned(),
+        .map_err(|source| crate::cli::Error::SpawnDriver {
+            driver_name: provider_name.to_owned(),
             source,
         })
         .map_err(Error::from)
@@ -1640,8 +1638,8 @@ fn wait_until_ready<L: Logger>(
         let child_status = child
             .try_wait()
             .map(|status| status.map(|value| value.to_string()))
-            .map_err(|source| crate::cli::Error::WaitForProvider {
-                provider_name: provider_name.to_owned(),
+            .map_err(|source| crate::cli::Error::WaitForDriver {
+                driver_name: provider_name.to_owned(),
                 source,
             })
             .map_err(Error::from)?;
@@ -1680,16 +1678,16 @@ fn next_ready_action(
     }
 
     if let Some(status) = child_status {
-        return Err(crate::cli::Error::ProviderExitedBeforeReady {
-            provider_name: provider_name.to_owned(),
+        return Err(crate::cli::Error::DriverExitedBeforeReady {
+            driver_name: provider_name.to_owned(),
             status,
         }
         .into());
     }
 
     if deadline_expired {
-        return Err(crate::cli::Error::ProviderDidNotBecomeReady {
-            provider_name: provider_name.to_owned(),
+        return Err(crate::cli::Error::DriverDidNotBecomeReady {
+            driver_name: provider_name.to_owned(),
         }
         .into());
     }
@@ -1803,7 +1801,7 @@ mod tests {
     fn local_provider(name: &str) -> ProviderEntry {
         ProviderEntry {
             name: name.to_owned(),
-            config: ProviderFileConfig {
+            config: DriverFileConfig {
                 path: PathBuf::from(format!("/mnt/{name}")),
                 storage: StorageConfig::Local {
                     root: PathBuf::from(format!("/data/{name}")),

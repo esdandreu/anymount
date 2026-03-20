@@ -1,13 +1,14 @@
 use crate::application::provide::{
-    Application as ProvideApplication, Error as ProvideError, ProvideRepository, ProvideUseCase,
-    ProviderRuntimeHost, TelemetryFactory,
+    Application as ProvideApplication, DriverRuntimeHost, Error as ProvideError, ProvideRepository,
+    ProvideUseCase, TelemetryFactory,
 };
 use crate::application::types::ProvideRequest;
 use crate::config::ConfigDir;
-use crate::domain::provider::{ProviderSpec, StorageSpec, TelemetrySpec};
+use crate::domain::driver::{Driver as DriverSpec, StorageSpec, TelemetrySpec};
+use crate::drivers::Driver;
 use crate::service::control::messages::{ControlMessage, ServiceMessage};
 use crate::service::ServiceRuntime;
-use crate::{Logger, Provider, TracingLogger};
+use crate::{Logger, TracingLogger};
 use clap::{Args, Subcommand};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -56,7 +57,7 @@ impl ProvideCommand {
         }
     }
 
-    fn inline_spec(&self) -> crate::cli::Result<ProviderSpec> {
+    fn inline_spec(&self) -> crate::cli::Result<DriverSpec> {
         let Some(path) = &self.path else {
             return Err(crate::cli::Error::MissingProvideTarget);
         };
@@ -64,8 +65,8 @@ impl ProvideCommand {
             return Err(crate::cli::Error::MissingProvideTarget);
         };
 
-        Ok(ProviderSpec {
-            name: inline_provider_name(path),
+        Ok(DriverSpec {
+            name: inline_driver_name(path),
             path: path.clone(),
             storage: storage.to_storage_spec(),
             telemetry: TelemetrySpec::default(),
@@ -152,7 +153,7 @@ impl ConfigRepository {
 }
 
 impl ProvideRepository for ConfigRepository {
-    fn read_spec(&self, name: &str) -> crate::application::provide::Result<ProviderSpec> {
+    fn read_spec(&self, name: &str) -> crate::application::provide::Result<DriverSpec> {
         self.config_dir.read_spec(name).map_err(Into::into)
     }
 }
@@ -163,9 +164,9 @@ struct DefaultTelemetryFactory;
 impl TelemetryFactory for DefaultTelemetryFactory {
     fn build(
         &self,
-        spec: &ProviderSpec,
+        spec: &DriverSpec,
     ) -> crate::application::provide::Result<Option<crate::telemetry::OtelHandles>> {
-        crate::telemetry::OtelHandles::from_provider_spec(spec).map_err(Into::into)
+        crate::telemetry::OtelHandles::from_driver_spec(spec).map_err(Into::into)
     }
 }
 
@@ -180,13 +181,13 @@ impl<L: Logger> RuntimeHost<L> {
     }
 }
 
-impl<L: Logger + 'static> ProviderRuntimeHost for RuntimeHost<L> {
+impl<L: Logger + 'static> DriverRuntimeHost for RuntimeHost<L> {
     fn run(
         &self,
         request: ProvideRequest,
         telemetry: Option<crate::telemetry::OtelHandles>,
     ) -> crate::application::provide::Result<()> {
-        let provider_name = request
+        let driver_name = request
             .control_name
             .clone()
             .unwrap_or_else(|| request.spec.name.clone());
@@ -195,33 +196,33 @@ impl<L: Logger + 'static> ProviderRuntimeHost for RuntimeHost<L> {
             let (tx, rx) = mpsc::channel();
             install_ctrlc_handler(tx.clone(), &self.logger).map_err(|error| {
                 ProvideError::Host {
-                    provider_name: provider_name.clone(),
+                    driver_name: driver_name.clone(),
                     reason: error.to_string(),
                 }
             })?;
 
-            let providers: Vec<Box<dyn Provider>> = crate::connect_providers_with_telemetry(
+            let drivers: Vec<Box<dyn Driver>> = crate::connect_drivers_with_telemetry(
                 std::slice::from_ref(&request.spec),
                 &self.logger,
                 Some(tx.clone()),
             )
             .map_err(|error| ProvideError::Host {
-                provider_name: provider_name.clone(),
+                driver_name: driver_name.clone(),
                 reason: error.to_string(),
             })?;
 
-            for provider in &providers {
+            for driver in &drivers {
                 self.logger.info(format!(
                     "Connected to {} at {}",
-                    provider.kind(),
-                    provider.path().display()
+                    driver.kind(),
+                    driver.path().display()
                 ));
             }
 
             if let Some(control_name) = request.control_name.as_deref() {
                 spawn_control_server(control_name, tx, &self.logger).map_err(|error| {
                     ProvideError::Host {
-                        provider_name: control_name.to_owned(),
+                        driver_name: control_name.to_owned(),
                         reason: error.to_string(),
                     }
                 })?;
@@ -229,10 +230,10 @@ impl<L: Logger + 'static> ProviderRuntimeHost for RuntimeHost<L> {
 
             let mut runtime = ServiceRuntime::new(self.logger.clone(), rx);
             let result = runtime.run().map_err(|error| ProvideError::Host {
-                provider_name: provider_name.clone(),
+                driver_name: driver_name.clone(),
                 reason: error.to_string(),
             });
-            drop(providers);
+            drop(drivers);
             result
         })();
 
@@ -249,17 +250,17 @@ fn map_provide_error(error: ProvideError) -> crate::cli::Error {
         ProvideError::Config(source) => crate::cli::Error::Config(source),
         ProvideError::Telemetry(source) => crate::cli::Error::Otlp(source),
         ProvideError::Repository {
-            provider_name,
+            driver_name,
             reason,
         }
         | ProvideError::Host {
-            provider_name,
+            driver_name,
             reason,
-        } => crate::cli::Error::Validation(format!("{provider_name}: {reason}")),
+        } => crate::cli::Error::Validation(format!("{driver_name}: {reason}")),
     }
 }
 
-fn inline_provider_name(path: &Path) -> String {
+fn inline_driver_name(path: &Path) -> String {
     path.file_name()
         .and_then(|value| value.to_str())
         .filter(|value| !value.is_empty())
@@ -269,7 +270,7 @@ fn inline_provider_name(path: &Path) -> String {
 
 fn control_reply_for_request(
     bytes: &[u8],
-    provider_name: &str,
+    driver_name: &str,
     tx: &mpsc::Sender<ServiceMessage>,
 ) -> ControlMessage {
     match ControlMessage::decode(bytes) {
@@ -279,7 +280,7 @@ fn control_reply_for_request(
             ControlMessage::Ack
         }
         Ok(other) => ControlMessage::Error(format!(
-            "unsupported control message for {provider_name}: {other:?}"
+            "unsupported control message for {driver_name}: {other:?}"
         )),
         Err(error) => ControlMessage::Error(error.to_string()),
     }
@@ -300,12 +301,12 @@ fn install_ctrlc_handler<L: Logger>(
 
 #[cfg(unix)]
 fn spawn_control_server<L: Logger + 'static>(
-    provider_name: &str,
+    driver_name: &str,
     tx: mpsc::Sender<ServiceMessage>,
     logger: &L,
 ) -> crate::cli::Result<()> {
-    let listener = UnixControl.bind(provider_name)?;
-    let provider_name = provider_name.to_owned();
+    let listener = UnixControl.bind(driver_name)?;
+    let driver_name = driver_name.to_owned();
     let logger = logger.clone();
     std::thread::spawn(move || {
         for stream in listener.incoming() {
@@ -316,32 +317,30 @@ fn spawn_control_server<L: Logger + 'static>(
             if std::io::Read::read_to_end(&mut stream, &mut bytes).is_err() {
                 continue;
             }
-            let reply = control_reply_for_request(&bytes, &provider_name, &tx);
+            let reply = control_reply_for_request(&bytes, &driver_name, &tx);
             let _ = std::io::Write::write_all(&mut stream, &reply.encode());
             if matches!(reply, ControlMessage::Ack) {
                 break;
             }
         }
-        logger.info(format!(
-            "control server stopped for provider {provider_name}"
-        ));
+        logger.info(format!("control server stopped for driver {driver_name}"));
     });
     Ok(())
 }
 
 #[cfg(target_os = "windows")]
 fn spawn_control_server<L: Logger + 'static>(
-    provider_name: &str,
+    driver_name: &str,
     tx: mpsc::Sender<ServiceMessage>,
     logger: &L,
 ) -> crate::cli::Result<()> {
-    let listener = WindowsControl.bind(provider_name)?;
-    let provider_name = provider_name.to_owned();
+    let listener = WindowsControl.bind(driver_name)?;
+    let driver_name = driver_name.to_owned();
     let logger = logger.clone();
     std::thread::spawn(move || {
         loop {
-            let stop = match listener.serve_one_exchange(&provider_name, |bytes| {
-                let reply = control_reply_for_request(bytes, &provider_name, &tx);
+            let stop = match listener.serve_one_exchange(&driver_name, |bytes| {
+                let reply = control_reply_for_request(bytes, &driver_name, &tx);
                 let stop = matches!(reply, ControlMessage::Ack);
                 (reply, stop)
             }) {
@@ -352,21 +351,19 @@ fn spawn_control_server<L: Logger + 'static>(
                 break;
             }
         }
-        logger.info(format!(
-            "control server stopped for provider {provider_name}"
-        ));
+        logger.info(format!("control server stopped for driver {driver_name}"));
     });
     Ok(())
 }
 
 #[cfg(not(any(unix, target_os = "windows")))]
 fn spawn_control_server<L: Logger>(
-    _provider_name: &str,
+    _driver_name: &str,
     _tx: mpsc::Sender<ServiceMessage>,
     _logger: &L,
 ) -> crate::cli::Result<()> {
     Err(crate::cli::Error::Validation(
-        "named provider control transport is not supported on this platform".to_owned(),
+        "named driver control transport is not supported on this platform".to_owned(),
     ))
 }
 
@@ -395,21 +392,21 @@ mod tests {
             state.named_calls.push(name.to_owned());
             if let Some(reason) = &state.fail_named {
                 return Err(ProvideError::Repository {
-                    provider_name: name.to_owned(),
+                    driver_name: name.to_owned(),
                     reason: reason.clone(),
                 });
             }
             Ok(())
         }
 
-        fn run_inline(&self, spec: ProviderSpec) -> crate::application::provide::Result<()> {
+        fn run_inline(&self, spec: DriverSpec) -> crate::application::provide::Result<()> {
             self.borrow_mut().inline_calls.push(spec.name);
             Ok(())
         }
     }
 
     #[test]
-    fn provide_returns_error_when_provider_startup_fails() {
+    fn provide_returns_error_when_driver_startup_fails() {
         let command = ProvideCommand {
             name: Some("demo".to_owned()),
             path: None,
@@ -470,7 +467,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_inline_request_builds_single_provider_spec() {
+    fn resolve_inline_request_builds_single_driver_spec() {
         let command = ProvideCommand {
             name: None,
             path: Some(PathBuf::from("/mnt/demo")),

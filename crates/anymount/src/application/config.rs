@@ -1,4 +1,4 @@
-use crate::domain::provider::{ProviderSpec, StorageSpec};
+use crate::domain::driver::{Driver, StorageSpec};
 use std::num::ParseIntError;
 use std::path::PathBuf;
 
@@ -7,8 +7,8 @@ pub enum Error {
     #[error(transparent)]
     Config(#[from] crate::config::Error),
 
-    #[error("provider '{name}' already exists")]
-    DuplicateProvider { name: String },
+    #[error("driver '{name}' already exists")]
+    DuplicateDriver { name: String },
 
     #[error("'{key}' only applies to onedrive storage")]
     InvalidStorageKey { key: String },
@@ -32,15 +32,15 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 pub trait ConfigRepository {
     fn list_names(&self) -> Result<Vec<String>>;
-    fn read_spec(&self, name: &str) -> Result<ProviderSpec>;
-    fn write_spec(&self, spec: &ProviderSpec) -> Result<()>;
+    fn read_spec(&self, name: &str) -> Result<Driver>;
+    fn write_spec(&self, spec: &Driver) -> Result<()>;
     fn remove(&self, name: &str) -> Result<()>;
 }
 
 pub trait ConfigUseCase {
     fn list(&self) -> Result<Vec<String>>;
-    fn read(&self, name: &str) -> Result<ProviderSpec>;
-    fn add(&self, spec: ProviderSpec) -> Result<()>;
+    fn read(&self, name: &str) -> Result<Driver>;
+    fn add(&self, spec: Driver) -> Result<()>;
     fn remove(&self, name: &str) -> Result<()>;
     fn set(&self, name: &str, key: &str, value: &str) -> Result<()>;
 }
@@ -63,13 +63,13 @@ where
         self.repository.list_names()
     }
 
-    fn read(&self, name: &str) -> Result<ProviderSpec> {
+    fn read(&self, name: &str) -> Result<Driver> {
         self.repository.read_spec(name)
     }
 
-    fn add(&self, spec: ProviderSpec) -> Result<()> {
+    fn add(&self, spec: Driver) -> Result<()> {
         if self.repository.list_names()?.contains(&spec.name) {
-            return Err(Error::DuplicateProvider {
+            return Err(Error::DuplicateDriver {
                 name: spec.name.clone(),
             });
         }
@@ -87,7 +87,7 @@ where
     }
 }
 
-pub(crate) fn apply_set(spec: &mut ProviderSpec, key: &str, value: &str) -> Result<()> {
+pub(crate) fn apply_set(spec: &mut Driver, key: &str, value: &str) -> Result<()> {
     match key {
         "path" => {
             spec.path = PathBuf::from(value);
@@ -169,14 +169,14 @@ fn parse_u64(value: String) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::{Application, ConfigRepository, ConfigUseCase, Error, Result};
-    use crate::domain::provider::{ProviderSpec, StorageSpec, TelemetrySpec};
+    use crate::domain::driver::{Driver, StorageSpec, TelemetrySpec};
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::path::PathBuf;
 
     #[derive(Default)]
     struct TestRepository {
-        specs: RefCell<HashMap<String, ProviderSpec>>,
+        specs: RefCell<HashMap<String, Driver>>,
     }
 
     impl ConfigRepository for TestRepository {
@@ -186,17 +186,17 @@ mod tests {
             Ok(names)
         }
 
-        fn read_spec(&self, name: &str) -> Result<ProviderSpec> {
+        fn read_spec(&self, name: &str) -> Result<Driver> {
             self.specs
                 .borrow()
                 .get(name)
                 .cloned()
-                .ok_or_else(|| Error::DuplicateProvider {
+                .ok_or_else(|| Error::DuplicateDriver {
                     name: format!("missing:{name}"),
                 })
         }
 
-        fn write_spec(&self, spec: &ProviderSpec) -> Result<()> {
+        fn write_spec(&self, spec: &Driver) -> Result<()> {
             self.specs
                 .borrow_mut()
                 .insert(spec.name.clone(), spec.clone());
@@ -214,7 +214,7 @@ mod tests {
     }
 
     impl TestConfigApp {
-        fn with_existing(self, spec: ProviderSpec) -> Self {
+        fn with_existing(self, spec: Driver) -> Self {
             self.repository
                 .specs
                 .borrow_mut()
@@ -222,7 +222,7 @@ mod tests {
             self
         }
 
-        fn add(&self, spec: ProviderSpec) -> Result<()> {
+        fn add(&self, spec: Driver) -> Result<()> {
             self.application().add(spec)
         }
 
@@ -230,7 +230,7 @@ mod tests {
             self.application().set(name, key, value)
         }
 
-        fn read(&self, name: &str) -> Result<ProviderSpec> {
+        fn read(&self, name: &str) -> Result<Driver> {
             self.application().read(name)
         }
 
@@ -245,8 +245,8 @@ mod tests {
         }
     }
 
-    fn local_provider_spec(name: &str) -> ProviderSpec {
-        ProviderSpec {
+    fn local_driver_spec(name: &str) -> Driver {
+        Driver {
             name: name.to_owned(),
             path: PathBuf::from(format!("/mnt/{name}")),
             storage: StorageSpec::Local {
@@ -256,8 +256,8 @@ mod tests {
         }
     }
 
-    fn onedrive_provider_spec(name: &str) -> ProviderSpec {
-        ProviderSpec {
+    fn onedrive_driver_spec(name: &str) -> Driver {
+        Driver {
             name: name.to_owned(),
             path: PathBuf::from(format!("/mnt/{name}")),
             storage: StorageSpec::OneDrive {
@@ -273,17 +273,17 @@ mod tests {
     }
 
     #[test]
-    fn add_rejects_duplicate_provider_names() {
-        let app = test_config_app().with_existing(local_provider_spec("alpha"));
+    fn add_rejects_duplicate_driver_names() {
+        let app = test_config_app().with_existing(local_driver_spec("alpha"));
         let err = app
-            .add(local_provider_spec("alpha"))
+            .add(local_driver_spec("alpha"))
             .expect_err("add should fail");
         assert!(err.to_string().contains("already exists"));
     }
 
     #[test]
     fn set_updates_storage_endpoint() {
-        let app = test_config_app().with_existing(onedrive_provider_spec("alpha"));
+        let app = test_config_app().with_existing(onedrive_driver_spec("alpha"));
         app.set("alpha", "storage.endpoint", "https://example.test/v1")
             .expect("set should work");
 

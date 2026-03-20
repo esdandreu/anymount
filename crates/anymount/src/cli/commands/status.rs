@@ -2,9 +2,9 @@ use crate::application::status::{
     Application as StatusApplication, Error as StatusError, ServiceControl, StatusEntry,
     StatusRepository, StatusUseCase,
 };
-use crate::application::types::ProviderStatusRow;
+use crate::application::types::DriverStatusRow;
 use crate::config::ConfigDir;
-use crate::domain::provider::ProviderSpec;
+use crate::domain::driver::Driver;
 use clap::Args;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -44,7 +44,7 @@ impl StatusCommand {
         Ok(())
     }
 
-    fn write_one_entry<W: Write>(out: &mut W, row: ProviderStatusRow) -> crate::cli::Result<()> {
+    fn write_one_entry<W: Write>(out: &mut W, row: DriverStatusRow) -> crate::cli::Result<()> {
         if let Some(error) = row.error {
             writeln!(out, "{}", format_status_error(&row.name, &error)).map_err(write_cli_error)?;
             return Ok(());
@@ -87,10 +87,10 @@ impl StatusRepository for ConfigRepository {
     fn list_entries(&self) -> crate::application::status::Result<Vec<StatusEntry>> {
         let entries = self
             .config_dir
-            .each_provider()?
+            .each_driver()?
             .map(|(name, loaded)| match loaded {
                 Ok(config) => {
-                    let spec = ProviderSpec {
+                    let spec = Driver {
                         name: name.clone(),
                         path: config.path,
                         storage: config.storage.into(),
@@ -118,8 +118,8 @@ impl StatusRepository for ConfigRepository {
 struct ProviderServiceControl;
 
 impl ServiceControl for ProviderServiceControl {
-    fn ready(&self, provider_name: &str) -> bool {
-        crate::cli::provider_control::provider_daemon_ready(provider_name)
+    fn ready(&self, driver_name: &str) -> bool {
+        crate::cli::provider_control::provider_daemon_ready(driver_name)
     }
 }
 
@@ -149,17 +149,17 @@ mod tests {
 
     #[derive(Default)]
     struct StaticStatusUseCase {
-        rows: Vec<ProviderStatusRow>,
+        rows: Vec<DriverStatusRow>,
     }
 
     impl StatusUseCase for StaticStatusUseCase {
-        fn list(&self) -> crate::application::status::Result<Vec<ProviderStatusRow>> {
+        fn list(&self) -> crate::application::status::Result<Vec<DriverStatusRow>> {
             Ok(self.rows.clone())
         }
     }
 
-    fn local_row(name: &str, ready: bool) -> ProviderStatusRow {
-        ProviderStatusRow {
+    fn local_row(name: &str, ready: bool) -> DriverStatusRow {
+        DriverStatusRow {
             name: name.to_owned(),
             storage: Some("local".to_owned()),
             path: Some(PathBuf::from(format!("/mnt/{name}"))),
@@ -230,7 +230,7 @@ mod tests {
         let mut buf = Vec::new();
         let use_case = StaticStatusUseCase {
             rows: vec![
-                ProviderStatusRow {
+                DriverStatusRow {
                     name: "bad".to_owned(),
                     storage: None,
                     path: None,

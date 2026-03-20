@@ -11,12 +11,10 @@ pub const ACTION_FREE_LOCAL_CACHE: &str = "freelocalcache";
 const SUBSCRIPTION_GROUP: u32 = 0;
 const MENU_ID: u32 = 0;
 
-/// Action names exposed per account.
 pub fn action_names() -> &'static [&'static str] {
     &[ACTION_OPEN_FOLDER, ACTION_FREE_LOCAL_CACHE]
 }
 
-/// Build menu items for Start() reply: label and action name per item.
 pub fn menu_items() -> Vec<(&'static str, &'static str)> {
     vec![
         ("Open in file manager", ACTION_OPEN_FOLDER),
@@ -24,12 +22,10 @@ pub fn menu_items() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-/// (enabled, parameter_type, state) for Describe/DescribeAll; stateless actions.
 pub fn describe_action(enabled: bool) -> (bool, String, Vec<OwnedValue>) {
     (enabled, String::new(), Vec::new())
 }
 
-/// Build the reply value for org.gtk.Menus Start(): (subscription_group, menu_id, items).
 pub fn build_start_reply() -> Vec<(u32, u32, Vec<HashMap<String, OwnedValue>>)> {
     let items: Vec<HashMap<String, OwnedValue>> = menu_items()
         .into_iter()

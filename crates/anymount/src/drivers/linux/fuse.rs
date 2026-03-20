@@ -1,8 +1,8 @@
 //! Read-only FUSE filesystem backed by the [`Storage`] trait.
 
 use super::{Error, Result};
-use crate::Logger;
 use crate::storages::{DirEntry, Storage, WriteAt};
+use crate::Logger;
 use fuser::{
     Errno, FileAttr, FileHandle, FileType, Generation, INodeNo, OpenFlags, ReplyAttr, ReplyData,
     ReplyDirectory, ReplyEntry, Request,
@@ -12,22 +12,19 @@ use std::collections::{BTreeSet, HashMap};
 use std::fs::OpenOptions;
 use std::os::unix::fs::FileExt;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 const ROOT_INO: u64 = 1;
 const TTL: Duration = Duration::from_secs(1);
-/// Cache list operations briefly to avoid repeated network requests per `ls`.
 const DIR_CACHE_TTL: Duration = Duration::from_secs(2);
-/// Data cache chunk size used to track downloaded sparse file blocks.
 const DATA_CACHE_BLOCK_SIZE: u64 = 64 * 1024;
 const FUSE_GENERATION: Generation = Generation(1);
 const DOT_ENTRY_OFFSET: u64 = 1;
 const DOT_DOT_ENTRY_OFFSET: u64 = 2;
 const FIRST_CHILD_ENTRY_OFFSET: u64 = 3;
 
-/// Metadata for a single node (file or directory) in the FUSE tree.
 #[derive(Clone)]
 struct NodeInfo {
     path: PathBuf,
@@ -52,7 +49,7 @@ struct CachedDir {
 
 trait CachePort: Send + Sync {
     fn sync_metadata_placeholders(&self, dir_path: &Path, entries: &[CachedDirEntry])
-    -> Result<()>;
+        -> Result<()>;
     fn read_range(&self, path: &Path, start: u64, end: u64) -> Result<Vec<u8>>;
     fn write_range(&self, path: &Path, start: u64, data: &[u8], size: u64) -> Result<()>;
 }
@@ -274,7 +271,6 @@ impl CachePort for SparseFsCache {
     }
 }
 
-/// Read-only FUSE filesystem that delegates to a [`Storage`] implementation.
 pub struct StorageFilesystem<S: Storage, L: Logger + 'static> {
     storage: Arc<S>,
     cache: Arc<dyn CachePort>,
@@ -657,15 +653,15 @@ impl<S: Storage, L: Logger + 'static> fuser::Filesystem for StorageFilesystem<S,
 #[cfg(test)]
 mod tests {
     use super::{
-        CachePort, DOT_DOT_ENTRY_OFFSET, DOT_ENTRY_OFFSET, FIRST_CHILD_ENTRY_OFFSET, Result,
-        SparseFsCache, StorageFilesystem,
+        CachePort, Result, SparseFsCache, StorageFilesystem, DOT_DOT_ENTRY_OFFSET,
+        DOT_ENTRY_OFFSET, FIRST_CHILD_ENTRY_OFFSET,
     };
     use crate::storages::{LocalStorage, Storage, WriteAt};
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::SystemTime;
     use tempfile::TempDir;
 
@@ -901,9 +897,6 @@ mod tests {
         let err = SparseFsCache::new(PathBuf::from("/proc/anymount-denied"))
             .expect_err("cache init should fail");
 
-        assert!(matches!(
-            err,
-            crate::providers::libcloudprovider::Error::CacheIo { .. }
-        ));
+        assert!(matches!(err, crate::drivers::linux::Error::CacheIo { .. }));
     }
 }

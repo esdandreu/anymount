@@ -1,8 +1,8 @@
-use crate::domain::provider::ProviderSpec;
+use crate::domain::driver::Driver;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderStatusRow {
+pub struct DriverStatusRow {
     pub name: String,
     pub storage: Option<String>,
     pub path: Option<PathBuf>,
@@ -12,6 +12,6 @@ pub struct ProviderStatusRow {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProvideRequest {
-    pub spec: ProviderSpec,
+    pub spec: Driver,
     pub control_name: Option<String>,
 }

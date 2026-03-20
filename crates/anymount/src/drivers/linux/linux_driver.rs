@@ -1,4 +1,4 @@
-//! Linux provider: FUSE mount + D-Bus org.freedesktop.CloudProviders.
+//! Linux driver: FUSE mount + D-Bus org.freedesktop.CloudProviders.
 
 use super::dbus::{
     AccountExporter, ActionMessage, PROVIDER_PATH, ProviderExporter, new_account_interfaces,
@@ -6,21 +6,19 @@ use super::dbus::{
 };
 use super::gtk_dbus::{ACTION_FREE_LOCAL_CACHE, ACTION_OPEN_FOLDER};
 use super::{Error, Result, StorageFilesystem};
+use crate::drivers::Driver;
 use crate::Logger;
-use crate::providers::Provider;
 use crate::storages::Storage;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
-/// Linux provider: FUSE mount backed by Storage + D-Bus CloudProviders advertisement.
-pub struct LibCloudProvider {
+pub struct LinuxDriver {
     path: PathBuf,
     _session: fuser::BackgroundSession,
 }
 
-impl LibCloudProvider {
-    /// Create a provider from an already-mounted FUSE session (path and session from mount).
+impl LinuxDriver {
     pub fn new(path: PathBuf, session: fuser::BackgroundSession) -> Self {
         Self {
             path,
@@ -29,7 +27,7 @@ impl LibCloudProvider {
     }
 }
 
-impl Provider for LibCloudProvider {
+impl Driver for LinuxDriver {
     fn kind(&self) -> &'static str {
         "LibCloudProviders"
     }
@@ -59,7 +57,6 @@ pub(crate) fn cache_root_for_mount(path: &PathBuf) -> PathBuf {
         .join(mount_hash)
 }
 
-/// Mount storage at path with FUSE and return (path, BackgroundSession).
 pub fn mount_storage(
     path: PathBuf,
     storage: impl Storage,
@@ -117,7 +114,6 @@ async fn run_actions<L: Logger>(
     }
 }
 
-/// Register provider and accounts on D-Bus and spawn the connection loop.
 pub async fn export_on_dbus<L: Logger + Clone + 'static>(
     accounts: &[(PathBuf, AccountExporter)],
     logger: &L,
@@ -143,7 +139,7 @@ pub async fn export_on_dbus<L: Logger + Clone + 'static>(
         .at(PROVIDER_PATH, ProviderExporter::default())
         .await
         .map_err(|source| Error::DbusObject {
-            operation: "register provider interface",
+            operation: "register driver interface",
             object_path: PROVIDER_PATH.to_string(),
             source,
         })?;

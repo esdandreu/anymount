@@ -1,18 +1,18 @@
-//! Provider domain types.
+//! Driver domain types.
 //!
-//! This module defines provider-facing concepts shared across adapters. The
-//! types here describe what a provider is and the invariants it must satisfy
+//! This module defines driver-facing concepts shared across adapters. The
+//! types here describe what a driver is and the invariants it must satisfy
 //! before adapter code can persist, mount, or host it.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use thiserror::Error;
 
-/// Provider domain validation failures.
+/// Driver domain validation failures.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum Error {
-    /// The provider mount path is empty.
-    #[error("provider mount path is missing")]
+    /// The driver mount path is empty.
+    #[error("driver mount path is missing")]
     MissingMountPath,
     /// The local storage root is empty.
     #[error("local storage root is missing")]
@@ -25,24 +25,24 @@ pub enum Error {
     MissingOneDriveTokenMaterial,
 }
 
-/// Result type for provider domain validation.
+/// Result type for driver domain validation.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// A configured provider definition.
+/// A configured driver definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderSpec {
-    /// Stable provider name derived from config.
+pub struct Driver {
+    /// Stable driver name derived from config.
     pub name: String,
-    /// Local mount path exposed by the provider.
+    /// Local mount path exposed by the driver.
     pub path: PathBuf,
-    /// Storage backend configuration for this provider.
+    /// Storage backend configuration for this driver.
     pub storage: StorageSpec,
-    /// Optional telemetry configuration for this provider.
+    /// Optional telemetry configuration for this driver.
     pub telemetry: TelemetrySpec,
 }
 
-impl ProviderSpec {
-    /// Validates provider invariants.
+impl Driver {
+    /// Validates driver invariants.
     ///
     /// # Errors
     /// Returns an error when the mount path or storage configuration is
@@ -68,7 +68,7 @@ impl ProviderSpec {
 pub enum StorageSpec {
     /// Local directory storage.
     Local {
-        /// Root directory exposed by the provider.
+        /// Root directory exposed by the driver.
         root: PathBuf,
     },
     /// OneDrive storage via Microsoft Graph.
@@ -129,14 +129,14 @@ impl StorageSpec {
     }
 }
 
-/// Provider telemetry settings.
+/// Driver telemetry settings.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TelemetrySpec {
     /// Optional OTLP exporter configuration.
     pub otlp: Option<OtlpSpec>,
 }
 
-/// OTLP exporter settings for one provider.
+/// OTLP exporter settings for one driver.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OtlpSpec {
     /// Whether OTLP export is enabled.
@@ -175,11 +175,11 @@ pub enum OtlpTransport {
 
 #[cfg(test)]
 mod tests {
-    use super::{Error, ProviderSpec, StorageSpec, TelemetrySpec};
+    use super::{Driver, Error, StorageSpec, TelemetrySpec};
     use std::path::PathBuf;
 
-    fn local_provider_spec(name: &str) -> ProviderSpec {
-        ProviderSpec {
+    fn local_driver_spec(name: &str) -> Driver {
+        Driver {
             name: name.to_owned(),
             path: PathBuf::from(format!("/mnt/{name}")),
             storage: StorageSpec::Local {
@@ -191,7 +191,7 @@ mod tests {
 
     #[test]
     fn onedrive_spec_requires_token_material() {
-        let spec = ProviderSpec {
+        let spec = Driver {
             name: "demo".to_owned(),
             path: PathBuf::from("/mnt/demo"),
             storage: StorageSpec::OneDrive {
@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn local_spec_validation_accepts_path_and_root() {
-        let spec = local_provider_spec("demo");
+        let spec = local_driver_spec("demo");
         spec.validate().expect("local spec should be valid");
     }
 }

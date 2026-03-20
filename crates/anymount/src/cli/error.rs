@@ -13,7 +13,7 @@ pub enum Error {
     Service(#[from] crate::service::Error),
 
     #[error(transparent)]
-    Providers(#[from] crate::providers::Error),
+    Drivers(#[from] crate::drivers::Error),
 
     #[error("failed to serialize config: {source}")]
     SerializeConfig {
@@ -49,33 +49,30 @@ pub enum Error {
         source: std::io::Error,
     },
 
-    #[error("failed to spawn provider process for {provider_name}: {source}")]
-    SpawnProvider {
-        provider_name: String,
+    #[error("failed to spawn driver process for {driver_name}: {source}")]
+    SpawnDriver {
+        driver_name: String,
         #[source]
         source: std::io::Error,
     },
 
-    #[error("failed to wait for provider process {provider_name}: {source}")]
-    WaitForProvider {
-        provider_name: String,
+    #[error("failed to wait for driver process {driver_name}: {source}")]
+    WaitForDriver {
+        driver_name: String,
         #[source]
         source: std::io::Error,
     },
 
-    #[error("provider process {provider_name} exited before ready with status {status}")]
-    ProviderExitedBeforeReady {
-        provider_name: String,
-        status: String,
-    },
+    #[error("driver process {driver_name} exited before ready with status {status}")]
+    DriverExitedBeforeReady { driver_name: String, status: String },
 
-    #[error("provider process {provider_name} did not become ready")]
-    ProviderDidNotBecomeReady { provider_name: String },
+    #[error("driver process {driver_name} did not become ready")]
+    DriverDidNotBecomeReady { driver_name: String },
 
-    #[error("failed to connect providers: {failures}")]
+    #[error("failed to connect drivers: {failures}")]
     ConnectFailures { failures: String },
 
-    #[error("failed to disconnect providers: {failures}")]
+    #[error("failed to disconnect drivers: {failures}")]
     DisconnectFailures { failures: String },
 
     #[error("{0}")]

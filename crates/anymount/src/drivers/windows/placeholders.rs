@@ -2,23 +2,20 @@ use super::{Error, Result};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::Path;
+use windows::core::PCWSTR;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Storage::CloudFilters::{
-    CF_DEHYDRATE_FLAG_NONE, CF_IN_SYNC_STATE, CF_PIN_STATE, CF_PLACEHOLDER_INFO_STANDARD,
-    CF_PLACEHOLDER_STANDARD_INFO, CfDehydratePlaceholder, CfGetPlaceholderInfo,
+    CfDehydratePlaceholder, CfGetPlaceholderInfo, CF_DEHYDRATE_FLAG_NONE, CF_IN_SYNC_STATE,
+    CF_PIN_STATE, CF_PLACEHOLDER_INFO_STANDARD, CF_PLACEHOLDER_STANDARD_INFO,
 };
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_FLAGS_AND_ATTRIBUTES, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
     FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES, OPEN_EXISTING,
 };
-use windows::core::PCWSTR;
 
 const FILE_ID_MAX_LENGTH: u32 = 400;
 
-/// Opens a handle to a file or directory for placeholder operations.
-/// When `open_as_placeholder` is true, uses `FILE_FLAG_OPEN_REPARSE_POINT`;
-/// when the path is a directory, adds `FILE_FLAG_BACKUP_SEMANTICS`.
 pub fn open_file_handle(
     path: &Path,
     desired_access: u32,
@@ -53,7 +50,6 @@ pub fn open_file_handle(
     Ok(unsafe { OwnedHandle::from_raw_handle(handle.0 as _) })
 }
 
-/// Placeholder metadata returned by `get_placeholder_info`.
 #[derive(Debug, Clone)]
 pub struct PlaceholderState {
     pub placeholder_id: String,
@@ -63,7 +59,6 @@ pub struct PlaceholderState {
     pub on_disk_size: i64,
 }
 
-/// Reads placeholder metadata for the given path (file or directory).
 pub fn get_placeholder_info(path: &Path) -> Result<PlaceholderState> {
     let handle = open_file_handle(path, FILE_READ_ATTRIBUTES.0, true)?;
     let info_size = (std::mem::size_of::<CF_PLACEHOLDER_STANDARD_INFO>()
@@ -103,7 +98,6 @@ pub fn get_placeholder_info(path: &Path) -> Result<PlaceholderState> {
     })
 }
 
-/// Dehydrates a placeholder file so its data is no longer present on disk.
 pub fn dehydrate_file(path: &Path) -> Result<()> {
     if path.is_dir() {
         return Err(Error::CannotDehydrateDirectory {

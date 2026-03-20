@@ -1,5 +1,5 @@
 use super::Storage;
-use crate::providers::cloudfilter::placeholders::{dehydrate_file, get_placeholder_info};
+use crate::drivers::windows::placeholders::{dehydrate_file, get_placeholder_info};
 use crate::service::control::messages::ServiceMessage;
 use crate::storages::{DirEntry, Error as StorageError, WriteAt};
 use crate::Logger;
@@ -239,9 +239,6 @@ impl<S: Storage, L: Logger> SyncFilter for Callbacks<S, L> {
     }
 }
 
-/// Cloud Filter requires each TRANSFER_DATA buffer to be 4 KiB or the final
-/// chunk ending at the logical file size; otherwise CfExecute returns
-/// ERROR_CLOUD_FILE_INVALID_REQUEST (0x8007017C).
 const CF_TRANSFER_CHUNK: usize = 4096;
 
 struct FetchDataWriter {

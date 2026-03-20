@@ -1,5 +1,4 @@
-use super::callbacks::Callbacks;
-use super::{Error, Provider, Result, Storage};
+use super::{Driver, Error, Result, Storage};
 use crate::service::control::messages::ServiceMessage;
 use crate::Logger;
 use cloud_filter::root::{
@@ -11,16 +10,16 @@ use std::sync::{mpsc::Sender, Arc};
 
 pub const ID_PREFIX: &'static str = "Anymount";
 
-pub struct CloudFilterProvider<S: Storage, L: Logger> {
+pub struct WindowsDriver<S: Storage, L: Logger> {
     path: PathBuf,
     #[allow(dead_code)]
     id: SyncRootId,
     #[allow(dead_code)]
-    connection: Option<Connection<Callbacks<S, L>>>,
+    connection: Option<Connection<super::Callbacks<S, L>>>,
     pub logger: L,
 }
 
-impl<S: Storage, L: Logger + 'static> CloudFilterProvider<S, L> {
+impl<S: Storage, L: Logger + 'static> WindowsDriver<S, L> {
     pub fn connect(
         path: PathBuf,
         storage: S,
@@ -49,20 +48,18 @@ impl<S: Storage, L: Logger + 'static> CloudFilterProvider<S, L> {
             .file_name()
             .and_then(|os_str| os_str.to_str())
             .ok_or_else(|| Error::InvalidPath { path: path.clone() })?;
-        let provider_name = ID_PREFIX.to_owned() + "|" + name;
+        let driver_name = ID_PREFIX.to_owned() + "|" + name;
 
-        let id = SyncRootIdBuilder::new(provider_name)
+        let id = SyncRootIdBuilder::new(driver_name)
             .user_security_id(security_id)
             .build();
 
-        // Register if not already registered
         let is_registered = id
             .is_registered()
             .map_err(|source| Error::CloudFilterOperation {
                 operation: "check sync root registration",
                 source,
             })?;
-        // TODO(GIA) Handle when registered to a different path
         if !is_registered {
             let sync_root_info = SyncRootInfo::default()
                 .with_display_name(name)
@@ -84,12 +81,11 @@ impl<S: Storage, L: Logger + 'static> CloudFilterProvider<S, L> {
             logger.info(format!("Sync root registered: {}", name));
         }
 
-        // Connect session
         let session = Session::new();
         let connection = session
             .connect(
                 &path,
-                Callbacks::new(path.clone(), storage, logger.clone(), service_tx),
+                super::Callbacks::new(path.clone(), storage, logger.clone(), service_tx),
             )
             .map_err(|source| Error::CloudFilterOperation {
                 operation: "connect to sync root",
@@ -105,7 +101,7 @@ impl<S: Storage, L: Logger + 'static> CloudFilterProvider<S, L> {
     }
 }
 
-impl<S: Storage, L: Logger + 'static> Provider for Arc<CloudFilterProvider<S, L>> {
+impl<S: Storage, L: Logger + 'static> Driver for Arc<WindowsDriver<S, L>> {
     fn kind(&self) -> &'static str {
         "CloudFilter"
     }

@@ -6,13 +6,13 @@ pub mod domain;
 #[deprecated(note = "use module-specific errors instead")]
 pub mod error;
 pub mod logger;
-pub mod providers;
+pub mod drivers;
 pub mod service;
 pub mod storages;
 pub mod telemetry;
 pub mod tui;
 
-pub use config::{Config, ConfigDir, ProviderFileConfig, StorageConfig, TelemetryFileConfig};
+pub use config::{Config, ConfigDir, DriverFileConfig, StorageConfig, TelemetryFileConfig};
 pub use logger::{Logger, NoOpLogger, TracingLogger};
-pub use providers::{connect_providers, connect_providers_with_telemetry, Provider};
+pub use drivers::{connect_drivers, connect_drivers_with_telemetry, Driver};
 pub use storages::Storage;

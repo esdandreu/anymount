@@ -1,5 +1,5 @@
-use crate::domain::provider::{
-    OtlpSpec as DomainOtlpSpec, OtlpTransport as DomainOtlpTransport, ProviderSpec, StorageSpec,
+use crate::domain::driver::{
+    Driver, OtlpSpec as DomainOtlpSpec, OtlpTransport as DomainOtlpTransport, StorageSpec,
     TelemetrySpec,
 };
 use serde::{Deserialize, Serialize};
@@ -58,11 +58,11 @@ pub enum Error {
     #[error("non-utf8 filename: {path}")]
     NonUtf8FileName { path: PathBuf },
 
-    #[error("invalid provider spec {name}: {source}")]
-    InvalidProviderSpec {
+    #[error("invalid driver spec {name}: {source}")]
+    InvalidDriverSpec {
         name: String,
         #[source]
-        source: crate::domain::provider::Error,
+        source: crate::domain::driver::Error,
     },
 }
 
@@ -134,18 +134,18 @@ pub enum OtlpTransport {
     Grpc,
 }
 
-/// Single provider entry stored as `<name>.toml`.
+/// Single driver entry stored as `<name>.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderFileConfig {
+pub struct DriverFileConfig {
     pub path: PathBuf,
     pub storage: StorageConfig,
     #[serde(default)]
     pub telemetry: TelemetryFileConfig,
 }
 
-impl ProviderFileConfig {
-    fn into_spec(self, name: String) -> ProviderSpec {
-        ProviderSpec {
+impl DriverFileConfig {
+    fn into_spec(self, name: String) -> Driver {
+        Driver {
             name,
             path: self.path,
             storage: self.storage.into(),
@@ -153,7 +153,7 @@ impl ProviderFileConfig {
         }
     }
 
-    fn from_spec(spec: &ProviderSpec) -> Self {
+    fn from_spec(spec: &Driver) -> Self {
         Self {
             path: spec.path.clone(),
             storage: spec.storage.clone().into(),
@@ -266,10 +266,10 @@ impl From<DomainOtlpTransport> for OtlpTransport {
     }
 }
 
-/// Collection of providers loaded from the config directory.
+/// Collection of drivers loaded from the config directory.
 #[derive(Debug, Clone)]
 pub struct Config {
-    pub providers: Vec<ProviderFileConfig>,
+    pub drivers: Vec<DriverFileConfig>,
 }
 
 /// Handle to the configuration directory.
@@ -329,13 +329,11 @@ impl ConfigDir {
         Ok(names)
     }
 
-    /// Walk configured providers in sorted name order.
+    /// Walk configured drivers in sorted name order.
     ///
     /// The outer [`Result`] fails only when the directory cannot be listed. Each
-    /// item pairs the provider name with the result of reading its `.toml` file.
-    pub fn each_provider(
-        &self,
-    ) -> Result<impl Iterator<Item = (String, Result<ProviderFileConfig>)>> {
+    /// item pairs the driver name with the result of reading its `.toml` file.
+    pub fn each_driver(&self) -> Result<impl Iterator<Item = (String, Result<DriverFileConfig>)>> {
         let names = self.list()?;
         let this = self.clone();
         Ok(names.into_iter().map(move |name| {
@@ -344,8 +342,8 @@ impl ConfigDir {
         }))
     }
 
-    /// Read a single provider config by name.
-    pub fn read(&self, name: &str) -> Result<ProviderFileConfig> {
+    /// Read a single driver config by name.
+    pub fn read(&self, name: &str) -> Result<DriverFileConfig> {
         let path = self.file_path(name);
         let contents = fs::read_to_string(&path).map_err(|source| Error::Read {
             path: path.clone(),
@@ -354,8 +352,8 @@ impl ConfigDir {
         toml::from_str(&contents).map_err(|source| Error::Parse { path, source })
     }
 
-    /// Write (create or overwrite) a provider config.
-    pub fn write(&self, name: &str, config: &ProviderFileConfig) -> Result<()> {
+    /// Write (create or overwrite) a driver config.
+    pub fn write(&self, name: &str, config: &DriverFileConfig) -> Result<()> {
         fs::create_dir_all(&self.dir).map_err(|source| Error::CreateDir {
             path: self.dir.clone(),
             source,
@@ -365,44 +363,42 @@ impl ConfigDir {
         fs::write(&path, contents).map_err(|source| Error::Write { path, source })
     }
 
-    /// Remove a provider config file.
+    /// Remove a driver config file.
     pub fn remove(&self, name: &str) -> Result<()> {
         let path = self.file_path(name);
         fs::remove_file(&path).map_err(|source| Error::Remove { path, source })
     }
 
-    /// Load all provider configs from the directory.
+    /// Load all driver configs from the directory.
     pub fn load_all(&self) -> Result<Config> {
-        let providers = self
-            .each_provider()?
+        let drivers = self
+            .each_driver()?
             .map(|(_name, loaded)| loaded)
             .collect::<std::result::Result<Vec<_>, Error>>()?;
-        Ok(Config { providers })
+        Ok(Config { drivers })
     }
 
-    /// Read a single provider spec by name.
-    pub fn read_spec(&self, name: &str) -> Result<ProviderSpec> {
+    /// Read a single driver spec by name.
+    pub fn read_spec(&self, name: &str) -> Result<Driver> {
         let spec = self.read(name)?.into_spec(name.to_owned());
-        spec.validate()
-            .map_err(|source| Error::InvalidProviderSpec {
-                name: name.to_owned(),
-                source,
-            })?;
+        spec.validate().map_err(|source| Error::InvalidDriverSpec {
+            name: name.to_owned(),
+            source,
+        })?;
         Ok(spec)
     }
 
-    /// Write (create or overwrite) a provider spec.
-    pub fn write_spec(&self, spec: &ProviderSpec) -> Result<()> {
-        spec.validate()
-            .map_err(|source| Error::InvalidProviderSpec {
-                name: spec.name.clone(),
-                source,
-            })?;
-        self.write(&spec.name, &ProviderFileConfig::from_spec(spec))
+    /// Write (create or overwrite) a driver spec.
+    pub fn write_spec(&self, spec: &Driver) -> Result<()> {
+        spec.validate().map_err(|source| Error::InvalidDriverSpec {
+            name: spec.name.clone(),
+            source,
+        })?;
+        self.write(&spec.name, &DriverFileConfig::from_spec(spec))
     }
 
-    /// Load all provider specs from the directory.
-    pub fn load_all_specs(&self) -> Result<Vec<ProviderSpec>> {
+    /// Load all driver specs from the directory.
+    pub fn load_all_specs(&self) -> Result<Vec<Driver>> {
         self.list()?
             .into_iter()
             .map(|name| self.read_spec(&name))
@@ -426,7 +422,7 @@ pub fn default_config_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::provider::{ProviderSpec, StorageSpec, TelemetrySpec};
+    use crate::domain::driver::{Driver, StorageSpec, TelemetrySpec};
 
     fn tmp_config_dir() -> (tempfile::TempDir, ConfigDir) {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
@@ -434,8 +430,8 @@ mod tests {
         (tmp, cd)
     }
 
-    fn local_provider_spec(name: &str) -> ProviderSpec {
-        ProviderSpec {
+    fn local_driver_spec(name: &str) -> Driver {
+        Driver {
             name: name.to_owned(),
             path: PathBuf::from(format!("/mnt/{name}")),
             storage: StorageSpec::Local {
@@ -445,8 +441,8 @@ mod tests {
         }
     }
 
-    fn local_config() -> ProviderFileConfig {
-        ProviderFileConfig {
+    fn local_config() -> DriverFileConfig {
+        DriverFileConfig {
             path: PathBuf::from("/mnt/local"),
             storage: StorageConfig::Local {
                 root: PathBuf::from("/data"),
@@ -455,8 +451,8 @@ mod tests {
         }
     }
 
-    fn onedrive_config() -> ProviderFileConfig {
-        ProviderFileConfig {
+    fn onedrive_config() -> DriverFileConfig {
+        DriverFileConfig {
             path: PathBuf::from("/mnt/onedrive"),
             storage: StorageConfig::OneDrive {
                 root: PathBuf::from("/"),
@@ -489,7 +485,7 @@ mod tests {
     #[test]
     fn write_and_read_otlp_telemetry_section() {
         let (_tmp, cd) = tmp_config_dir();
-        let cfg = ProviderFileConfig {
+        let cfg = DriverFileConfig {
             path: PathBuf::from("/mnt/otel"),
             storage: StorageConfig::Local {
                 root: PathBuf::from("/data"),
@@ -541,11 +537,11 @@ mod tests {
     }
 
     #[test]
-    fn each_provider_yields_sorted_name_and_config() {
+    fn each_driver_yields_sorted_name_and_config() {
         let (_tmp, cd) = tmp_config_dir();
         cd.write("bravo", &local_config()).expect("write failed");
         cd.write("alpha", &onedrive_config()).expect("write failed");
-        let entries: Vec<_> = cd.each_provider().expect("each_provider").collect();
+        let entries: Vec<_> = cd.each_driver().expect("each_driver").collect();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].0, "alpha");
         assert!(entries[0].1.as_ref().expect("alpha load").storage.label() == "onedrive");
@@ -562,12 +558,12 @@ mod tests {
     }
 
     #[test]
-    fn load_all_returns_all_providers() {
+    fn load_all_returns_all_drivers() {
         let (_tmp, cd) = tmp_config_dir();
         cd.write("a", &local_config()).expect("write failed");
         cd.write("b", &onedrive_config()).expect("write failed");
         let config = cd.load_all().expect("load_all failed");
-        assert_eq!(config.providers.len(), 2);
+        assert_eq!(config.drivers.len(), 2);
     }
 
     #[test]
@@ -602,7 +598,7 @@ mod tests {
     #[test]
     fn roundtrip_serialization_preserves_none_fields() {
         let (_tmp, cd) = tmp_config_dir();
-        let cfg = ProviderFileConfig {
+        let cfg = DriverFileConfig {
             path: PathBuf::from("/mnt/od"),
             storage: StorageConfig::OneDrive {
                 root: PathBuf::from("/"),
@@ -634,15 +630,15 @@ mod tests {
     }
 
     #[test]
-    fn provider_file_config_exposes_mount_path() {
+    fn driver_file_config_exposes_mount_path() {
         let cfg = local_config();
         assert_eq!(cfg.path, PathBuf::from("/mnt/local"));
     }
 
     #[test]
-    fn write_spec_round_trips_provider_spec() {
+    fn write_spec_round_trips_driver_spec() {
         let (_tmp, cd) = tmp_config_dir();
-        let spec = local_provider_spec("alpha");
+        let spec = local_driver_spec("alpha");
 
         cd.write_spec(&spec).expect("write should work");
 
@@ -651,11 +647,11 @@ mod tests {
     }
 
     #[test]
-    fn load_all_specs_preserves_provider_names() {
+    fn load_all_specs_preserves_driver_names() {
         let (_tmp, cd) = tmp_config_dir();
-        cd.write_spec(&local_provider_spec("alpha"))
+        cd.write_spec(&local_driver_spec("alpha"))
             .expect("write alpha");
-        cd.write_spec(&local_provider_spec("beta"))
+        cd.write_spec(&local_driver_spec("beta"))
             .expect("write beta");
 
         let specs = cd.load_all_specs().expect("load should work");

@@ -5,8 +5,8 @@ use crate::application::config::{
 use crate::cli::commands::provide::{
     LocalStorageArgs, OneDriveStorageArgs, ProvideStorageSubcommand,
 };
-use crate::config::{ConfigDir, ProviderFileConfig};
-use crate::domain::provider::ProviderSpec;
+use crate::config::{ConfigDir, DriverFileConfig};
+use crate::domain::driver::Driver;
 use clap::{Args, Subcommand};
 use inquire::{Select, Text};
 use std::path::{Path, PathBuf};
@@ -117,11 +117,11 @@ impl ConfigRepository for ConfigRepositoryAdapter {
         self.config_dir.list().map_err(Into::into)
     }
 
-    fn read_spec(&self, name: &str) -> crate::application::config::Result<ProviderSpec> {
+    fn read_spec(&self, name: &str) -> crate::application::config::Result<Driver> {
         self.config_dir.read_spec(name).map_err(Into::into)
     }
 
-    fn write_spec(&self, spec: &ProviderSpec) -> crate::application::config::Result<()> {
+    fn write_spec(&self, spec: &Driver) -> crate::application::config::Result<()> {
         self.config_dir.write_spec(spec).map_err(Into::into)
     }
 
@@ -162,14 +162,14 @@ where
     U: ConfigUseCase,
 {
     let resolved = resolve_add_args(args)?;
-    let spec = ProviderSpec {
+    let spec = Driver {
         name: resolved.name.clone(),
         path: resolved.path,
         storage: resolved.storage.to_storage_spec(),
         telemetry: Default::default(),
     };
     use_case.add(spec).map_err(map_config_error)?;
-    println!("Added provider '{}'", resolved.name);
+    println!("Added driver '{}'", resolved.name);
     Ok(())
 }
 
@@ -330,8 +330,8 @@ fn parse_u64(value: String) -> crate::cli::Result<u64> {
         .map_err(|source| crate::cli::Error::ParseInteger { value, source })
 }
 
-fn config_from_spec(spec: &ProviderSpec) -> ProviderFileConfig {
-    ProviderFileConfig {
+fn config_from_spec(spec: &Driver) -> DriverFileConfig {
+    DriverFileConfig {
         path: spec.path.clone(),
         storage: spec.storage.clone().into(),
         telemetry: spec.telemetry.clone().into(),
@@ -339,7 +339,7 @@ fn config_from_spec(spec: &ProviderSpec) -> ProviderFileConfig {
 }
 
 #[cfg(test)]
-fn apply_set(cfg: &mut ProviderFileConfig, key: &str, value: &str) -> crate::cli::Result<()> {
+fn apply_set(cfg: &mut DriverFileConfig, key: &str, value: &str) -> crate::cli::Result<()> {
     match key {
         "path" => {
             cfg.path = PathBuf::from(value);
@@ -420,9 +420,9 @@ fn apply_set(cfg: &mut ProviderFileConfig, key: &str, value: &str) -> crate::cli
 fn map_config_error(error: ConfigApplicationError) -> crate::cli::Error {
     match error {
         ConfigApplicationError::Config(source) => crate::cli::Error::Config(source),
-        ConfigApplicationError::DuplicateProvider { name } => crate::cli::Error::Validation(
-            format!("provider '{name}' already exists, use 'set' to modify or 'remove' first"),
-        ),
+        ConfigApplicationError::DuplicateDriver { name } => crate::cli::Error::Validation(format!(
+            "driver '{name}' already exists, use 'set' to modify or 'remove' first"
+        )),
         ConfigApplicationError::InvalidStorageKey { key } => {
             crate::cli::Error::Validation(format!("'{key}' only applies to onedrive storage"))
         }
@@ -444,11 +444,11 @@ mod tests {
     use super::*;
     use crate::application::config::{ConfigUseCase, Result as ConfigApplicationResult};
     use crate::cli::commands::provide::{LocalStorageArgs, ProvideStorageSubcommand};
-    use crate::domain::provider::{ProviderSpec, StorageSpec, TelemetrySpec};
+    use crate::domain::driver::{Driver, StorageSpec, TelemetrySpec};
     use std::cell::RefCell;
 
-    fn local_config() -> ProviderFileConfig {
-        ProviderFileConfig {
+    fn local_config() -> DriverFileConfig {
+        DriverFileConfig {
             path: PathBuf::from("/mnt/local"),
             storage: StorageConfig::Local {
                 root: PathBuf::from("/data"),
@@ -457,8 +457,8 @@ mod tests {
         }
     }
 
-    fn local_spec(name: &str) -> ProviderSpec {
-        ProviderSpec {
+    fn local_spec(name: &str) -> Driver {
+        Driver {
             name: name.to_owned(),
             path: PathBuf::from("/mnt/local"),
             storage: StorageSpec::Local {
@@ -470,7 +470,7 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingUseCase {
-        added: RefCell<Vec<ProviderSpec>>,
+        added: RefCell<Vec<Driver>>,
         set_calls: RefCell<Vec<(String, String, String)>>,
     }
 
@@ -479,11 +479,11 @@ mod tests {
             Ok(Vec::new())
         }
 
-        fn read(&self, name: &str) -> ConfigApplicationResult<ProviderSpec> {
+        fn read(&self, name: &str) -> ConfigApplicationResult<Driver> {
             Ok(local_spec(name))
         }
 
-        fn add(&self, spec: ProviderSpec) -> ConfigApplicationResult<()> {
+        fn add(&self, spec: Driver) -> ConfigApplicationResult<()> {
             self.added.borrow_mut().push(spec);
             Ok(())
         }
@@ -500,8 +500,8 @@ mod tests {
         }
     }
 
-    fn onedrive_config() -> ProviderFileConfig {
-        ProviderFileConfig {
+    fn onedrive_config() -> DriverFileConfig {
+        DriverFileConfig {
             path: PathBuf::from("/mnt/onedrive"),
             storage: StorageConfig::OneDrive {
                 root: PathBuf::from("/"),

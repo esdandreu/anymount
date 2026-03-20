@@ -1,24 +1,21 @@
-use super::provider::ID_PREFIX;
+use super::windows_driver::ID_PREFIX;
 use super::{Error, Result};
-use crate::domain::provider::ProviderSpec;
+use crate::domain::driver::Driver;
 use crate::Logger;
 use windows::{
     Foundation::Collections::IVectorView,
     Storage::Provider::{StorageProviderSyncRootInfo, StorageProviderSyncRootManager},
 };
 
-/// Cleanup the registry of any non-configured registered sync roots.
-pub fn cleanup_registry<L: Logger>(specs: &[ProviderSpec], logger: &L) -> Result<()> {
+pub fn cleanup_registry<L: Logger>(specs: &[Driver], logger: &L) -> Result<()> {
     _cleanup_registry::<StorageProviderSyncRootManager, L>(specs, logger)
 }
 
-/// Trait for a registry manager.
 trait RegistryManager {
     fn get_currently_registered() -> Result<IVectorView<StorageProviderSyncRootInfo>>;
     fn unregister(id: &windows::core::HSTRING) -> Result<()>;
 }
 
-/// Implementation of the RegistryManager trait for StorageProviderSyncRootManager.
 impl RegistryManager for StorageProviderSyncRootManager {
     fn get_currently_registered() -> Result<IVectorView<StorageProviderSyncRootInfo>> {
         StorageProviderSyncRootManager::GetCurrentSyncRoots().map_err(|source| {
@@ -36,9 +33,8 @@ impl RegistryManager for StorageProviderSyncRootManager {
     }
 }
 
-/// Cleanup the registry of any non-configured registered sync roots.
 fn _cleanup_registry<Registry: RegistryManager, L: Logger>(
-    specs: &[ProviderSpec],
+    specs: &[Driver],
     logger: &L,
 ) -> Result<()> {
     let sync_roots = Registry::get_currently_registered()?;
@@ -48,12 +44,10 @@ fn _cleanup_registry<Registry: RegistryManager, L: Logger>(
             Err(_) => continue,
         };
 
-        // Skip if not an Anymount sync root
         if !id.to_string().starts_with(ID_PREFIX) {
             continue;
         }
 
-        // Get the path of the sync root
         let sync_root_path = match get_sync_root_path(&sync_root) {
             Ok(path) => path,
             Err(_) => {
@@ -65,7 +59,6 @@ fn _cleanup_registry<Registry: RegistryManager, L: Logger>(
             }
         };
 
-        // Only unregister if not configured
         if is_path_configured(&sync_root_path, specs) {
             continue;
         }
@@ -88,15 +81,13 @@ fn _cleanup_registry<Registry: RegistryManager, L: Logger>(
     Ok(())
 }
 
-/// Check if a path is part of a configured provider.
-fn is_path_configured(path: &str, specs: &[ProviderSpec]) -> bool {
+fn is_path_configured(path: &str, specs: &[Driver]) -> bool {
     specs.iter().any(|spec| {
-        let provider_path = spec.path.to_string_lossy().to_string();
-        path.eq_ignore_ascii_case(&provider_path)
+        let driver_path = spec.path.to_string_lossy().to_string();
+        path.eq_ignore_ascii_case(&driver_path)
     })
 }
 
-/// Get the path of a sync root.
 fn get_sync_root_path(sync_root: &StorageProviderSyncRootInfo) -> Result<String> {
     let folder = sync_root.Path().map_err(|source| Error::WindowsOperation {
         operation: "get sync root folder",

@@ -15,9 +15,9 @@ use std::sync::{Arc, Mutex};
 pub trait ControlTransport {
     type Server;
 
-    fn bind(&self, provider_name: &str) -> Result<Self::Server>;
+    fn bind(&self, driver_name: &str) -> Result<Self::Server>;
 
-    fn send(&self, provider_name: &str, message: ControlMessage) -> Result<ControlMessage>;
+    fn send(&self, driver_name: &str, message: ControlMessage) -> Result<ControlMessage>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -31,35 +31,35 @@ impl InMemoryControlTransport {
         F: FnOnce(ControlMessage) -> ControlMessage,
     {
         let mut responses = self.responses.lock().map_err(|_| Error::Poisoned)?;
-        responses.insert(server.provider_name, vec![handler(ControlMessage::Ping)]);
+        responses.insert(server.driver_name, vec![handler(ControlMessage::Ping)]);
         Ok(())
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct InMemoryServer {
-    provider_name: String,
+    driver_name: String,
 }
 
 impl ControlTransport for InMemoryControlTransport {
     type Server = InMemoryServer;
 
-    fn bind(&self, provider_name: &str) -> Result<Self::Server> {
+    fn bind(&self, driver_name: &str) -> Result<Self::Server> {
         Ok(InMemoryServer {
-            provider_name: provider_name.to_owned(),
+            driver_name: driver_name.to_owned(),
         })
     }
 
-    fn send(&self, provider_name: &str, _message: ControlMessage) -> Result<ControlMessage> {
+    fn send(&self, driver_name: &str, _message: ControlMessage) -> Result<ControlMessage> {
         let mut responses = self.responses.lock().map_err(|_| Error::Poisoned)?;
         let queue = responses
-            .get_mut(provider_name)
+            .get_mut(driver_name)
             .ok_or_else(|| Error::NotBound {
-                provider_name: provider_name.to_owned(),
+                driver_name: driver_name.to_owned(),
             })?;
         if queue.is_empty() {
             return Err(Error::NoQueuedResponse {
-                provider_name: provider_name.to_owned(),
+                driver_name: driver_name.to_owned(),
             });
         }
         Ok(queue.remove(0))
