@@ -72,7 +72,7 @@ enum ConnectionState {
 enum UiMode {
     Browse,
     Edit(EditSession),
-    ConfirmDelete,
+    DeleteConfirm { name: String },
 }
 
 #[derive(Debug, Clone)]
@@ -750,6 +750,8 @@ enum EditAction {
     Continue,
     Cancel,
     Saved(String),
+    Deleted,
+    Disconnected(String),
     Message(String),
 }
 
@@ -956,9 +958,9 @@ fn run_loop(terminal: &mut DefaultTerminal, cd: &ConfigDir, state: &mut AppState
                     continue;
                 }
 
-                let should_quit = match state.mode {
+                let should_quit = match state.mode.clone() {
                     UiMode::Browse => handle_browse_key(key.code, cd, state)?,
-                    UiMode::ConfirmDelete => handle_delete_confirm_key(key.code, cd, state)?,
+                    UiMode::DeleteConfirm { .. } => handle_delete_confirm_key(key.code, cd, state)?,
                     UiMode::Edit(_) => {
                         let action = {
                             let UiMode::Edit(session) = &mut state.mode else {
@@ -975,7 +977,26 @@ fn run_loop(terminal: &mut DefaultTerminal, cd: &ConfigDir, state: &mut AppState
                             EditAction::Saved(name) => {
                                 state.mode = UiMode::Browse;
                                 refresh_state(cd, state)?;
-                                state.status = format!("Saved provider '{name}'");
+                                state.status = format!("Saved mount '{name}'");
+                            }
+                            EditAction::Deleted => {
+                                let name = if let UiMode::Edit(ref session) = &state.mode {
+                                    session.draft.name.clone()
+                                } else {
+                                    String::new()
+                                };
+                                state.mode = UiMode::DeleteConfirm { name };
+                            }
+                            EditAction::Disconnected(name) => {
+                                match crate::cli::provider_control::try_disconnect_provider(&name) {
+                                    Ok(()) => {
+                                        state.mode = UiMode::Browse;
+                                        state.status = format!("Disconnected '{name}'");
+                                    }
+                                    Err(e) => {
+                                        state.status = format!("Disconnect failed: {}", e);
+                                    }
+                                }
                             }
                             EditAction::Message(message) => {
                                 state.status = message;
@@ -1194,9 +1215,14 @@ fn handle_edit_key(code: KeyCode, cd: &ConfigDir, session: &mut EditSession) -> 
                 }
                 Ok(EditAction::Continue)
             }
-            KeyCode::Char('s') => {
+            KeyCode::Char('c') => {
                 let saved_name = save_edit_session(cd, session)?;
                 Ok(EditAction::Saved(saved_name))
+            }
+            KeyCode::Char('x') => Ok(EditAction::Deleted),
+            KeyCode::Char('d') => {
+                let name = session.draft.name.clone();
+                Ok(EditAction::Disconnected(name))
             }
             _ if is_onedrive_auth_key(code) => {
                 let message = authenticate_onedrive_in_terminal(&mut session.draft)?;
@@ -1265,17 +1291,18 @@ fn handle_edit_key(code: KeyCode, cd: &ConfigDir, session: &mut EditSession) -> 
 }
 
 fn handle_delete_confirm_key(code: KeyCode, cd: &ConfigDir, state: &mut AppState) -> Result<bool> {
+    let name = if let UiMode::DeleteConfirm { ref name } = state.mode {
+        name.clone()
+    } else {
+        return Ok(false);
+    };
+
     match code {
         KeyCode::Char('y') => {
-            if let Some(name) = state.selected_name().map(ToOwned::to_owned) {
-                remove_provider(cd, &name)?;
-                state.mode = UiMode::Browse;
-                refresh_state(cd, state)?;
-                state.status = format!("Removed provider '{name}'");
-            } else {
-                state.mode = UiMode::Browse;
-                state.status = "No provider selected".to_owned();
-            }
+            remove_provider(cd, &name)?;
+            state.mode = UiMode::Browse;
+            refresh_state(cd, state)?;
+            state.status = format!("Deleted '{}'", name);
             Ok(false)
         }
         KeyCode::Char('n') | KeyCode::Esc => {
@@ -1606,6 +1633,30 @@ fn draw_edit_menu(frame: &mut Frame, session: &EditSession) {
     );
 }
 
+fn draw_delete_dialog(frame: &mut Frame, name: &str) {
+    let size = frame.area();
+    let dialog_width = 50;
+    let dialog_height = 5;
+    let x = (size.width.saturating_sub(dialog_width)) / 2;
+    let y = (size.height.saturating_sub(dialog_height)) / 2;
+
+    let dialog_rect = Rect::new(x, y, dialog_width, dialog_height);
+
+    let content = format!("  Delete '{}'?  [ y ]  [ n ]", name);
+
+    let block = Block::default()
+        .bg(COLOR_ROW_BG_SELECTED)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(COLOR_BUTTON));
+
+    frame.render_widget(
+        Paragraph::new(content)
+            .style(Style::default().fg(COLOR_BUTTON_TEXT))
+            .block(block),
+        dialog_rect,
+    );
+}
+
 fn help_lines(state: &AppState) -> Vec<Line<'static>> {
     let lines = match state.mode {
         UiMode::Browse => vec![Line::from("j↑ select ↓k  c connect  d disconnect  ↵ edit")],
@@ -1616,13 +1667,12 @@ fn help_lines(state: &AppState) -> Vec<Line<'static>> {
             }
             vec![Line::from(line)]
         }
-        UiMode::ConfirmDelete => vec![
-            Line::from("Delete confirmation: y remove selected provider"),
-            Line::from("                     n/Esc cancel"),
-        ],
+        UiMode::DeleteConfirm { .. } => {
+            vec![Line::from("Delete confirmation: y confirm  n/Esc cancel")]
+        }
     };
     lines.push(Line::from(vec![
-        Span::styled("Status: ", Style::default().fg(COLOR_STATUS)),
+        Span::styled("Status: ", Style::default().fg(COLOR_CONNECTED)),
         Span::raw(state.status.clone()),
     ]));
     lines
