@@ -1526,108 +1526,82 @@ fn render_add_row(frame: &mut Frame, rect: Rect, is_hovered: bool) {
     );
 }
 
-fn draw_ui(frame: &mut Frame, cd: &ConfigDir, state: &AppState) {
-    let sections = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(8),
-            Constraint::Length(4),
-        ])
-        .split(frame.area());
-
-    let title = Paragraph::new(Line::from("Anymount Interactive"))
-        .block(
-            Block::default()
-                .title(format!("Config directory: {}", cd.dir().display()))
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(COLOR_BORDER)),
+fn draw_ui(frame: &mut Frame, _cd: &ConfigDir, state: &AppState) {
+    let area = frame.area();
+    let (list_area, footer_area) = if matches!(state.mode, UiMode::Edit(_)) {
+        (
+            Rect::new(0, 0, area.width, area.height.saturating_sub(4)),
+            Rect::new(0, area.height.saturating_sub(4), area.width, 4),
         )
-        .wrap(Wrap { trim: true });
-    frame.render_widget(title, sections[0]);
-
-    let main = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
-        .split(sections[1]);
-
-    let items: Vec<ListItem> = state
-        .providers
-        .iter()
-        .map(|provider| ListItem::new(provider.name.clone()))
-        .collect();
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .title("Providers")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(COLOR_BORDER)),
+    } else {
+        (
+            Rect::new(0, 0, area.width, area.height.saturating_sub(2)),
+            Rect::new(0, area.height.saturating_sub(2), area.width, 2),
         )
-        .highlight_style(
-            Style::default()
-                .fg(COLOR_HIGHLIGHT)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("> ");
-    let mut list_state = ListState::default();
-    if !state.providers.is_empty() {
-        list_state.select(Some(state.selected));
-    }
-    frame.render_stateful_widget(list, main[0], &mut list_state);
+    };
 
     match &state.mode {
-        UiMode::Browse | UiMode::ConfirmDelete => {
-            frame.render_widget(
-                Paragraph::new(provider_details(state.selected_provider()))
-                    .block(
-                        Block::default()
-                            .title("Details")
-                            .borders(Borders::ALL)
-                            .border_style(Style::default().fg(COLOR_BORDER)),
-                    )
-                    .wrap(Wrap { trim: true }),
-                main[1],
-            );
+        UiMode::Browse => {
+            draw_main_menu(frame, list_area, state);
         }
-        UiMode::Edit(session) => {
-            let editor_sections = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
-                .split(main[1]);
-            frame.render_widget(
-                Paragraph::new(session.draft.lines(session.selected_field()))
-                    .block(
-                        Block::default()
-                            .title("Editor Fields")
-                            .borders(Borders::ALL)
-                            .border_style(Style::default().fg(COLOR_BORDER)),
-                    )
-                    .wrap(Wrap { trim: true }),
-                editor_sections[0],
-            );
-            frame.render_widget(
-                Paragraph::new(editor_context_lines(session))
-                    .block(
-                        Block::default()
-                            .title("Editor Context")
-                            .borders(Borders::ALL)
-                            .border_style(Style::default().fg(COLOR_BORDER)),
-                    )
-                    .wrap(Wrap { trim: true }),
-                editor_sections[1],
-            );
+        UiMode::Edit(_) | UiMode::DeleteConfirm { .. } => {
+            draw_main_menu(frame, list_area, state);
+            if let UiMode::Edit(session) = &state.mode {
+                draw_edit_menu(frame, session);
+            } else if let UiMode::DeleteConfirm { name } = &state.mode {
+                draw_delete_dialog(frame, name);
+            }
         }
     }
 
-    let help = Paragraph::new(help_lines(state))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Actions")
-                .border_style(Style::default().fg(COLOR_BORDER)),
-        )
-        .wrap(Wrap { trim: true });
-    frame.render_widget(help, sections[2]);
+    draw_footer(frame, footer_area, state);
+}
+
+fn draw_main_menu(frame: &mut Frame, area: Rect, state: &AppState) {
+    let row_height = 1;
+    let mut y = area.y;
+
+    for (i, entry) in state.providers.iter().enumerate() {
+        let is_hovered = i == state.hovered;
+        let is_connected = entry.is_connected();
+
+        let style = if is_hovered {
+            if is_connected {
+                RowStyle::HoveredConnected
+            } else {
+                RowStyle::HoveredDisconnected
+            }
+        } else {
+            if is_connected {
+                RowStyle::Normal
+            } else {
+                RowStyle::Disconnected
+            }
+        };
+
+        let rect = Rect::new(area.x, y, area.width, row_height);
+        render_mount_row(
+            frame,
+            entry,
+            rect,
+            style,
+            is_hovered,
+            state.is_keyboard_mode,
+        );
+        y += row_height;
+    }
+
+    let add_rect = Rect::new(area.x, y, area.width, row_height);
+    render_add_row(frame, add_rect, state.is_add_row());
+}
+
+fn draw_footer(frame: &mut Frame, area: Rect, state: &AppState) {
+    let content = state.status.clone();
+    let block = Block::default()
+        .bg(COLOR_ROW_BG_NORMAL)
+        .borders(Borders::TOP);
+
+    frame.render_widget(Paragraph::new(content), block);
 }
 
 fn help_lines(state: &AppState) -> Vec<Line<'static>> {
