@@ -114,18 +114,18 @@ j↑ select ↓k       c connect   d disconnect      ↵ edit
 │  storage.type     local                                │
 │  storage.root     /data/backup                         │
 │                                                        │
-│                              [ d Disc. ] [ ⌫ Del ] [ c Save ] │
+│                              [ d Disc. ] [ x ] [ c Save ] │
 └────────────────────────────────────────────────────────┘
 ```
 
 Buttons in bottom-right:
 - `[ d Disc. ]` — Disconnect mount
-- `[ ⌫ Del ]` — Delete mount
+- `[ x ]` — Delete mount
 - `[ c Save ]` — Save changes
 
 Or for new mounts (not yet saved):
 ```
-│                              [ d Disc. ] [ ⌫ Del ] [ c Create ] │
+│                              [ d Disc. ] [ x ] [ c Create ] │
 ```
 
 ### Layout Rules
@@ -141,6 +141,20 @@ Each field shows:
 - Field value (right-aligned after field name)
 
 When a value is empty: show `<unset>` placeholder
+
+### Select Controls
+
+Similar to main menu, the edit menu has select controls:
+```
+│                              [ ⇑ ] [ ⇓ ] [ x ] [ c Save ] │
+```
+
+| Button | Key | Action |
+|--------|-----|--------|
+| `[ ⇑ ]` | `k` / `↑` | Select previous field |
+| `[ ⇓ ]` | `j` / `↓` | Select next field |
+| `[ x ]` | `x` | Delete mount |
+| `[ c Save ]` | `c` | Save changes |
 
 ### Active Field
 
@@ -159,7 +173,7 @@ The active field (currently being edited):
 | `Esc` | Exit edit mode (cancel) |
 | `c` | Save changes |
 | `d` | Disconnect mount |
-| `⌫` | Delete mount |
+| `x` | Delete mount |
 | `Tab` | Path completion (for path fields) |
 
 ### Editable Fields
@@ -209,7 +223,7 @@ When delete is triggered:
 │  ...                                                 │
 │                                                        │
 │  ┌────────────────────────────────────────────────┐   │
-│  │  Delete 'backup'? [y Yes] [n No]               │   │
+│  │  Delete 'backup'? [ y ] [ n ]                  │   │
 │  └────────────────────────────────────────────────┘   │
 └────────────────────────────────────────────────────────┘
 ```
@@ -274,7 +288,7 @@ Main Menu ──[Enter]──> Edit Menu
 | `Esc` | Cancel / Exit |
 | `c` | Save |
 | `d` | Disconnect |
-| `⌫` | Delete |
+| `x` | Delete |
 | `Tab` | Path completion |
 | `Backspace` | Delete char |
 | `l` / `o` | OneDrive auth |
