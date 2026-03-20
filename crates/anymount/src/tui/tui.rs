@@ -1081,73 +1081,36 @@ fn handle_mouse_event(
     state: &mut AppState,
     mouse: MouseEvent,
 ) -> Result<()> {
+    if matches!(state.mode, UiMode::Edit(_)) {
+        return Ok(());
+    }
+
     let size = terminal.size().map_err(|source| Error::Terminal {
         operation: "read terminal size",
         source,
     })?;
-    let area = Rect::new(0, 0, size.width, size.height);
-    let rects = ui_rects(area, &state.mode);
+    let list_area = Rect::new(0, 0, size.width, size.height.saturating_sub(2));
 
     match mouse.kind {
-        MouseEventKind::ScrollDown => {
-            if rect_contains(rects.providers, mouse.column, mouse.row) {
-                state.select_next();
-            } else if let UiMode::Edit(session) = &mut state.mode {
-                if let Some(fields_rect) = rects.editor_fields {
-                    if rect_contains(fields_rect, mouse.column, mouse.row) {
-                        session.select_next();
-                    }
-                }
-            }
-        }
-        MouseEventKind::ScrollUp => {
-            if rect_contains(rects.providers, mouse.column, mouse.row) {
-                state.select_prev();
-            } else if let UiMode::Edit(session) = &mut state.mode {
-                if let Some(fields_rect) = rects.editor_fields {
-                    if rect_contains(fields_rect, mouse.column, mouse.row) {
-                        session.select_prev();
-                    }
-                }
+        MouseEventKind::Moved(_, _) | MouseEventKind::Dragging(_, _) => {
+            state.is_keyboard_mode = false;
+            let row = (mouse.row as usize).saturating_sub(list_area.y as usize);
+            if row <= state.providers.len() {
+                state.hovered = row;
             }
         }
         MouseEventKind::Down(MouseButton::Left) => {
-            if rect_contains(rects.providers, mouse.column, mouse.row) {
-                if let Some(row) = content_row(rects.providers, mouse.row) {
-                    if row < state.providers.len() {
-                        state.selected = row;
-                    }
+            let row = (mouse.row as usize).saturating_sub(list_area.y as usize);
+            if row < state.providers.len() {
+                state.hovered = row;
+                state.selected = row;
+                let provider = state.selected_provider().cloned();
+                if let Some(p) = provider {
+                    state.mode = UiMode::Edit(EditSession::new_for_edit(&p));
                 }
-                return Ok(());
-            }
-
-            if let UiMode::Edit(session) = &mut state.mode {
-                if let Some(fields_rect) = rects.editor_fields {
-                    if rect_contains(fields_rect, mouse.column, mouse.row) {
-                        if let Some(row) = content_row(fields_rect, mouse.row) {
-                            let fields = session.draft.visible_fields();
-                            if row < fields.len() {
-                                session.selected_field = fields[row];
-                                session.mode = EditMode::Navigate;
-                            }
-                        }
-                        return Ok(());
-                    }
-                }
-
-                if let Some(context_rect) = rects.editor_context {
-                    if rect_contains(context_rect, mouse.column, mouse.row) {
-                        if let Some(row) = content_row(context_rect, mouse.row) {
-                            if let Some(provider_type) =
-                                choice_provider_type_from_context_row(session, row)
-                            {
-                                session.draft.storage_type = provider_type;
-                                session.ensure_selected_visible();
-                                session.mode = EditMode::Navigate;
-                            }
-                        }
-                    }
-                }
+            } else if row == state.providers.len() {
+                let default_name = suggest_new_provider_name(state);
+                state.mode = UiMode::Edit(EditSession::new_for_add(default_name));
             }
         }
         _ => {}
@@ -1160,57 +1123,48 @@ fn handle_browse_key(code: KeyCode, cd: &ConfigDir, state: &mut AppState) -> Res
     match code {
         KeyCode::Char('q') | KeyCode::Esc => Ok(true),
         KeyCode::Down | KeyCode::Char('j') => {
+            state.is_keyboard_mode = true;
             state.select_next();
             Ok(false)
         }
         KeyCode::Up | KeyCode::Char('k') => {
+            state.is_keyboard_mode = true;
             state.select_prev();
             Ok(false)
         }
         KeyCode::Char('r') => {
             match refresh_state(cd, state) {
-                Ok(()) => state.status = "Refreshed provider list".to_owned(),
+                Ok(()) => state.status = "Refreshed mount list".to_owned(),
                 Err(e) => state.status = format!("Refresh failed: {e}"),
             }
             Ok(false)
         }
-        KeyCode::Char('a') => {
-            let default_name = suggest_new_provider_name(state);
-            state.mode = UiMode::Edit(EditSession::new_for_add(default_name));
-            state.status =
-                "Editing new provider in-place (Enter edit, s save, Esc cancel)".to_owned();
-            Ok(false)
-        }
         KeyCode::Char('e') | KeyCode::Enter => {
-            let Some(provider) = state.selected_provider() else {
-                state.status = "No provider selected".to_owned();
-                return Ok(false);
-            };
-            state.mode = UiMode::Edit(EditSession::new_for_edit(provider));
-            state.status = "Editing provider in-place (Enter edit, s save, Esc cancel)".to_owned();
+            if state.is_add_row() {
+                let default_name = suggest_new_provider_name(state);
+                state.mode = UiMode::Edit(EditSession::new_for_add(default_name));
+                state.status = "Adding new mount".to_owned();
+            } else if let Some(provider) = state.selected_provider() {
+                state.mode = UiMode::Edit(EditSession::new_for_edit(provider));
+                state.status = "Editing mount".to_owned();
+            } else {
+                state.status = "No mount selected".to_owned();
+            }
             Ok(false)
         }
-        KeyCode::Char('d') | KeyCode::Delete => {
-            if state.selected_provider().is_some() {
-                state.mode = UiMode::ConfirmDelete;
-                state.status = "Confirm delete: y to remove, n/Esc to cancel".to_owned();
-            } else {
-                state.status = "No provider selected".to_owned();
+        KeyCode::Char('d') => {
+            match disconnect_selected_provider(cd, state) {
+                Ok(Some(name)) => state.status = format!("Disconnected '{name}'"),
+                Ok(None) => state.status = "No mount selected".to_owned(),
+                Err(e) => state.status = format!("Disconnect failed: {e}"),
             }
             Ok(false)
         }
         KeyCode::Char('c') => {
             match connect_selected_provider_for_config(cd, state) {
-                Ok(Some(name)) => state.status = format!("Disconnected '{name}'"),
-                Ok(None) => state.status = "No provider selected".to_owned(),
+                Ok(Some(name)) => state.status = format!("Connected '{name}'"),
+                Ok(None) => state.status = "No mount selected".to_owned(),
                 Err(e) => state.status = format!("Connect failed: {e}"),
-            }
-            Ok(false)
-        }
-        KeyCode::Char('C') => {
-            match connect_all_providers(cd) {
-                Ok(()) => state.status = "Disconnected all providers".to_owned(),
-                Err(e) => state.status = format!("Connect-all failed: {e}"),
             }
             Ok(false)
         }
@@ -1779,6 +1733,16 @@ where
     } else {
         Ok(())
     }
+}
+
+fn disconnect_selected_provider(_cd: &ConfigDir, state: &AppState) -> Result<Option<String>> {
+    let Some(name) = state.selected_name() else {
+        return Ok(None);
+    };
+    let name = name.to_owned();
+    crate::cli::provider_control::try_disconnect_provider(&name)
+        .map_err(|e| Error::Application(e.into()))?;
+    Ok(Some(name))
 }
 
 fn ensure_name_available(cd: &ConfigDir, name: &str, current_name: Option<&str>) -> Result<()> {
