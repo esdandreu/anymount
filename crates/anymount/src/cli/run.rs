@@ -18,7 +18,7 @@ pub fn run() -> super::Result<()> {
     let file_appender = tracing_appender::rolling::daily("logs", "anymount.log");
     let (non_blocking, file_guard) = tracing_appender::non_blocking(file_appender);
 
-    let stdout_layer = fmt::layer().with_writer(std::io::stdout);
+    let stdout_layer = fmt::layer().with_writer(std::io::stderr);
     let file_layer = fmt::layer().with_writer(non_blocking).with_ansi(false);
 
     let result = if let Some(otel) = otel {
