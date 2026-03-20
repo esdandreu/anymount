@@ -58,17 +58,14 @@ enum ConnectionState {
 }
 ```
 
-- [ ] **Step 2: Add RowState struct to track hover/focus per row**
+- [ ] **Step 2: Simplify - no separate RowState needed**
 
-Add after ConnectionState:
+The spec shows keyboard focus and mouse hover use the same row index. The hovered row shows 3D effect. Keyboard vs mouse distinction only affects the `⇅` indicator. We'll use:
+- `hovered` index for both mouse hover and keyboard focus
+- `is_hovered` checks for 3D effect and button display
+- `is_keyboard_focused` (optional) for `⇅` indicator
 
-```rust
-#[derive(Debug, Clone)]
-struct RowState {
-    is_hovered: bool,
-    is_keyboard_focused: bool,
-}
-```
+Remove the RowState struct - we'll compute styles in the render function.
 
 - [ ] **Step 3: Commit**
 
@@ -203,13 +200,10 @@ Add before draw_ui function (around line 1315):
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RowStyle {
-    Normal,
-    Hovered,      // Mouse hovered
-    Keyboard,     // Keyboard focused (shown displaced)
-    HoveredConnected,   // Mouse hovered + connected
+    Normal,           // Connected, not hovered
+    Disconnected,     // Disconnected, not hovered (slightly pulled out)
+    HoveredConnected,  // Mouse hovered + connected
     HoveredDisconnected, // Mouse hovered + disconnected
-    KeyboardConnected,  // Keyboard focused + connected
-    KeyboardDisconnected, // Keyboard focused + disconnected
 }
 ```
 
@@ -235,36 +229,25 @@ fn render_mount_row(
     style: RowStyle,
     show_buttons: bool,
 ) {
-    let is_displaced = matches!(
+    let is_hovered = matches!(
         style,
-        RowStyle::KeyboardDisconnected | RowStyle::KeyboardConnected
-    ) || matches!(
-        style,
-        RowStyle::HoveredDisconnected | RowStyle::HoveredConnected
+        RowStyle::HoveredConnected | RowStyle::HoveredDisconnected
     );
-
-    let bg_color = if matches!(style, RowStyle::Normal) {
-        COLOR_ROW_BG_NORMAL
-    } else {
-        COLOR_ROW_BG_HOVERED
-    };
-
     let is_connected = entry.is_connected();
-    let status_icon = if is_connected { "●" } else { "○" };
-    let status_color = if is_connected { COLOR_CONNECTED } else { COLOR_DISCONNECTED };
-
-    let connection_indicator = if matches!(
-        style,
-        RowStyle::KeyboardDisconnected | RowStyle::KeyboardConnected
-    ) {
-        "⇅"
-    } else {
-        " "
-    };
 
     // Calculate 3D effect dimensions
-    let displacement = if is_displaced { 2 } else { 0 };
-    let shadow_width = if is_displaced { 2 } else { 0 };
+    // All rows have some 3D effect; hovered rows have more
+    let displacement = if is_hovered { 2 } else { 0 };
+    let shadow_width = if is_hovered { 2 } else { 0 };
+
+    let bg_color = if is_hovered {
+        COLOR_ROW_BG_HOVERED
+    } else {
+        COLOR_ROW_BG_NORMAL
+    };
+
+    let status_icon = if is_connected { "●" } else { "○" };
+    let status_color = if is_connected { COLOR_CONNECTED } else { COLOR_DISCONNECTED };
 
     // Shadow area (left side for 3D effect)
     if shadow_width > 0 {
@@ -292,18 +275,13 @@ fn render_mount_row(
 
     // Row content
     let content = format!(
-        "{}{}  {:12}  {:25}  {:10}",
-        connection_indicator,
+        " {}  {:12}  {:25}  {:10}",
         status_icon,
         entry.name,
         entry.config.path.display(),
         get_storage_type_label(&entry.config.storage),
     );
-    let text_style = if is_connected {
-        Style::default().fg(status_color)
-    } else {
-        Style::default().fg(COLOR_DISCONNECTED)
-    };
+    let text_style = Style::default().fg(status_color);
 
     frame.render_widget(
         Paragraph::new(content).style(text_style).alignment(Alignment::Left),
@@ -428,12 +406,16 @@ fn draw_ui(frame: &mut Frame, cd: &ConfigDir, state: &AppState) {
     };
 
     match &state.mode {
-        UiMode::Browse | UiMode::ConfirmDelete => {
+        UiMode::Browse => {
             draw_main_menu(frame, list_area, state);
         }
-        UiMode::Edit(session) => {
+        UiMode::Edit(_) | UiMode::DeleteConfirm { .. } => {
             draw_main_menu(frame, list_area, state);
-            draw_edit_menu(frame, session);
+            if let UiMode::Edit(session) = &state.mode {
+                draw_edit_menu(frame, session);
+            } else if let UiMode::DeleteConfirm { name } = &state.mode {
+                draw_delete_dialog(frame, name);
+            }
         }
     }
 
@@ -446,12 +428,21 @@ fn draw_main_menu(frame: &mut Frame, area: Rect, state: &AppState) {
 
     for (i, entry) in state.providers.iter().enumerate() {
         let is_hovered = i == state.hovered;
-        let is_selected = i == state.selected;
+        let is_connected = entry.is_connected();
 
+        // Determine row style based on hover and connection state
         let style = if is_hovered {
-            RowStyle::Hovered // simplified for now
+            if is_connected {
+                RowStyle::HoveredConnected
+            } else {
+                RowStyle::HoveredDisconnected
+            }
         } else {
-            RowStyle::Normal
+            if is_connected {
+                RowStyle::Normal // connected, not hovered
+            } else {
+                RowStyle::Disconnected // disconnected, not hovered
+            }
         };
 
         let rect = Rect::new(area.x, y, area.width, row_height);
@@ -473,6 +464,8 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &AppState) {
     frame.render_widget(Paragraph::new(content), area);
 }
 ```
+
+Note: Added `RowStyle::Disconnected` for disconnected rows that are not hovered. Also note that the `⇅` keyboard indicator will be shown for the currently selected/hovered row - implement by passing an additional flag to `render_mount_row`.
 
 - [ ] **Step 2: Commit**
 
@@ -579,12 +572,7 @@ fn handle_browse_key(code: KeyCode, cd: &ConfigDir, state: &mut AppState) -> Res
             }
             Ok(false)
         }
-        KeyCode::Char('a') => {
-            let default_name = suggest_new_provider_name(state);
-            state.mode = UiMode::Edit(EditSession::new_for_add(default_name));
-            state.status = "Adding new mount".to_owned();
-            Ok(false)
-        }
+        // Note: 'a' shortcut removed - per spec, only Enter on Add row adds new mount
         KeyCode::Char('e') | KeyCode::Enter => {
             if state.is_add_row() {
                 let default_name = suggest_new_provider_name(state);
