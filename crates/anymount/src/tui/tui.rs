@@ -21,9 +21,10 @@ use crossterm::terminal::{
 };
 use crossterm::{cursor, execute};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::prelude::Stylize;
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 use std::fs;
 use std::io::{stdout, Write};
@@ -36,16 +37,8 @@ const COLOR_CONNECTED: Color = Color::Green;
 const COLOR_DISCONNECTED: Color = Color::DarkGray;
 const COLOR_SELECTED: Color = Color::White;
 const COLOR_ROW_BG_NORMAL: Color = Color::Reset;
-const COLOR_ROW_BG_HOVERED: Color = Color::Rgb {
-    r: 30,
-    g: 40,
-    b: 60,
-};
-const COLOR_ROW_BG_SELECTED: Color = Color::Rgb {
-    r: 45,
-    g: 66,
-    b: 99,
-};
+const COLOR_ROW_BG_HOVERED: Color = Color::Rgb(30, 40, 60);
+const COLOR_ROW_BG_SELECTED: Color = Color::Rgb(45, 66, 99);
 const COLOR_ROW_3D_SHADOW: Color = Color::DarkGray;
 const COLOR_BUTTON: Color = Color::Cyan;
 const COLOR_BUTTON_TEXT: Color = Color::Black;
@@ -465,27 +458,6 @@ impl EditDraft {
             .collect()
     }
 
-    fn lines(&self, selected_field: EditField) -> Vec<Line<'static>> {
-        self.visible_fields()
-            .iter()
-            .map(|field| {
-                let value = self.field_value(*field);
-                let shown = if value.is_empty() {
-                    "<unset>".to_owned()
-                } else {
-                    value
-                };
-                let prefix = if *field == selected_field { ">" } else { " " };
-                let text = format!("{prefix} {:40} = {shown}", field.label());
-                if *field == selected_field {
-                    Line::styled(text, Style::default().fg(COLOR_HIGHLIGHT))
-                } else {
-                    Line::from(text)
-                }
-            })
-            .collect()
-    }
-
     fn apply_onedrive_auth_tokens(&mut self, tokens: TokenResponse) -> Result<()> {
         let refresh_token = tokens
             .refresh_token
@@ -699,50 +671,6 @@ impl EditSession {
             self.selected_field().label(),
             self.selected_field().description()
         )
-    }
-
-    fn mode_line(&self) -> &'static str {
-        match self.mode {
-            EditMode::Navigate => "Mode: navigate (Enter edits field)",
-            EditMode::TextInput => "Mode: editing text (Enter confirms)",
-            EditMode::StorageTypeChoice { .. } => "Mode: choosing storage type (Enter confirms)",
-        }
-    }
-
-    fn choice_lines(&self) -> Vec<Line<'static>> {
-        let mut lines = Vec::new();
-        let show_choices = matches!(self.mode, EditMode::StorageTypeChoice { .. })
-            || matches!(self.selected_field(), EditField::StorageType);
-        if show_choices {
-            let selected_index = match self.mode {
-                EditMode::StorageTypeChoice { index } => index,
-                _ => self.storage_choice_index(),
-            };
-            lines.push(Line::styled(
-                "Choices:",
-                Style::default()
-                    .fg(COLOR_CONTEXT)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            for (choice_index, value) in Self::storage_choices().iter().enumerate() {
-                let marker = if choice_index == selected_index {
-                    ">"
-                } else {
-                    " "
-                };
-                let label = match value {
-                    ProviderType::Local => "local",
-                    ProviderType::OneDrive => "onedrive",
-                };
-                let line = format!("{marker} {label}");
-                if choice_index == selected_index {
-                    lines.push(Line::styled(line, Style::default().fg(COLOR_HIGHLIGHT)));
-                } else {
-                    lines.push(Line::from(line));
-                }
-            }
-        }
-        lines
     }
 }
 
@@ -980,7 +908,7 @@ fn run_loop(terminal: &mut DefaultTerminal, cd: &ConfigDir, state: &mut AppState
                                 state.status = format!("Saved mount '{name}'");
                             }
                             EditAction::Deleted => {
-                                let name = if let UiMode::Edit(ref session) = &state.mode {
+                                let name = if let UiMode::Edit(session) = &state.mode {
                                     session.draft.name.clone()
                                 } else {
                                     String::new()
@@ -1113,7 +1041,7 @@ fn handle_mouse_event(
     let list_area = Rect::new(0, 0, size.width, size.height.saturating_sub(2));
 
     match mouse.kind {
-        MouseEventKind::Moved(_, _) | MouseEventKind::Dragging(_, _) => {
+        MouseEventKind::Moved => {
             state.is_keyboard_mode = false;
             let row = (mouse.row as usize).saturating_sub(list_area.y as usize);
             if row <= state.providers.len() {
@@ -1401,9 +1329,7 @@ fn render_mount_row(
     let row_rect = Rect::new(rect.x + displacement, rect.y, rect.width, rect.height);
     let row_block = Block::default()
         .bg(bg_color)
-        .border_bottom(Borders::BOT)
-        .border_left(Borders::LEFT)
-        .border_right(Borders::RIGHT);
+        .borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT);
     frame.render_widget(row_block, row_rect);
 
     let keyboard_indicator = if is_keyboard_mode && is_hovered {
@@ -1485,9 +1411,7 @@ fn render_add_row(frame: &mut Frame, rect: Rect, is_hovered: bool) {
     let row_rect = Rect::new(rect.x + displacement, rect.y, rect.width, rect.height);
     let row_block = Block::default()
         .bg(bg_color)
-        .border_bottom(Borders::BOT)
-        .border_left(Borders::LEFT)
-        .border_right(Borders::RIGHT);
+        .borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT);
     frame.render_widget(row_block, row_rect);
 
     let content = if is_hovered {
@@ -1582,7 +1506,8 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &AppState) {
         .bg(COLOR_ROW_BG_NORMAL)
         .borders(Borders::TOP);
 
-    frame.render_widget(Paragraph::new(content), block);
+    frame.render_widget(block, area);
+    frame.render_widget(Paragraph::new(content), area);
 }
 
 fn draw_edit_menu(frame: &mut Frame, session: &EditSession) {
@@ -1612,7 +1537,8 @@ fn draw_edit_menu(frame: &mut Frame, session: &EditSession) {
 
         let rect = Rect::new(edit_area.x, y, edit_area.width, 1);
         let block = Block::default().bg(bg);
-        frame.render_widget(Paragraph::new(content), block);
+        frame.render_widget(block, rect);
+        frame.render_widget(Paragraph::new(content), rect);
         y += 1;
     }
 
@@ -1627,9 +1553,10 @@ fn draw_edit_menu(frame: &mut Frame, session: &EditSession) {
     let block = Block::default()
         .bg(COLOR_ROW_BG_NORMAL)
         .borders(Borders::TOP);
+    frame.render_widget(block, button_area);
     frame.render_widget(
         Paragraph::new(button_text).style(Style::default().fg(COLOR_BUTTON)),
-        block,
+        button_area,
     );
 }
 
@@ -1658,7 +1585,7 @@ fn draw_delete_dialog(frame: &mut Frame, name: &str) {
 }
 
 fn help_lines(state: &AppState) -> Vec<Line<'static>> {
-    let lines = match state.mode {
+    let mut lines = match state.mode {
         UiMode::Browse => vec![Line::from("j↑ select ↓k  c connect  d disconnect  ↵ edit")],
         UiMode::Edit(ref session) => {
             let mut line = String::from("j↑ ⇓↓ select  type to edit  Tab complete  Esc back  c save  d disconnect  x delete");
@@ -1678,84 +1605,11 @@ fn help_lines(state: &AppState) -> Vec<Line<'static>> {
     lines
 }
 
-fn editor_context_lines(session: &EditSession) -> Vec<Line<'static>> {
-    let mut lines = vec![
-        Line::styled(
-            session.mode_line(),
-            Style::default()
-                .fg(COLOR_CONTEXT)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Line::styled(session.context_line(), Style::default().fg(COLOR_CONTEXT)),
-    ];
-    if matches!(session.draft.storage_type, ProviderType::OneDrive)
-        && matches!(session.mode, EditMode::Navigate)
-    {
-        lines.push(Line::styled(
-            "Action: l or o signs in to OneDrive and fills storage.onedrive.refresh_token",
-            Style::default().fg(COLOR_CONTEXT),
-        ));
-    }
-    lines.extend(session.choice_lines());
-    lines
-}
-
 fn is_onedrive_auth_key(code: KeyCode) -> bool {
     matches!(
         code,
         KeyCode::Char('l') | KeyCode::Char('L') | KeyCode::Char('o') | KeyCode::Char('O')
     )
-}
-
-fn provider_details(entry: Option<&ProviderEntry>) -> Vec<Line<'static>> {
-    let Some(entry) = entry else {
-        return vec![Line::from("No providers configured")];
-    };
-
-    match &entry.config.storage {
-        StorageConfig::Local { root } => vec![
-            Line::from(format!("Name: {}", entry.name)),
-            Line::from(format!("Mount path: {}", entry.config.path.display())),
-            Line::from("Storage type: local"),
-            Line::from(format!("Root: {}", root.display())),
-        ],
-        StorageConfig::OneDrive {
-            root,
-            endpoint,
-            access_token,
-            refresh_token,
-            client_id,
-            token_expiry_buffer_secs,
-        } => vec![
-            Line::from(format!("Name: {}", entry.name)),
-            Line::from(format!("Mount path: {}", entry.config.path.display())),
-            Line::from("Storage type: onedrive"),
-            Line::from(format!("Root: {}", root.display())),
-            Line::from(format!("Endpoint: {endpoint}")),
-            Line::from(format!(
-                "Access token: {}",
-                mask_option(access_token.as_deref())
-            )),
-            Line::from(format!(
-                "Refresh token: {}",
-                mask_option(refresh_token.as_deref())
-            )),
-            Line::from(format!("Client ID: {}", mask_option(client_id.as_deref()))),
-            Line::from(format!(
-                "Token buffer secs: {}",
-                token_expiry_buffer_secs
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "none".to_owned())
-            )),
-        ],
-    }
-}
-
-fn mask_option(value: Option<&str>) -> String {
-    match value {
-        Some(value) if !value.is_empty() => "configured".to_owned(),
-        _ => "none".to_owned(),
-    }
 }
 
 fn load_state(cd: &ConfigDir) -> Result<AppState> {
@@ -1831,8 +1685,7 @@ fn disconnect_selected_provider(_cd: &ConfigDir, state: &AppState) -> Result<Opt
         return Ok(None);
     };
     let name = name.to_owned();
-    crate::cli::provider_control::try_disconnect_provider(&name)
-        .map_err(|e| Error::Application(e.into()))?;
+    crate::cli::provider_control::try_disconnect_provider(&name).map_err(Error::Validation)?;
     Ok(Some(name))
 }
 
@@ -2119,13 +1972,16 @@ mod tests {
         let mut state = AppState {
             providers: vec![local_provider("a"), local_provider("b")],
             selected: 1,
+            hovered: 1,
+            is_keyboard_mode: true,
             status: String::new(),
             mode: UiMode::Browse,
         };
 
         state.select_next();
 
-        assert_eq!(state.selected, 0);
+        assert_eq!(state.hovered, 2);
+        assert_eq!(state.selected, 2);
     }
 
     #[test]
@@ -2137,13 +1993,16 @@ mod tests {
                 local_provider("c"),
             ],
             selected: 0,
+            hovered: 0,
+            is_keyboard_mode: true,
             status: String::new(),
             mode: UiMode::Browse,
         };
 
         state.select_prev();
 
-        assert_eq!(state.selected, 2);
+        assert_eq!(state.hovered, 3);
+        assert_eq!(state.selected, 3);
     }
 
     #[test]
@@ -2151,6 +2010,8 @@ mod tests {
         let state = AppState {
             providers: Vec::new(),
             selected: 0,
+            hovered: 0,
+            is_keyboard_mode: true,
             status: String::new(),
             mode: UiMode::Browse,
         };
@@ -2163,6 +2024,8 @@ mod tests {
         let state = AppState {
             providers: vec![local_provider("alpha")],
             selected: 0,
+            hovered: 0,
+            is_keyboard_mode: true,
             status: String::new(),
             mode: UiMode::Browse,
         };
@@ -2175,46 +2038,6 @@ mod tests {
             app.connected_names.borrow().as_slice(),
             ["alpha".to_owned()]
         );
-    }
-
-    #[test]
-    fn mask_option_hides_secrets() {
-        assert_eq!(mask_option(Some("abc")), "configured");
-        assert_eq!(mask_option(None), "none");
-        assert_eq!(mask_option(Some("")), "none");
-    }
-
-    #[test]
-    fn edit_lines_show_only_fields_for_selected_storage_type() {
-        let mut draft = EditDraft::new_empty("new-provider".to_owned());
-
-        let local_lines = draft.lines(EditField::Name);
-        let local_rendered: Vec<String> = local_lines
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect();
-        assert!(local_rendered
-            .iter()
-            .any(|line| line.contains("storage.local.root")));
-        assert!(!local_rendered
-            .iter()
-            .any(|line| line.contains("storage.onedrive.access_token")));
-
-        draft.storage_type = ProviderType::OneDrive;
-        let onedrive_lines = draft.lines(EditField::Name);
-        let onedrive_rendered: Vec<String> = onedrive_lines
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect();
-        assert!(
-            onedrive_rendered
-                .iter()
-                .any(|line| line.contains("storage.onedrive.access_token")
-                    && line.contains("<unset>"))
-        );
-        assert!(!onedrive_rendered
-            .iter()
-            .any(|line| line.contains("storage.local.root")));
     }
 
     #[test]
@@ -2301,6 +2124,8 @@ mod tests {
         let state = AppState {
             providers: Vec::new(),
             selected: 0,
+            hovered: 0,
+            is_keyboard_mode: true,
             status: String::new(),
             mode: UiMode::Edit(session),
         };
@@ -2312,22 +2137,7 @@ mod tests {
 
         assert!(rendered
             .iter()
-            .any(|line| line.contains("l/o sign in to OneDrive")));
-    }
-
-    #[test]
-    fn editor_context_mentions_onedrive_login_action() {
-        let mut session = EditSession::new_for_add("new-provider".to_owned());
-        session.draft.storage_type = ProviderType::OneDrive;
-
-        let rendered: Vec<String> = editor_context_lines(&session)
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect();
-
-        assert!(rendered
-            .iter()
-            .any(|line| line.contains("Action: l or o signs in to OneDrive")));
+            .any(|line| line.contains("l/o OneDrive auth")));
     }
 
     #[test]
