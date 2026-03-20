@@ -470,19 +470,66 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &AppState) {
 ```
 
 Note: The `⇅` keyboard indicator is **required per spec** - it shows when keyboard is used for navigation.
-Implementation:
-1. Add `is_keyboard_mode: bool` to AppState
-2. Set to `true` when j/k/arrows are pressed, `false` when mouse moves
-3. Pass this flag to render_mount_row to show `⇅` indicator before status icon
-4. Buttons remain the same for both keyboard/mouse; the `⇅` provides the visual distinction
+This requires explicit steps - see Task 4 Step 3 below.
 
 Also note: Storage type field visibility (show local vs onedrive fields) is already handled by the existing `EditDraft::field_active` and `visible_fields` methods in the codebase - no changes needed for this feature.
 
-- [ ] **Step 2: Commit**
+- [ ] **Step 3: Add is_keyboard_mode tracking**
+
+In Task 2, also add to AppState:
+```rust
+struct AppState {
+    // ... existing fields ...
+    is_keyboard_mode: bool,
+}
+```
+
+Initialize in `AppState::load`:
+```rust
+is_keyboard_mode: true, // Default to keyboard mode
+```
+
+Set to `false` when mouse moves (in `handle_mouse_event`):
+```rust
+state.is_keyboard_mode = false;
+```
+
+Set to `true` when keyboard used (in `handle_browse_key`):
+```rust
+KeyCode::Down | KeyCode::Char('j') | KeyCode::Up | KeyCode::Char('k') => {
+    state.is_keyboard_mode = true;
+    state.select_next(); // or select_prev()
+    Ok(false)
+}
+```
+
+Update `render_mount_row` to accept and display `⇅`:
+```rust
+fn render_mount_row(
+    // ... existing params ...
+    is_keyboard_mode: bool,
+) {
+    // Show ⇅ before status icon when keyboard mode
+    let keyboard_indicator = if is_keyboard_mode && show_buttons { "⇅" } else { " " };
+    let content = format!(
+        "{}{}  {:12}  {:25}  {:10}",
+        keyboard_indicator,
+        status_icon,
+        // ...
+    );
+}
+```
+
+Pass the flag from `draw_main_menu`:
+```rust
+render_mount_row(frame, entry, rect, style, is_hovered, state.is_keyboard_mode);
+```
+
+- [ ] **Step 4: Commit**
 
 ```bash
 git add crates/anymount/src/tui/tui.rs
-git commit -m "feat(tui): rewrite main menu with rack-style rows"
+git commit -m "feat(tui): add is_keyboard_mode tracking for ⇅ indicator"
 ```
 
 ---
@@ -934,7 +981,13 @@ git commit -m "feat(tui): add delete confirmation dialog and disconnect action"
 
 - [ ] **Step 1: Update existing tests for new AppState structure**
 
-Update tests that create AppState directly to include `hovered` field:
+Search for tests that construct AppState directly:
+```bash
+grep -n "AppState {" crates/anymount/src/tui/tui.rs
+```
+
+Update each to include `hovered: 0` and `is_keyboard_mode: true`:
+- Tests around line 1879, 1894, 1912, 1923, 2062
 
 - [ ] **Step 2: Add tests for new hover behavior**
 
