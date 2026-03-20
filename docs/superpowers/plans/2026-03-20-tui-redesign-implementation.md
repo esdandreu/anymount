@@ -139,9 +139,9 @@ where
 }
 ```
 
-- [ ] **Step 4: Add hovered row methods**
+- [ ] **Step 4: Add hovered row methods to AppState**
 
-Add after select_prev method (around line 128):
+Modify AppState to add these methods (add after select_prev):
 
 ```rust
 fn hovered_name(&self) -> Option<&str> {
@@ -469,13 +469,12 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &AppState) {
 }
 ```
 
-Note: The `⇅` keyboard indicator in the spec shows when keyboard is used. To implement this:
+Note: The `⇅` keyboard indicator is **required per spec** - it shows when keyboard is used for navigation.
+Implementation:
 1. Add `is_keyboard_mode: bool` to AppState
 2. Set to `true` when j/k/arrows are pressed, `false` when mouse moves
-3. Pass this flag to render_mount_row to show `⇅` indicator
-4. Use different button labels based on is_keyboard_mode:
-   - Mouse hover: `[ ⇐ ]` (disconnect) or `[ ⇒ ]` (connect)
-   - Keyboard focus: `[ ⇐ ]` or `[ ⇒ ]` (same buttons, different context)
+3. Pass this flag to render_mount_row to show `⇅` indicator before status icon
+4. Buttons remain the same for both keyboard/mouse; the `⇅` provides the visual distinction
 
 Also note: Storage type field visibility (show local vs onedrive fields) is already handled by the existing `EditDraft::field_active` and `visible_fields` methods in the codebase - no changes needed for this feature.
 
@@ -683,16 +682,12 @@ fn draw_edit_menu(frame: &mut Frame, session: &EditSession) {
     // Buttons: [ ⇑ ] [ ⇓ ] [ d Disc. ] [ x ] [ c Save ] or [ c Create ] for new mounts
     let is_new = session.original_name.is_none();
     let save_label = if is_new { "Create" } else { "Save" };
-
+    let padding = " ".repeat((edit_area.width.saturating_sub(60)) as usize);
     let button_text = format!(
-        "{:>width$}[ ⇑ ] [ ⇓ ] [ d Disc. ] [ x ] [ c {} ]",
-        "",
-        save_label,
-        width = edit_area.width.saturating_sub(60)
+        "{}[ ⇑ ] [ ⇓ ] [ d Disc. ] [ x ] [ c {} ]",
+        padding,
+        save_label
     );
-
-    // Note: Valid Rust format syntax is {:>width$} where width is a runtime value
-    // Use: format!("{:>width$}[ ⇑ ]...", "", width = edit_area.width.saturating_sub(60))
 
     let block = Block::default()
         .bg(COLOR_ROW_BG_NORMAL)
