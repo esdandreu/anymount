@@ -68,6 +68,11 @@ fuser = "0.17"
 libc = "0.2"
 zbus = { version = "5", features = ["tokio"] }
 
+# macOS-specific dependencies
+[target.'cfg(target_os = "macos")'.dependencies]
+fuser = "0.17"
+libc = "0.2"
+
 # Windows-specific dependencies
 [target.'cfg(target_os = "windows")'.dependencies]
 cloud-filter = { git = "https://github.com/esdandreu/cloud-filter-rs" }

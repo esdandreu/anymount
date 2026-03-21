@@ -11,6 +11,10 @@ pub enum Error {
     #[error(transparent)]
     LibCloudProvider(#[from] crate::drivers::linux::Error),
 
+    #[cfg(target_os = "macos")]
+    #[error(transparent)]
+    Macos(#[from] crate::drivers::fuse::error::Error),
+
     #[error("driver runtime not supported on this platform")]
     NotSupported,
 }

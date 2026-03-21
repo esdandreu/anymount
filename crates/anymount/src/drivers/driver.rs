@@ -5,6 +5,7 @@ use crate::storages::{LocalStorage, OneDriveConfig};
 use crate::Logger;
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 
 pub trait Driver {
     fn kind(&self) -> &'static str;
@@ -157,21 +158,108 @@ pub fn connect_drivers_with_telemetry(
     Ok(drivers)
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+#[cfg(target_os = "macos")]
 pub fn connect_drivers(
-    _specs: &[DomainDriver],
-    _logger: &impl Logger,
+    specs: &[DomainDriver],
+    logger: &(impl Logger + 'static),
 ) -> Result<Vec<Box<dyn Driver>>> {
-    connect_drivers_with_telemetry(_specs, _logger, None)
+    connect_drivers_with_telemetry(specs, logger, None)
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+#[cfg(target_os = "macos")]
 pub fn connect_drivers_with_telemetry(
-    _specs: &[DomainDriver],
-    _logger: &impl Logger,
+    specs: &[DomainDriver],
+    logger: &(impl Logger + 'static),
     _service_tx: Option<Sender<ServiceMessage>>,
 ) -> Result<Vec<Box<dyn Driver>>> {
-    Err(super::Error::NotSupported)
+    use crate::drivers::fuse::{NoCacheFsCache, StorageFilesystem};
+    let mut sessions: Vec<(PathBuf, fuser::BackgroundSession)> = Vec::new();
+    for spec in specs {
+        if !spec.path.exists() {
+            std::fs::create_dir_all(&spec.path)?;
+        }
+        let mount_path = spec.path.canonicalize()?;
+        match &spec.storage {
+            StorageSpec::Local { root } => {
+                let storage = LocalStorage::new(root.clone());
+                let fs = StorageFilesystem::new_with_cache(
+                    storage,
+                    Arc::new(NoCacheFsCache::new()),
+                    logger.clone(),
+                );
+                let session = fuser::spawn_mount2(fs, &mount_path, &fuser::Config::default())
+                    .map_err(|source| {
+                        super::Error::Macos(crate::drivers::fuse::error::Error::FuseMount {
+                            path: mount_path.clone(),
+                            source,
+                        })
+                    })?;
+                sessions.push((mount_path, session));
+            }
+            StorageSpec::OneDrive {
+                root,
+                endpoint,
+                access_token,
+                refresh_token,
+                client_id,
+                token_expiry_buffer_secs,
+            } => {
+                let config = OneDriveConfig {
+                    root: root.clone(),
+                    endpoint: endpoint.clone(),
+                    access_token: access_token.clone(),
+                    refresh_token: refresh_token.clone(),
+                    client_id: client_id.clone(),
+                    token_expiry_buffer_secs: *token_expiry_buffer_secs,
+                };
+                let storage = config.connect()?;
+                let fs = StorageFilesystem::new_with_cache(
+                    storage,
+                    Arc::new(NoCacheFsCache::new()),
+                    logger.clone(),
+                );
+                let session = fuser::spawn_mount2(fs, &mount_path, &fuser::Config::default())
+                    .map_err(|source| {
+                        super::Error::Macos(crate::drivers::fuse::error::Error::FuseMount {
+                            path: mount_path.clone(),
+                            source,
+                        })
+                    })?;
+                sessions.push((mount_path, session));
+            }
+        }
+    }
+    let drivers: Vec<Box<dyn Driver>> = sessions
+        .into_iter()
+        .map(|(path, session)| Box::new(MacosDriver::new(path, session)) as Box<dyn Driver>)
+        .collect();
+    Ok(drivers)
+}
+
+#[cfg(target_os = "macos")]
+pub struct MacosDriver {
+    path: PathBuf,
+    _session: fuser::BackgroundSession,
+}
+
+#[cfg(target_os = "macos")]
+impl MacosDriver {
+    pub fn new(path: PathBuf, session: fuser::BackgroundSession) -> Self {
+        Self {
+            path,
+            _session: session,
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Driver for MacosDriver {
+    fn kind(&self) -> &'static str {
+        "macos"
+    }
+    fn path(&self) -> &PathBuf {
+        &self.path
+    }
 }
 
 #[cfg(test)]
