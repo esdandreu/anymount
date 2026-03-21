@@ -7,16 +7,24 @@ use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
-pub trait Driver {
-    fn kind(&self) -> &'static str;
+pub trait Session: Send + Sync + 'static {
     fn path(&self) -> &PathBuf;
+    fn kind(&self) -> &'static str;
 }
+
+pub trait Driver: Send + Sync + 'static {
+    fn connect<S>(storage: S, path: PathBuf, logger: impl Logger) -> Result<Box<dyn Session>>
+    where
+        S: crate::storages::Storage;
+}
+
+pub type Drivers = Vec<Box<dyn Session>>;
 
 #[cfg(target_os = "windows")]
 pub fn connect_drivers(
     specs: &[DriverConfig],
     logger: &(impl Logger + 'static),
-) -> Result<Vec<Box<dyn Driver>>> {
+) -> Result<Drivers> {
     connect_drivers_with_telemetry(specs, logger, None)
 }
 
@@ -25,7 +33,7 @@ pub fn connect_drivers_with_telemetry(
     specs: &[DriverConfig],
     logger: &(impl Logger + 'static),
     service_tx: Option<Sender<ServiceMessage>>,
-) -> Result<Vec<Box<dyn Driver>>> {
+) -> Result<Drivers> {
     use super::windows::{cleanup_registry, WindowsDriver};
     let mut drivers: Vec<Box<dyn Driver>> = Vec::new();
     for spec in specs {
@@ -75,7 +83,7 @@ pub fn connect_drivers_with_telemetry(
 pub fn connect_drivers(
     specs: &[DriverConfig],
     logger: &(impl Logger + 'static),
-) -> Result<Vec<Box<dyn Driver>>> {
+) -> Result<Drivers> {
     connect_drivers_with_telemetry(specs, logger, None)
 }
 
@@ -84,7 +92,7 @@ pub fn connect_drivers_with_telemetry(
     specs: &[DriverConfig],
     logger: &(impl Logger + 'static),
     _service_tx: Option<Sender<ServiceMessage>>,
-) -> Result<Vec<Box<dyn Driver>>> {
+) -> Result<Drivers> {
     use super::linux::dbus::AccountExporter;
     use super::linux::{export_on_dbus, mount_storage, new_runtime, LinuxDriver};
     let rt = new_runtime()?;
@@ -162,7 +170,7 @@ pub fn connect_drivers_with_telemetry(
 pub fn connect_drivers(
     _specs: &[DriverConfig],
     _logger: &(impl Logger + 'static),
-) -> Result<Vec<Box<dyn Driver>>> {
+) -> Result<Drivers> {
     Err(crate::drivers::Error::NotSupported)
 }
 
@@ -171,7 +179,7 @@ pub fn connect_drivers_with_telemetry(
     _specs: &[DriverConfig],
     _logger: &(impl Logger + 'static),
     _service_tx: Option<Sender<ServiceMessage>>,
-) -> Result<Vec<Box<dyn Driver>>> {
+) -> Result<Drivers> {
     Err(crate::drivers::Error::NotSupported)
 }
 
@@ -179,7 +187,7 @@ pub fn connect_drivers_with_telemetry(
 pub fn connect_drivers(
     specs: &[DriverConfig],
     logger: &(impl Logger + 'static),
-) -> Result<Vec<Box<dyn Driver>>> {
+) -> Result<Drivers> {
     connect_drivers_with_telemetry(specs, logger, None)
 }
 
@@ -188,7 +196,7 @@ pub fn connect_drivers_with_telemetry(
     specs: &[DriverConfig],
     logger: &(impl Logger + 'static),
     _service_tx: Option<Sender<ServiceMessage>>,
-) -> Result<Vec<Box<dyn Driver>>> {
+) -> Result<Drivers> {
     use crate::drivers::fuse::{NoCacheFsCache, StorageFilesystem};
     let mut sessions: Vec<(PathBuf, fuser::BackgroundSession)> = Vec::new();
     for spec in specs {
@@ -270,12 +278,12 @@ impl FuseDriver {
 }
 
 #[cfg(feature = "fuse")]
-impl Driver for FuseDriver {
-    fn kind(&self) -> &'static str {
-        "macos"
-    }
+impl Session for FuseDriver {
     fn path(&self) -> &PathBuf {
         &self.path
+    }
+    fn kind(&self) -> &'static str {
+        "macos"
     }
 }
 

@@ -14,4 +14,4 @@ pub mod error;
 pub mod driver;
 
 pub use error::{Error, Result};
-pub use driver::{connect_drivers, connect_drivers_with_telemetry, Driver};
+pub use driver::{connect_drivers, connect_drivers_with_telemetry, Driver, Session};

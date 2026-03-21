@@ -5,7 +5,7 @@ use crate::application::provide::{
 use crate::application::types::ProvideRequest;
 use crate::config::ConfigDir;
 use crate::domain::driver::{DriverConfig, StorageConfig, TelemetrySpec};
-use crate::drivers::Driver;
+use crate::drivers::Session;
 use crate::service::control::messages::{ControlMessage, ServiceMessage};
 use crate::service::ServiceRuntime;
 use crate::{Logger, TracingLogger};
@@ -192,7 +192,7 @@ impl<L: Logger + 'static> DriverRuntimeHost for RuntimeHost<L> {
                 }
             })?;
 
-            let drivers: Vec<Box<dyn Driver>> = crate::connect_drivers_with_telemetry(
+            let drivers: Vec<Box<dyn Session>> = crate::connect_drivers_with_telemetry(
                 std::slice::from_ref(&request.spec),
                 &self.logger,
                 Some(tx.clone()),

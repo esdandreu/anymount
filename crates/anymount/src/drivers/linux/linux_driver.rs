@@ -6,7 +6,7 @@ use super::dbus::{
 };
 use super::gtk_dbus::{ACTION_FREE_LOCAL_CACHE, ACTION_OPEN_FOLDER};
 use super::{Error, Result, StorageFilesystem};
-use crate::drivers::Driver;
+use crate::drivers::Session;
 use crate::Logger;
 use crate::storages::Storage;
 use std::collections::hash_map::DefaultHasher;
@@ -27,7 +27,7 @@ impl LinuxDriver {
     }
 }
 
-impl Driver for LinuxDriver {
+impl Session for LinuxDriver {
     fn kind(&self) -> &'static str {
         "LibCloudProviders"
     }
