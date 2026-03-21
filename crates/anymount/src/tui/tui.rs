@@ -9,7 +9,7 @@ use crate::application::connect::{
 };
 use crate::auth::{OneDriveAuthFlow, TokenResponse};
 use crate::cli::commands::config::ProviderType;
-use crate::config::{ConfigDir, StorageFileConfig};
+use crate::config::ConfigDir;
 use crate::domain::driver::{DriverConfig, StorageConfig};
 use crate::{DriverFileConfig, Logger, TracingLogger};
 use crossterm::event::{
@@ -314,7 +314,7 @@ impl EditDraft {
 
     fn from_provider(provider: &ProviderEntry) -> Self {
         match &provider.config.storage {
-            StorageFileConfig::Local { root } => Self {
+            StorageConfig::Local { root } => Self {
                 name: provider.name.clone(),
                 path: provider.config.path.display().to_string(),
                 storage_type: ProviderType::Local,
@@ -326,7 +326,7 @@ impl EditDraft {
                 onedrive_client_id: String::new(),
                 onedrive_token_expiry_buffer_secs: String::new(),
             },
-            StorageFileConfig::OneDrive {
+            StorageConfig::OneDrive {
                 root,
                 endpoint,
                 access_token,
@@ -449,7 +449,7 @@ impl EditDraft {
                         "storage.local.root cannot be empty".to_owned(),
                     ));
                 }
-                StorageFileConfig::Local {
+                StorageConfig::Local {
                     root: PathBuf::from(self.local_root.trim()),
                 }
             }
@@ -468,7 +468,7 @@ impl EditDraft {
                     &self.onedrive_token_expiry_buffer_secs,
                     "storage.onedrive.token_expiry_buffer_secs",
                 )?;
-                StorageFileConfig::OneDrive {
+                StorageConfig::OneDrive {
                     root: PathBuf::from(self.onedrive_root.trim()),
                     endpoint: self.onedrive_endpoint.trim().to_owned(),
                     access_token: optional_trimmed(&self.onedrive_access_token),
@@ -1257,10 +1257,10 @@ fn render_mount_row(
     }
 }
 
-fn get_storage_type_label(storage: &StorageFileConfig) -> &'static str {
+fn get_storage_type_label(storage: &StorageConfig) -> &'static str {
     match storage {
-        StorageFileConfig::Local { .. } => "local",
-        StorageFileConfig::OneDrive { .. } => "onedrive",
+        StorageConfig::Local { .. } => "local",
+        StorageConfig::OneDrive { .. } => "onedrive",
     }
 }
 
@@ -1744,7 +1744,7 @@ mod tests {
             name: name.to_owned(),
             config: DriverFileConfig {
                 path: PathBuf::from(format!("/mnt/{name}")),
-                storage: StorageFileConfig::Local {
+                storage: StorageConfig::Local {
                     root: PathBuf::from(format!("/data/{name}")),
                 },
                 telemetry: Default::default(),
@@ -1904,7 +1904,7 @@ mod tests {
         };
 
         let config = draft.to_provider_config().expect("conversion failed");
-        let StorageFileConfig::OneDrive {
+        let StorageConfig::OneDrive {
             access_token,
             refresh_token,
             client_id,

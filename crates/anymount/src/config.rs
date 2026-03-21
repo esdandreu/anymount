@@ -72,35 +72,6 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum StorageFileConfig {
-    Local {
-        root: PathBuf,
-    },
-    OneDrive {
-        root: PathBuf,
-        endpoint: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        access_token: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        refresh_token: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        client_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        token_expiry_buffer_secs: Option<u64>,
-    },
-}
-
-impl StorageFileConfig {
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::Local { .. } => "local",
-            Self::OneDrive { .. } => "onedrive",
-        }
-    }
-}
-
 /// Optional OpenTelemetry export settings for a named provider.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TelemetryFileConfig {
@@ -137,7 +108,7 @@ pub enum OtlpTransport {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DriverFileConfig {
     pub path: PathBuf,
-    pub storage: StorageFileConfig,
+    pub storage: StorageConfig,
     #[serde(default)]
     pub telemetry: TelemetryFileConfig,
 }
@@ -147,7 +118,7 @@ impl DriverFileConfig {
         DriverConfig {
             name,
             path: self.path,
-            storage: self.storage.into(),
+            storage: self.storage,
             telemetry: self.telemetry.into(),
         }
     }
@@ -155,54 +126,8 @@ impl DriverFileConfig {
     fn from_spec(spec: &DriverConfig) -> Self {
         Self {
             path: spec.path.clone(),
-            storage: spec.storage.clone().into(),
+            storage: spec.storage.clone(),
             telemetry: spec.telemetry.clone().into(),
-        }
-    }
-}
-
-impl From<StorageFileConfig> for StorageConfig {
-    fn from(value: StorageFileConfig) -> Self {
-        match value {
-            StorageFileConfig::Local { root } => Self::Local { root },
-            StorageFileConfig::OneDrive {
-                root,
-                endpoint,
-                access_token,
-                refresh_token,
-                client_id,
-                token_expiry_buffer_secs,
-            } => Self::OneDrive {
-                root,
-                endpoint,
-                access_token,
-                refresh_token,
-                client_id,
-                token_expiry_buffer_secs,
-            },
-        }
-    }
-}
-
-impl From<StorageConfig> for StorageFileConfig {
-    fn from(value: StorageConfig) -> Self {
-        match value {
-            StorageConfig::Local { root } => Self::Local { root },
-            StorageConfig::OneDrive {
-                root,
-                endpoint,
-                access_token,
-                refresh_token,
-                client_id,
-                token_expiry_buffer_secs,
-            } => Self::OneDrive {
-                root,
-                endpoint,
-                access_token,
-                refresh_token,
-                client_id,
-                token_expiry_buffer_secs,
-            },
         }
     }
 }
@@ -443,7 +368,7 @@ mod tests {
     fn local_config() -> DriverFileConfig {
         DriverFileConfig {
             path: PathBuf::from("/mnt/local"),
-            storage: StorageFileConfig::Local {
+            storage: StorageConfig::Local {
                 root: PathBuf::from("/data"),
             },
             telemetry: TelemetryFileConfig::default(),
@@ -453,7 +378,7 @@ mod tests {
     fn onedrive_config() -> DriverFileConfig {
         DriverFileConfig {
             path: PathBuf::from("/mnt/onedrive"),
-            storage: StorageFileConfig::OneDrive {
+            storage: StorageConfig::OneDrive {
                 root: PathBuf::from("/"),
                 endpoint: "https://graph.microsoft.com/v1.0".to_owned(),
                 access_token: None,
@@ -486,7 +411,7 @@ mod tests {
         let (_tmp, cd) = tmp_config_dir();
         let cfg = DriverFileConfig {
             path: PathBuf::from("/mnt/otel"),
-            storage: StorageFileConfig::Local {
+            storage: StorageConfig::Local {
                 root: PathBuf::from("/data"),
             },
             telemetry: TelemetryFileConfig {
@@ -513,7 +438,7 @@ mod tests {
         cd.write("myod", &cfg).expect("write failed");
         let loaded = cd.read("myod").expect("read failed");
         assert_eq!(loaded.path, cfg.path);
-        if let StorageFileConfig::OneDrive {
+        if let StorageConfig::OneDrive {
             refresh_token,
             client_id,
             ..
@@ -599,7 +524,7 @@ mod tests {
         let (_tmp, cd) = tmp_config_dir();
         let cfg = DriverFileConfig {
             path: PathBuf::from("/mnt/od"),
-            storage: StorageFileConfig::OneDrive {
+            storage: StorageConfig::OneDrive {
                 root: PathBuf::from("/"),
                 endpoint: "https://graph.microsoft.com/v1.0".to_owned(),
                 access_token: None,
@@ -611,7 +536,7 @@ mod tests {
         };
         cd.write("sparse", &cfg).expect("write failed");
         let loaded = cd.read("sparse").expect("read failed");
-        if let StorageFileConfig::OneDrive {
+        if let StorageConfig::OneDrive {
             access_token,
             refresh_token,
             client_id,

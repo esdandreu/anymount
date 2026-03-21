@@ -4,6 +4,7 @@
 //! types here describe what a driver is and the invariants it must satisfy
 //! before adapter code can persist, mount, or host it.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -64,7 +65,8 @@ impl DriverConfig {
 }
 
 /// Supported storage backends.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum StorageConfig {
     /// Local directory storage.
     Local {
@@ -78,12 +80,16 @@ pub enum StorageConfig {
         /// Microsoft Graph endpoint.
         endpoint: String,
         /// Optional short-lived access token.
+        #[serde(skip_serializing_if = "Option::is_none")]
         access_token: Option<String>,
         /// Optional refresh token used to obtain new access tokens.
+        #[serde(skip_serializing_if = "Option::is_none")]
         refresh_token: Option<String>,
         /// Optional OAuth client id override.
+        #[serde(skip_serializing_if = "Option::is_none")]
         client_id: Option<String>,
         /// Refresh buffer before token expiry.
+        #[serde(skip_serializing_if = "Option::is_none")]
         token_expiry_buffer_secs: Option<u64>,
     },
 }
