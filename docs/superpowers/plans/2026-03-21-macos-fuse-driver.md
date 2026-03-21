@@ -729,7 +729,7 @@ mod tests {
             data: Mutex::new(HashMap::new()),
         });
         let logger = crate::NoOpLogger;
-        let fs = StorageFilesystem::new(storage, cache, logger);
+        let fs = StorageFilesystem::new_with_cache(storage, cache, logger);
         let path = PathBuf::new();
 
         let first = fs.read_dir_entries(path.clone()).unwrap();
@@ -754,7 +754,7 @@ mod tests {
             data: Mutex::new(HashMap::new()),
         });
         let logger = crate::NoOpLogger;
-        let fs = StorageFilesystem::new(storage, cache, logger);
+        let fs = StorageFilesystem::new_with_cache(storage, cache, logger);
 
         let entries = fs.read_dir_entries(PathBuf::new()).unwrap();
 
@@ -794,8 +794,8 @@ mod tests {
 
 - [ ] **Step 2: Verify it compiles**
 
-Run: `cargo check --features fuse -p anymount`
-Expected: Should compile (with fuse feature or on Unix)
+Run: `cargo check -p anymount`
+Expected: Should compile (on Unix platforms)
 
 - [ ] **Step 3: Commit**
 
@@ -1235,7 +1235,7 @@ pub fn connect_drivers_with_telemetry(
             StorageSpec::Local { root } => {
                 let storage = LocalStorage::new(root.clone());
                 let cache = Arc::new(NoCacheFsCache::new());
-                let fs = StorageFilesystem::new(storage, cache, logger.clone());
+                let fs = StorageFilesystem::new_with_cache(storage, cache, logger.clone());
                 let session = fuser::spawn_mount2(fs, &path, &fuser::Config::default())
                     .map_err(|source| super::Error::Macos(FuseError::FuseMount {
                         path: path.clone(),
