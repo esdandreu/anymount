@@ -1144,16 +1144,21 @@ fuser = "0.17"
 libc = "0.2"
 ```
 
-- [ ] **Step 2: Add fuse module to drivers/mod.rs**
+- [ ] **Step 2: Add fuse module and re-export MacosDriver to drivers/mod.rs**
 
 Add at the top of drivers/mod.rs:
 
 ```rust
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod fuse;
+
+#[cfg(target_os = "macos")]
+pub use driver::MacosDriver;
 ```
 
 - [ ] **Step 3: Add macOS Error variant to drivers/error.rs**
+
+Add before the catch-all `NotSupported` variant:
 
 ```rust
 #[cfg(target_os = "macos")]
@@ -1161,7 +1166,30 @@ pub mod fuse;
 Macos(#[from] crate::drivers::fuse::error::Error),
 ```
 
-- [ ] **Step 4: Add macOS connect_drivers to driver.rs**
+- [ ] **Step 4: Remove catch-all NotSupported for macOS**
+
+Find and remove this block in `drivers/driver.rs`:
+
+```rust
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+pub fn connect_drivers(
+    _specs: &[DomainDriver],
+    _logger: &impl Logger,
+) -> Result<Vec<Box<dyn Driver>>> {
+    connect_drivers_with_telemetry(_specs, _logger, None)
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+pub fn connect_drivers_with_telemetry(
+    _specs: &[DomainDriver],
+    _logger: &impl Logger,
+    _service_tx: Option<Sender<ServiceMessage>>,
+) -> Result<Vec<Box<dyn Driver>>> {
+    Err(super::Error::NotSupported)
+}
+```
+
+- [ ] **Step 5: Add macOS connect_drivers to driver.rs**
 
 Add after the Linux cfg block:
 
@@ -1242,16 +1270,16 @@ impl Driver for MacosDriver {
 }
 ```
 
-- [ ] **Step 4: Add Arc import**
+- [ ] **Step 6: Add Arc import**
 
 At the top of `drivers/driver.rs`, ensure `use std::sync::Arc;` is imported.
 
-- [ ] **Step 5: Verify it compiles**
+- [ ] **Step 7: Verify it compiles**
 
 Run: `cargo check -p anymount --features macos`
 Expected: Should compile (may need platform-specific build)
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add crates/anymount/Cargo.toml crates/anymount/src/drivers/
