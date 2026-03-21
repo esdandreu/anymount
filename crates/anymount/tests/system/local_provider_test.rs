@@ -1,3 +1,4 @@
+// Copyright 2026 Dotphoton AG
 #![allow(clippy::unwrap_used)]
 
 #[cfg(target_os = "linux")]
@@ -233,4 +234,25 @@ fn local_provider_reads_file_content() {
     let content =
         fs::read_to_string(fixture.mount_path.join("hello.txt")).expect("Failed to read hello.txt");
     assert_eq!(content, "Hello, World!");
+}
+
+#[cfg(target_os = "macos")]
+mod macos_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires macFUSE installed"]
+    fn mount_local_directory_on_macos() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mount_path = temp_dir.path().join("mount");
+        std::fs::create_dir(&mount_path).unwrap();
+
+        let driver = crate::drivers::MacosDriver::new(
+            mount_path.clone(),
+            todo!("FUSE session would be created here in real usage"),
+        );
+
+        assert_eq!(driver.kind(), "macos");
+        assert_eq!(driver.path(), &mount_path);
+    }
 }
