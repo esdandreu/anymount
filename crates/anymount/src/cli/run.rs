@@ -52,7 +52,7 @@ pub fn run() -> super::Result<()> {
 }
 
 fn provide_otel_handles(cli: &Cli) -> super::Result<Option<crate::telemetry::OtelHandles>> {
-    let Some(Commands::Provide(command)) = cli.command.as_ref() else {
+    let Some(Commands::ConnectSync(command)) = cli.command.as_ref() else {
         return Ok(None);
     };
     let Some(name) = command.name.as_deref() else {

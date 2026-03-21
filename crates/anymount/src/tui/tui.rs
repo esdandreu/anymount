@@ -1556,7 +1556,7 @@ fn spawn_provider_process(provider_name: &str, config_dir: &Path) -> Result<std:
     let current_exe = std::env::current_exe()
         .map_err(|source| crate::cli::Error::ResolveCurrentExecutable { source })?;
     Command::new(current_exe)
-        .arg("provide")
+        .arg("connect-sync")
         .arg("--name")
         .arg(provider_name)
         .arg("--config-dir")

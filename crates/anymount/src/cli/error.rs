@@ -35,7 +35,7 @@ pub enum Error {
     MissingDisconnectTarget,
 
     #[error("specify --name <NAME> or --path <PATH> with a storage subcommand")]
-    MissingProvideTarget,
+    MissingConnectSyncTarget,
 
     #[error("failed to install Ctrl-C handler: {source}")]
     InstallCtrlC {

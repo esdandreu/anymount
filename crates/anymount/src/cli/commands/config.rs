@@ -2,8 +2,8 @@ use crate::application::config::{
     Application as ConfigApplication, ConfigRepository, ConfigUseCase,
     Error as ConfigApplicationError,
 };
-use crate::cli::commands::provide::{
-    LocalStorageArgs, OneDriveStorageArgs, ProvideStorageSubcommand,
+use crate::cli::commands::connect_sync::{
+    ConnectSyncStorageSubcommand, LocalStorageArgs, OneDriveStorageArgs,
 };
 use crate::config::{ConfigDir, DriverFileConfig, StorageFileConfig};
 use crate::domain::driver::DriverConfig;
@@ -52,7 +52,7 @@ pub struct AddArgs {
     #[arg(long)]
     pub path: Option<PathBuf>,
     #[command(subcommand)]
-    pub storage: Option<ProvideStorageSubcommand>,
+    pub storage: Option<ConnectSyncStorageSubcommand>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -165,7 +165,7 @@ where
     let spec = DriverConfig {
         name: resolved.name.clone(),
         path: resolved.path,
-        storage: resolved.storage.to_storage_spec(),
+        storage: resolved.storage.to_storage_config(),
         telemetry: Default::default(),
     };
     use_case.add(spec).map_err(map_config_error)?;
@@ -176,7 +176,7 @@ where
 struct ResolvedAddArgs {
     name: String,
     path: PathBuf,
-    storage: ProvideStorageSubcommand,
+    storage: ConnectSyncStorageSubcommand,
 }
 
 fn resolve_add_args(args: &AddArgs) -> crate::cli::Result<ResolvedAddArgs> {
@@ -233,7 +233,7 @@ impl std::fmt::Display for ProviderType {
     }
 }
 
-fn prompt_storage() -> crate::cli::Result<ProvideStorageSubcommand> {
+fn prompt_storage() -> crate::cli::Result<ConnectSyncStorageSubcommand> {
     let options = vec![ProviderType::Local, ProviderType::OneDrive];
     let selected = Select::new("Select provider type:", options)
         .prompt()
@@ -247,18 +247,18 @@ fn prompt_storage() -> crate::cli::Result<ProvideStorageSubcommand> {
     }
 }
 
-fn prompt_local_storage() -> crate::cli::Result<ProvideStorageSubcommand> {
+fn prompt_local_storage() -> crate::cli::Result<ConnectSyncStorageSubcommand> {
     let root = Text::new("Root directory to expose:")
         .prompt()
         .map_err(|error| {
             crate::cli::Error::Prompt(format!("failed to read root directory: {error}"))
         })?;
-    Ok(ProvideStorageSubcommand::Local(LocalStorageArgs {
+    Ok(ConnectSyncStorageSubcommand::Local(LocalStorageArgs {
         root: PathBuf::from(root),
     }))
 }
 
-fn prompt_onedrive_storage() -> crate::cli::Result<ProvideStorageSubcommand> {
+fn prompt_onedrive_storage() -> crate::cli::Result<ConnectSyncStorageSubcommand> {
     let root = Text::new("OneDrive path to use as root:")
         .with_default("/")
         .prompt()
@@ -283,14 +283,16 @@ fn prompt_onedrive_storage() -> crate::cli::Result<ProvideStorageSubcommand> {
         })?;
     let token_expiry_buffer_secs = parse_u64(token_expiry_buffer_secs)?;
 
-    Ok(ProvideStorageSubcommand::OneDrive(OneDriveStorageArgs {
-        root: PathBuf::from(root),
-        endpoint,
-        access_token,
-        refresh_token,
-        client_id,
-        token_expiry_buffer_secs,
-    }))
+    Ok(ConnectSyncStorageSubcommand::OneDrive(
+        OneDriveStorageArgs {
+            root: PathBuf::from(root),
+            endpoint,
+            access_token,
+            refresh_token,
+            client_id,
+            token_expiry_buffer_secs,
+        },
+    ))
 }
 
 fn prompt_optional(message: &str) -> crate::cli::Result<Option<String>> {
@@ -443,7 +445,7 @@ fn map_config_error(error: ConfigApplicationError) -> crate::cli::Error {
 mod tests {
     use super::*;
     use crate::application::config::{ConfigUseCase, Result as ConfigApplicationResult};
-    use crate::cli::commands::provide::{LocalStorageArgs, ProvideStorageSubcommand};
+    use crate::cli::commands::connect_sync::{ConnectSyncStorageSubcommand, LocalStorageArgs};
     use crate::config::StorageFileConfig;
     use crate::domain::driver::{DriverConfig, StorageConfig, TelemetrySpec};
     use std::cell::RefCell;
@@ -600,7 +602,7 @@ mod tests {
         let args = AddArgs {
             name: Some("dup".to_owned()),
             path: Some(PathBuf::from("/mnt/x")),
-            storage: Some(ProvideStorageSubcommand::Local(LocalStorageArgs {
+            storage: Some(ConnectSyncStorageSubcommand::Local(LocalStorageArgs {
                 root: PathBuf::from("/x"),
             })),
         };
@@ -614,7 +616,7 @@ mod tests {
             action: ConfigAction::Add(AddArgs {
                 name: Some("test".to_owned()),
                 path: Some(PathBuf::from("/mnt/test")),
-                storage: Some(ProvideStorageSubcommand::Local(LocalStorageArgs {
+                storage: Some(ConnectSyncStorageSubcommand::Local(LocalStorageArgs {
                     root: PathBuf::from("/test/root"),
                 })),
             }),
@@ -639,7 +641,7 @@ mod tests {
         let args = AddArgs {
             name: Some("test".to_owned()),
             path: Some(PathBuf::from("/mnt/test")),
-            storage: Some(ProvideStorageSubcommand::Local(LocalStorageArgs {
+            storage: Some(ConnectSyncStorageSubcommand::Local(LocalStorageArgs {
                 root: PathBuf::from("/test/root"),
             })),
         };
@@ -708,7 +710,7 @@ mod tests {
         let args = AddArgs {
             name: Some("my-provider".to_owned()),
             path: Some(PathBuf::from("/mnt/test")),
-            storage: Some(ProvideStorageSubcommand::Local(LocalStorageArgs {
+            storage: Some(ConnectSyncStorageSubcommand::Local(LocalStorageArgs {
                 root: PathBuf::from("/data"),
             })),
         };

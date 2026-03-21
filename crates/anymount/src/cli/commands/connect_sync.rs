@@ -20,7 +20,7 @@ use crate::service::control::unix::UnixControl;
 use crate::service::control::windows::WindowsControl;
 
 #[derive(Args, Debug, Clone)]
-pub struct ProvideCommand {
+pub struct ConnectSyncCommand {
     #[arg(long, conflicts_with = "path")]
     pub name: Option<String>,
 
@@ -31,10 +31,10 @@ pub struct ProvideCommand {
     pub config_dir: Option<PathBuf>,
 
     #[command(subcommand)]
-    pub storage: Option<ProvideStorageSubcommand>,
+    pub storage: Option<ConnectSyncStorageSubcommand>,
 }
 
-impl ProvideCommand {
+impl ConnectSyncCommand {
     pub fn execute(&self) -> crate::cli::Result<()> {
         let logger = TracingLogger::new();
         let config_dir = self.config_dir();
@@ -50,25 +50,25 @@ impl ProvideCommand {
         U: ProvideUseCase,
     {
         if let Some(name) = &self.name {
-            use_case.run_named(name).map_err(map_provide_error)
+            use_case.run_named(name).map_err(map_connect_sync_error)
         } else {
             let spec = self.inline_spec()?;
-            use_case.run_inline(spec).map_err(map_provide_error)
+            use_case.run_inline(spec).map_err(map_connect_sync_error)
         }
     }
 
     fn inline_spec(&self) -> crate::cli::Result<DriverConfig> {
         let Some(path) = &self.path else {
-            return Err(crate::cli::Error::MissingProvideTarget);
+            return Err(crate::cli::Error::MissingConnectSyncTarget);
         };
         let Some(storage) = &self.storage else {
-            return Err(crate::cli::Error::MissingProvideTarget);
+            return Err(crate::cli::Error::MissingConnectSyncTarget);
         };
 
         Ok(DriverConfig {
             name: inline_driver_name(path),
             path: path.clone(),
-            storage: storage.to_storage_spec(),
+            storage: storage.to_storage_config(),
             telemetry: TelemetrySpec::default(),
         })
     }
@@ -82,49 +82,40 @@ impl ProvideCommand {
 }
 
 #[derive(Subcommand, Debug, Clone)]
-pub enum ProvideStorageSubcommand {
-    /// Local directory as storage backend
+pub enum ConnectSyncStorageSubcommand {
     Local(LocalStorageArgs),
-    /// OneDrive (Microsoft Graph) as storage backend
     #[command(name = "onedrive")]
     OneDrive(OneDriveStorageArgs),
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct LocalStorageArgs {
-    /// Root directory to expose
     #[arg(value_name = "ROOT")]
     pub root: PathBuf,
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct OneDriveStorageArgs {
-    /// OneDrive path to use as root (e.g. / or /Documents)
     #[arg(long, default_value = "/", value_name = "PATH")]
     pub root: PathBuf,
-    /// Graph API endpoint (e.g. https://graph.microsoft.com/v1.0)
     #[arg(
         long,
         default_value = "https://graph.microsoft.com/v1.0",
         value_name = "URL"
     )]
     pub endpoint: String,
-    /// Access token (optional if refresh_token and client_id are set)
     #[arg(long, value_name = "TOKEN")]
     pub access_token: Option<String>,
-    /// Refresh token (required if access_token is missing or may expire)
     #[arg(long, value_name = "TOKEN")]
     pub refresh_token: Option<String>,
-    /// OAuth client_id (required when refresh_token is set)
     #[arg(long, value_name = "ID")]
     pub client_id: Option<String>,
-    /// Seconds before token expiry to trigger refresh (default: 60)
     #[arg(long, default_value = "60", value_name = "SECS")]
     pub token_expiry_buffer_secs: u64,
 }
 
-impl ProvideStorageSubcommand {
-    pub(crate) fn to_storage_spec(&self) -> StorageConfig {
+impl ConnectSyncStorageSubcommand {
+    pub(crate) fn to_storage_config(&self) -> StorageConfig {
         match self {
             Self::Local(args) => StorageConfig::Local {
                 root: args.root.clone(),
@@ -245,7 +236,7 @@ impl<L: Logger + 'static> DriverRuntimeHost for RuntimeHost<L> {
     }
 }
 
-fn map_provide_error(error: ProvideError) -> crate::cli::Error {
+fn map_connect_sync_error(error: ProvideError) -> crate::cli::Error {
     match error {
         ProvideError::Config(source) => crate::cli::Error::Config(source),
         ProvideError::Telemetry(source) => crate::cli::Error::Otlp(source),
@@ -406,8 +397,8 @@ mod tests {
     }
 
     #[test]
-    fn provide_returns_error_when_driver_startup_fails() {
-        let command = ProvideCommand {
+    fn connect_sync_returns_error_when_driver_startup_fails() {
+        let command = ConnectSyncCommand {
             name: Some("demo".to_owned()),
             path: None,
             config_dir: None,
@@ -424,7 +415,7 @@ mod tests {
 
     #[test]
     fn default_runner_can_be_called_with_injected_use_case() {
-        let command = ProvideCommand {
+        let command = ConnectSyncCommand {
             name: Some("demo".to_owned()),
             path: None,
             config_dir: None,
@@ -432,13 +423,15 @@ mod tests {
         };
 
         let use_case = std::cell::RefCell::new(RecordingUseCase::default());
-        command.run_with(&use_case).expect("provide should succeed");
+        command
+            .run_with(&use_case)
+            .expect("connect-sync should succeed");
         assert_eq!(use_case.borrow().named_calls, vec!["demo"]);
     }
 
     #[test]
     fn resolve_request_requires_name_or_path() {
-        let command = ProvideCommand {
+        let command = ConnectSyncCommand {
             name: None,
             path: None,
             config_dir: None,
@@ -448,12 +441,12 @@ mod tests {
         let err = command
             .run_with(&std::cell::RefCell::new(RecordingUseCase::default()))
             .expect_err("command should fail");
-        assert!(matches!(err, crate::cli::Error::MissingProvideTarget));
+        assert!(matches!(err, crate::cli::Error::MissingConnectSyncTarget));
     }
 
     #[test]
     fn resolve_request_requires_storage_for_inline_path() {
-        let command = ProvideCommand {
+        let command = ConnectSyncCommand {
             name: None,
             path: Some(PathBuf::from("/mnt/demo")),
             config_dir: None,
@@ -463,22 +456,24 @@ mod tests {
         let err = command
             .run_with(&std::cell::RefCell::new(RecordingUseCase::default()))
             .expect_err("command should fail");
-        assert!(matches!(err, crate::cli::Error::MissingProvideTarget));
+        assert!(matches!(err, crate::cli::Error::MissingConnectSyncTarget));
     }
 
     #[test]
     fn resolve_inline_request_builds_single_driver_spec() {
-        let command = ProvideCommand {
+        let command = ConnectSyncCommand {
             name: None,
             path: Some(PathBuf::from("/mnt/demo")),
             config_dir: None,
-            storage: Some(ProvideStorageSubcommand::Local(LocalStorageArgs {
+            storage: Some(ConnectSyncStorageSubcommand::Local(LocalStorageArgs {
                 root: PathBuf::from("/data/demo"),
             })),
         };
 
         let use_case = std::cell::RefCell::new(RecordingUseCase::default());
-        command.run_with(&use_case).expect("provide should succeed");
+        command
+            .run_with(&use_case)
+            .expect("connect-sync should succeed");
         assert_eq!(use_case.borrow().inline_calls, vec!["demo"]);
     }
 }

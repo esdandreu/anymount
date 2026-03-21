@@ -1,8 +1,8 @@
 use crate::cli::commands::auth::AuthCommand;
 use crate::cli::commands::config::ConfigCommand;
 use crate::cli::commands::connect::ConnectCommand;
+use crate::cli::commands::connect_sync::ConnectSyncCommand;
 use crate::cli::commands::disconnect::DisconnectCommand;
-use crate::cli::commands::provide::ProvideCommand;
 use crate::cli::commands::status::StatusCommand;
 use crate::tui;
 use clap::{Parser, Subcommand};
@@ -30,8 +30,8 @@ pub enum Commands {
     Connect(ConnectCommand),
     /// Stop a running provider service (idempotent).
     Disconnect(DisconnectCommand),
-    /// Run one configured provider as a long-lived process.
-    Provide(ProvideCommand),
+    /// Run one configured driver as a long-lived process.
+    ConnectSync(ConnectSyncCommand),
     /// Show configured providers and service readiness.
     Status(StatusCommand),
 }
@@ -43,7 +43,7 @@ impl Cli {
             Some(Commands::Config(cmd)) => cmd.execute(),
             Some(Commands::Connect(cmd)) => cmd.execute(),
             Some(Commands::Disconnect(cmd)) => cmd.execute(),
-            Some(Commands::Provide(cmd)) => cmd.execute(),
+            Some(Commands::ConnectSync(cmd)) => cmd.execute(),
             Some(Commands::Status(cmd)) => cmd.execute(),
             None => tui::run().map_err(|error| super::Error::Validation(error.to_string())),
         }
@@ -55,12 +55,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_provide_name_command() {
-        let cli = Cli::try_parse_from(["anymount", "provide", "--name", "demo"])
+    fn parse_connect_sync_name_command() {
+        let cli = Cli::try_parse_from(["anymount", "connect-sync", "--name", "demo"])
             .expect("parse should succeed");
 
         match cli.command.expect("command should exist") {
-            Commands::Provide(cmd) => assert_eq!(cmd.name.as_deref(), Some("demo")),
+            Commands::ConnectSync(cmd) => assert_eq!(cmd.name.as_deref(), Some("demo")),
             other => panic!("unexpected command: {other:?}"),
         }
     }
@@ -87,10 +87,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_provide_inline_command() {
+    fn parse_connect_sync_inline_command() {
         let cli = Cli::try_parse_from([
             "anymount",
-            "provide",
+            "connect-sync",
             "--path",
             "/tmp/demo",
             "local",
@@ -99,7 +99,7 @@ mod tests {
         .expect("parse should succeed");
 
         match cli.command.expect("command should exist") {
-            Commands::Provide(cmd) => {
+            Commands::ConnectSync(cmd) => {
                 assert!(cmd.name.is_none());
                 assert_eq!(cmd.path.as_deref(), Some(std::path::Path::new("/tmp/demo")));
             }
