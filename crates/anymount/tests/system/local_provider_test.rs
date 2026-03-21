@@ -236,7 +236,7 @@ fn local_provider_reads_file_content() {
     assert_eq!(content, "Hello, World!");
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(feature = "macos")]
 mod macos_tests {
     use super::*;
 

@@ -68,9 +68,9 @@ fuser = "0.17"
 libc = "0.2"
 zbus = { version = "5", features = ["tokio"] }
 
-# macOS-specific dependencies
+# macOS-specific dependencies (requires macFUSE installed)
 [target.'cfg(target_os = "macos")'.dependencies]
-fuser = "0.17"
+fuser = { version = "0.17", optional = true }
 libc = "0.2"
 
 # Windows-specific dependencies
@@ -96,7 +96,7 @@ tempfile = "3"
 [features]
 default = []
 windows = []
-macos = []
+macos = ["dep:fuser"]
 
 [lints.clippy]
 unwrap_used = "deny"

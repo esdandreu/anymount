@@ -158,7 +158,24 @@ pub fn connect_drivers_with_telemetry(
     Ok(drivers)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(feature = "macos")))]
+pub fn connect_drivers(
+    _specs: &[DomainDriver],
+    _logger: &(impl Logger + 'static),
+) -> Result<Vec<Box<dyn Driver>>> {
+    Err(crate::drivers::Error::NotSupported)
+}
+
+#[cfg(all(target_os = "macos", not(feature = "macos")))]
+pub fn connect_drivers_with_telemetry(
+    _specs: &[DomainDriver],
+    _logger: &(impl Logger + 'static),
+    _service_tx: Option<Sender<ServiceMessage>>,
+) -> Result<Vec<Box<dyn Driver>>> {
+    Err(crate::drivers::Error::NotSupported)
+}
+
+#[cfg(feature = "macos")]
 pub fn connect_drivers(
     specs: &[DomainDriver],
     logger: &(impl Logger + 'static),
@@ -166,7 +183,7 @@ pub fn connect_drivers(
     connect_drivers_with_telemetry(specs, logger, None)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(feature = "macos")]
 pub fn connect_drivers_with_telemetry(
     specs: &[DomainDriver],
     logger: &(impl Logger + 'static),
@@ -236,13 +253,13 @@ pub fn connect_drivers_with_telemetry(
     Ok(drivers)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(feature = "macos")]
 pub struct MacosDriver {
     path: PathBuf,
     _session: fuser::BackgroundSession,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(feature = "macos")]
 impl MacosDriver {
     pub fn new(path: PathBuf, session: fuser::BackgroundSession) -> Self {
         Self {
@@ -252,7 +269,7 @@ impl MacosDriver {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(feature = "macos")]
 impl Driver for MacosDriver {
     fn kind(&self) -> &'static str {
         "macos"
