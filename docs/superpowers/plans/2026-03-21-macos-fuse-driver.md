@@ -101,13 +101,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-const ROOT_INO: u64 = 1;
-const TTL: Duration = Duration::from_secs(1);
+pub const ROOT_INO: u64 = 1;
 const DIR_CACHE_TTL: Duration = Duration::from_secs(2);
-const FUSE_GENERATION: Generation = Generation(1);
-const DOT_ENTRY_OFFSET: u64 = 1;
-const DOT_DOT_ENTRY_OFFSET: u64 = 2;
-const FIRST_CHILD_ENTRY_OFFSET: u64 = 3;
+pub const TTL: Duration = Duration::from_secs(1);
+pub const FUSE_GENERATION: Generation = Generation(1);
+pub const DOT_ENTRY_OFFSET: u64 = 1;
+pub const DOT_DOT_ENTRY_OFFSET: u64 = 2;
+pub const FIRST_CHILD_ENTRY_OFFSET: u64 = 3;
 
 #[derive(Clone)]
 pub struct NodeInfo {
@@ -226,7 +226,7 @@ pub struct StorageFilesystem<S: Storage, L: Logger + 'static> {
 }
 
 impl<S: Storage, L: Logger + 'static> StorageFilesystem<S, L> {
-    pub fn new(storage: S, cache: Arc<dyn CachePort>, logger: L) -> Self {
+    pub fn new_with_cache(storage: S, cache: Arc<dyn CachePort>, logger: L) -> Self {
         let storage = Arc::new(storage);
         let next_ino = AtomicU64::new(2);
         let ino_to_info = RwLock::new(HashMap::new());
@@ -1103,13 +1103,31 @@ pub mod gtk_dbus;
 pub mod linux_driver;
 
 pub use error::{Error, Result};
-pub use fuse::{CachePort, CachedDirCache, CachedDirEntry, NodeInfo, NoCacheFsCache, StorageFilesystem};
+pub use fuse::{
+    CachePort, CachedDirCache, CachedDirEntry, NodeInfo, NoCacheFsCache, StorageFilesystem,
+    DOT_DOT_ENTRY_OFFSET, DOT_ENTRY_OFFSET, FIRST_CHILD_ENTRY_OFFSET, ROOT_INO, TTL, FUSE_GENERATION,
+};
 pub use linux_driver::{export_on_dbus, mount_storage, new_runtime, LinuxDriver};
 ```
 
-- [ ] **Step 3: Update linux_driver.rs to use fuse module**
+- [ ] **Step 3: Update linux/fuse.rs to use fuse module**
 
-Modify imports to use `crate::drivers::fuse::StorageFilesystem` instead of local fuse module.
+In `linux/fuse.rs`:
+1. Remove local constant definitions (ROOT_INO, TTL, etc.) - import from fuse instead
+2. Import NodeInfo, CachedDirEntry, CachePort, StorageFilesystem from super::fuse
+3. Keep SparseFsCache implementation in linux/fuse.rs
+4. Add `new` method to StorageFilesystem that creates SparseFsCache:
+
+```rust
+impl<S: Storage, L: Logger + 'static> StorageFilesystem<S, L> {
+    pub fn new(storage: S, cache_root: PathBuf, logger: L) -> Result<Self> {
+        let cache = Arc::new(SparseFsCache::new(cache_root)?);
+        Ok(Self::new_with_cache(storage, cache, logger))
+    }
+}
+```
+
+4. Update test imports to use `super::fuse::` prefix for re-exported items
 
 - [ ] **Step 4: Verify it compiles**
 
@@ -1324,7 +1342,7 @@ mod macos_tests {
         let mount_path = temp_dir.path().join("mount");
         std::fs::create_dir(&mount_path).unwrap();
 
-        let driver = crate::drivers::macos::MacosDriver::new(
+        let driver = crate::drivers::MacosDriver::new(
             mount_path.clone(),
             // FUSE session would be created here in real usage
         );
