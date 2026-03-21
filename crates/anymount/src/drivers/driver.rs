@@ -158,7 +158,7 @@ pub fn connect_drivers_with_telemetry(
     Ok(drivers)
 }
 
-#[cfg(all(target_os = "macos", not(feature = "macos")))]
+#[cfg(all(any(target_os = "linux", target_os = "macos"), not(feature = "fuse")))]
 pub fn connect_drivers(
     _specs: &[DomainDriver],
     _logger: &(impl Logger + 'static),
@@ -166,7 +166,7 @@ pub fn connect_drivers(
     Err(crate::drivers::Error::NotSupported)
 }
 
-#[cfg(all(target_os = "macos", not(feature = "macos")))]
+#[cfg(all(any(target_os = "linux", target_os = "macos"), not(feature = "fuse")))]
 pub fn connect_drivers_with_telemetry(
     _specs: &[DomainDriver],
     _logger: &(impl Logger + 'static),
@@ -175,7 +175,7 @@ pub fn connect_drivers_with_telemetry(
     Err(crate::drivers::Error::NotSupported)
 }
 
-#[cfg(feature = "macos")]
+#[cfg(feature = "fuse")]
 pub fn connect_drivers(
     specs: &[DomainDriver],
     logger: &(impl Logger + 'static),
@@ -183,7 +183,7 @@ pub fn connect_drivers(
     connect_drivers_with_telemetry(specs, logger, None)
 }
 
-#[cfg(feature = "macos")]
+#[cfg(feature = "fuse")]
 pub fn connect_drivers_with_telemetry(
     specs: &[DomainDriver],
     logger: &(impl Logger + 'static),
@@ -206,7 +206,7 @@ pub fn connect_drivers_with_telemetry(
                 );
                 let session = fuser::spawn_mount2(fs, &mount_path, &fuser::Config::default())
                     .map_err(|source| {
-                        super::Error::Macos(crate::drivers::fuse::error::Error::FuseMount {
+                        super::Error::Fuse(crate::drivers::fuse::error::Error::FuseMount {
                             path: mount_path.clone(),
                             source,
                         })
@@ -237,7 +237,7 @@ pub fn connect_drivers_with_telemetry(
                 );
                 let session = fuser::spawn_mount2(fs, &mount_path, &fuser::Config::default())
                     .map_err(|source| {
-                        super::Error::Macos(crate::drivers::fuse::error::Error::FuseMount {
+                        super::Error::Fuse(crate::drivers::fuse::error::Error::FuseMount {
                             path: mount_path.clone(),
                             source,
                         })
@@ -248,19 +248,19 @@ pub fn connect_drivers_with_telemetry(
     }
     let drivers: Vec<Box<dyn Driver>> = sessions
         .into_iter()
-        .map(|(path, session)| Box::new(MacosDriver::new(path, session)) as Box<dyn Driver>)
+        .map(|(path, session)| Box::new(FuseDriver::new(path, session)) as Box<dyn Driver>)
         .collect();
     Ok(drivers)
 }
 
-#[cfg(feature = "macos")]
-pub struct MacosDriver {
+#[cfg(feature = "fuse")]
+pub struct FuseDriver {
     path: PathBuf,
     _session: fuser::BackgroundSession,
 }
 
-#[cfg(feature = "macos")]
-impl MacosDriver {
+#[cfg(feature = "fuse")]
+impl FuseDriver {
     pub fn new(path: PathBuf, session: fuser::BackgroundSession) -> Self {
         Self {
             path,
@@ -269,8 +269,8 @@ impl MacosDriver {
     }
 }
 
-#[cfg(feature = "macos")]
-impl Driver for MacosDriver {
+#[cfg(feature = "fuse")]
+impl Driver for FuseDriver {
     fn kind(&self) -> &'static str {
         "macos"
     }

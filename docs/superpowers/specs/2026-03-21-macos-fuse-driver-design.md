@@ -67,7 +67,7 @@ drivers/
 
 - `MacosDriver` struct implementing `Driver` trait
 - `kind()` returns "fuse"
-- `path()` returns mount point
+- `path()` returns mount point (from driver spec configuration, same as Linux)
 - Uses `StorageFilesystem` with `NoCacheFsCache`
 
 #### `drivers/mod.rs`

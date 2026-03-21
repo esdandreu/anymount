@@ -7,7 +7,7 @@ pub mod linux;
 #[cfg(any(target_os = "linux", feature = "macos"))]
 pub mod fuse;
 
-#[cfg(feature = "macos")]
+#[cfg(feature = "fuse")]
 pub use driver::MacosDriver;
 
 pub mod error;

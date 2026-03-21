@@ -96,7 +96,7 @@ tempfile = "3"
 [features]
 default = []
 windows = []
-macos = ["dep:fuser"]
+fuse = ["dep:fuser"]
 
 [lints.clippy]
 unwrap_used = "deny"
