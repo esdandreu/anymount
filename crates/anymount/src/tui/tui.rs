@@ -10,7 +10,7 @@ use crate::application::connect::{
 use crate::auth::{OneDriveAuthFlow, TokenResponse};
 use crate::cli::commands::config::ProviderType;
 use crate::config::{ConfigDir, StorageFileConfig};
-use crate::domain::driver::DriverConfig;
+use crate::domain::driver::{DriverConfig, StorageConfig};
 use crate::{DriverFileConfig, Logger, TracingLogger};
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
@@ -1257,7 +1257,7 @@ fn render_mount_row(
     }
 }
 
-fn get_storage_type_label(storage: &StorageConfig) -> &'static str {
+fn get_storage_type_label(storage: &StorageFileConfig) -> &'static str {
     match storage {
         StorageFileConfig::Local { .. } => "local",
         StorageFileConfig::OneDrive { .. } => "onedrive",

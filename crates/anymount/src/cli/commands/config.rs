@@ -12,7 +12,7 @@ use inquire::{Select, Text};
 use std::path::{Path, PathBuf};
 
 #[cfg(test)]
-use crate::StorageConfig;
+use crate::domain::driver::StorageConfig;
 
 #[derive(Args, Debug, Clone)]
 pub struct ConfigCommand {

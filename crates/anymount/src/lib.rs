@@ -12,7 +12,7 @@ pub mod storages;
 pub mod telemetry;
 pub mod tui;
 
-pub use config::{Config, ConfigDir, DriverFileConfig, StorageConfig, TelemetryFileConfig};
+pub use config::{Config, ConfigDir, DriverFileConfig, TelemetryFileConfig};
 pub use logger::{Logger, NoOpLogger, TracingLogger};
 pub use drivers::{connect_drivers, connect_drivers_with_telemetry, Driver};
 pub use storages::Storage;
