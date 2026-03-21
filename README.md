@@ -13,11 +13,11 @@ dev tools, environments and tasks.
 
 ### Commands
 
-`connect` ensures configured named providers are running in the background.
+`connect` ensures configured named drivers are running in the background.
 It is non-blocking.
 
 `provide` runs one provider process and blocks for its lifetime. It supports
-either a named provider from config or an inline unnamed provider.
+either a named driver from config or an inline unnamed driver.
 
 Build and run the application:
 
@@ -25,7 +25,7 @@ Build and run the application:
 mise run anymount -- connect --all
 ```
 
-Run one provider process directly:
+Run one driver process directly:
 
 ```bash
 mise run anymount -- provide --name demo
@@ -41,16 +41,16 @@ mise run build
 
 `anymount` is organized around three layers.
 
-- `domain` models provider concepts and invariants. It owns provider,
+- `domain` models driver concepts and invariants. It owns driver,
   storage, and telemetry specifications without filesystem, UI, or platform
   code.
 - `application` implements use cases such as `connect`, `provide`, `auth`,
   `status`, and config updates. It orchestrates work over domain types and
   internal ports.
 - Adapters live at the edges. CLI and TUI handle input and output, `config`
-  persists named providers, `telemetry` builds observability, `auth`
+  persists named drivers, `telemetry` builds observability, `auth`
   handles external authorization flows, `service` hosts long-running
-  provider processes and control transport, and `providers` / `storages`
+  driver processes and control transport, and `drivers` / `storages`
   integrate with platform APIs.
 
 Dependency direction flows inward: frontends call `application`,
