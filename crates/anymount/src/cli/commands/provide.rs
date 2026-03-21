@@ -4,7 +4,7 @@ use crate::application::provide::{
 };
 use crate::application::types::ProvideRequest;
 use crate::config::ConfigDir;
-use crate::domain::driver::{Driver as DriverSpec, StorageSpec, TelemetrySpec};
+use crate::domain::driver::{DriverConfig, StorageConfig, TelemetrySpec};
 use crate::drivers::Driver;
 use crate::service::control::messages::{ControlMessage, ServiceMessage};
 use crate::service::ServiceRuntime;
@@ -57,7 +57,7 @@ impl ProvideCommand {
         }
     }
 
-    fn inline_spec(&self) -> crate::cli::Result<DriverSpec> {
+    fn inline_spec(&self) -> crate::cli::Result<DriverConfig> {
         let Some(path) = &self.path else {
             return Err(crate::cli::Error::MissingProvideTarget);
         };
@@ -65,7 +65,7 @@ impl ProvideCommand {
             return Err(crate::cli::Error::MissingProvideTarget);
         };
 
-        Ok(DriverSpec {
+        Ok(DriverConfig {
             name: inline_driver_name(path),
             path: path.clone(),
             storage: storage.to_storage_spec(),
@@ -124,12 +124,12 @@ pub struct OneDriveStorageArgs {
 }
 
 impl ProvideStorageSubcommand {
-    pub(crate) fn to_storage_spec(&self) -> StorageSpec {
+    pub(crate) fn to_storage_spec(&self) -> StorageConfig {
         match self {
-            Self::Local(args) => StorageSpec::Local {
+            Self::Local(args) => StorageConfig::Local {
                 root: args.root.clone(),
             },
-            Self::OneDrive(args) => StorageSpec::OneDrive {
+            Self::OneDrive(args) => StorageConfig::OneDrive {
                 root: args.root.clone(),
                 endpoint: args.endpoint.clone(),
                 access_token: args.access_token.clone(),
@@ -153,7 +153,7 @@ impl ConfigRepository {
 }
 
 impl ProvideRepository for ConfigRepository {
-    fn read_spec(&self, name: &str) -> crate::application::provide::Result<DriverSpec> {
+    fn read_spec(&self, name: &str) -> crate::application::provide::Result<DriverConfig> {
         self.config_dir.read_spec(name).map_err(Into::into)
     }
 }
@@ -164,7 +164,7 @@ struct DefaultTelemetryFactory;
 impl TelemetryFactory for DefaultTelemetryFactory {
     fn build(
         &self,
-        spec: &DriverSpec,
+        spec: &DriverConfig,
     ) -> crate::application::provide::Result<Option<crate::telemetry::OtelHandles>> {
         crate::telemetry::OtelHandles::from_driver_spec(spec).map_err(Into::into)
     }
@@ -399,7 +399,7 @@ mod tests {
             Ok(())
         }
 
-        fn run_inline(&self, spec: DriverSpec) -> crate::application::provide::Result<()> {
+        fn run_inline(&self, spec: DriverConfig) -> crate::application::provide::Result<()> {
             self.borrow_mut().inline_calls.push(spec.name);
             Ok(())
         }

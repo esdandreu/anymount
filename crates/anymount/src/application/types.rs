@@ -1,4 +1,4 @@
-use crate::domain::driver::Driver;
+use crate::domain::driver::DriverConfig;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12,6 +12,6 @@ pub struct DriverStatusRow {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProvideRequest {
-    pub spec: Driver,
+    pub spec: DriverConfig,
     pub control_name: Option<String>,
 }

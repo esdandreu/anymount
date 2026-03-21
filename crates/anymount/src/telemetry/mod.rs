@@ -1,6 +1,6 @@
 //! OpenTelemetry OTLP export for named `provide --name` processes.
 
-use crate::domain::driver::{Driver, OtlpSpec, OtlpTransport as DomainOtlpTransport};
+use crate::domain::driver::{DriverConfig, OtlpSpec, OtlpTransport as DomainOtlpTransport};
 use opentelemetry::Key;
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::{
@@ -38,7 +38,7 @@ pub struct OtelHandles {
 impl OtelHandles {
     /// When `[telemetry.otlp]` has `enabled = true`, builds OTLP exporters and
     /// providers. Otherwise returns `Ok(None)`.
-    pub fn from_driver_spec(spec: &Driver) -> Result<Option<Self>, OtlpInitError> {
+    pub fn from_driver_spec(spec: &DriverConfig) -> Result<Option<Self>, OtlpInitError> {
         let Some(otlp) = spec.telemetry.otlp.as_ref() else {
             return Ok(None);
         };
@@ -191,7 +191,7 @@ fn build_log_exporter(
 mod tests {
     use super::*;
     use crate::domain::driver::{
-        Driver, OtlpSpec, OtlpTransport as DomainOtlpTransport, StorageSpec, TelemetrySpec,
+        DriverConfig, OtlpSpec, OtlpTransport as DomainOtlpTransport, StorageConfig, TelemetrySpec,
     };
     use std::path::PathBuf;
 
@@ -211,10 +211,10 @@ mod tests {
 
     #[test]
     fn telemetry_handles_build_from_driver_spec() {
-        let spec = Driver {
+        let spec = DriverConfig {
             name: "demo".to_owned(),
             path: PathBuf::from("/mnt/demo"),
-            storage: StorageSpec::Local {
+            storage: StorageConfig::Local {
                 root: PathBuf::from("/data/demo"),
             },
             telemetry: TelemetrySpec {

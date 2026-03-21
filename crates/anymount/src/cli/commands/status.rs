@@ -4,7 +4,7 @@ use crate::application::status::{
 };
 use crate::application::types::DriverStatusRow;
 use crate::config::ConfigDir;
-use crate::domain::driver::Driver;
+use crate::domain::driver::DriverConfig;
 use clap::Args;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -90,7 +90,7 @@ impl StatusRepository for ConfigRepository {
             .each_driver()?
             .map(|(name, loaded)| match loaded {
                 Ok(config) => {
-                    let spec = Driver {
+                    let spec = DriverConfig {
                         name: name.clone(),
                         path: config.path,
                         storage: config.storage.into(),

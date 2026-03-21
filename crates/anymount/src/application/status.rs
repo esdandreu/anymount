@@ -1,5 +1,5 @@
 use crate::application::types::DriverStatusRow;
-use crate::domain::driver::{Driver, StorageSpec};
+use crate::domain::driver::{DriverConfig, StorageConfig};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -11,7 +11,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StatusEntry {
-    Loaded(Driver),
+    Loaded(DriverConfig),
     Error { name: String, detail: String },
 }
 
@@ -70,10 +70,10 @@ where
     }
 }
 
-fn storage_label(storage: &StorageSpec) -> &'static str {
+fn storage_label(storage: &StorageConfig) -> &'static str {
     match storage {
-        StorageSpec::Local { .. } => "local",
-        StorageSpec::OneDrive { .. } => "onedrive",
+        StorageConfig::Local { .. } => "local",
+        StorageConfig::OneDrive { .. } => "onedrive",
     }
 }
 
@@ -82,7 +82,7 @@ mod tests {
     use super::{
         Application, Result, ServiceControl, StatusEntry, StatusRepository, StatusUseCase,
     };
-    use crate::domain::driver::{Driver, StorageSpec, TelemetrySpec};
+    use crate::domain::driver::{DriverConfig, StorageConfig, TelemetrySpec};
     use std::collections::HashSet;
     use std::path::PathBuf;
 
@@ -114,7 +114,7 @@ mod tests {
     }
 
     impl TestStatusApp {
-        fn with_spec(mut self, spec: Driver) -> Self {
+        fn with_spec(mut self, spec: DriverConfig) -> Self {
             self.repository.entries.push(StatusEntry::Loaded(spec));
             self
         }
@@ -135,11 +135,11 @@ mod tests {
         }
     }
 
-    fn local_driver_spec(name: &str) -> Driver {
-        Driver {
+    fn local_driver_spec(name: &str) -> DriverConfig {
+        DriverConfig {
             name: name.to_owned(),
             path: PathBuf::from(format!("/mnt/{name}")),
-            storage: StorageSpec::Local {
+            storage: StorageConfig::Local {
                 root: PathBuf::from(format!("/data/{name}")),
             },
             telemetry: TelemetrySpec::default(),

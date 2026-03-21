@@ -1,5 +1,5 @@
 use crate::application::types::ProvideRequest;
-use crate::domain::driver::Driver;
+use crate::domain::driver::DriverConfig;
 use crate::telemetry::OtelHandles;
 
 #[derive(Debug, thiserror::Error)]
@@ -20,11 +20,11 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 pub trait ProvideRepository {
-    fn read_spec(&self, name: &str) -> Result<Driver>;
+    fn read_spec(&self, name: &str) -> Result<DriverConfig>;
 }
 
 pub trait TelemetryFactory {
-    fn build(&self, spec: &Driver) -> Result<Option<OtelHandles>>;
+    fn build(&self, spec: &DriverConfig) -> Result<Option<OtelHandles>>;
 }
 
 pub trait DriverRuntimeHost {
@@ -33,7 +33,7 @@ pub trait DriverRuntimeHost {
 
 pub trait ProvideUseCase {
     fn run_named(&self, name: &str) -> Result<()>;
-    fn run_inline(&self, spec: Driver) -> Result<()>;
+    fn run_inline(&self, spec: DriverConfig) -> Result<()>;
 }
 
 pub struct Application<'a, R, T, H> {
@@ -66,7 +66,7 @@ where
         })
     }
 
-    fn run_inline(&self, spec: Driver) -> Result<()> {
+    fn run_inline(&self, spec: DriverConfig) -> Result<()> {
         self.run_request(ProvideRequest {
             spec,
             control_name: None,
@@ -92,7 +92,7 @@ mod tests {
         TelemetryFactory,
     };
     use crate::application::types::ProvideRequest;
-    use crate::domain::driver::{Driver, StorageSpec, TelemetrySpec};
+    use crate::domain::driver::{DriverConfig, StorageConfig, TelemetrySpec};
     use crate::telemetry::OtelHandles;
     use std::cell::{Cell, RefCell};
     use std::collections::HashMap;
@@ -100,12 +100,12 @@ mod tests {
 
     #[derive(Default)]
     struct TestRepository {
-        specs: HashMap<String, Driver>,
+        specs: HashMap<String, DriverConfig>,
         reads: Cell<usize>,
     }
 
     impl ProvideRepository for TestRepository {
-        fn read_spec(&self, name: &str) -> Result<Driver> {
+        fn read_spec(&self, name: &str) -> Result<DriverConfig> {
             self.reads.set(self.reads.get() + 1);
             self.specs
                 .get(name)
@@ -121,7 +121,7 @@ mod tests {
     struct TestTelemetryFactory;
 
     impl TelemetryFactory for TestTelemetryFactory {
-        fn build(&self, _spec: &Driver) -> Result<Option<OtelHandles>> {
+        fn build(&self, _spec: &DriverConfig) -> Result<Option<OtelHandles>> {
             Ok(None)
         }
     }
@@ -145,7 +145,7 @@ mod tests {
     }
 
     impl TestProvideApp {
-        fn with_spec(mut self, spec: Driver) -> Self {
+        fn with_spec(mut self, spec: DriverConfig) -> Self {
             self.repository.specs.insert(spec.name.clone(), spec);
             self
         }
@@ -154,7 +154,7 @@ mod tests {
             self.application().run_named(name)
         }
 
-        fn run_inline(&self, spec: Driver) -> Result<()> {
+        fn run_inline(&self, spec: DriverConfig) -> Result<()> {
             self.application().run_inline(spec)
         }
 
@@ -179,11 +179,11 @@ mod tests {
         }
     }
 
-    fn local_driver_spec(name: &str) -> Driver {
-        Driver {
+    fn local_driver_spec(name: &str) -> DriverConfig {
+        DriverConfig {
             name: name.to_owned(),
             path: PathBuf::from(format!("/mnt/{name}")),
-            storage: StorageSpec::Local {
+            storage: StorageConfig::Local {
                 root: PathBuf::from(format!("/data/{name}")),
             },
             telemetry: TelemetrySpec::default(),

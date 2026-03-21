@@ -1,4 +1,4 @@
-use crate::domain::driver::{Driver, StorageSpec};
+use crate::domain::driver::{DriverConfig, StorageConfig};
 use std::num::ParseIntError;
 use std::path::PathBuf;
 
@@ -32,15 +32,15 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 pub trait ConfigRepository {
     fn list_names(&self) -> Result<Vec<String>>;
-    fn read_spec(&self, name: &str) -> Result<Driver>;
-    fn write_spec(&self, spec: &Driver) -> Result<()>;
+    fn read_spec(&self, name: &str) -> Result<DriverConfig>;
+    fn write_spec(&self, spec: &DriverConfig) -> Result<()>;
     fn remove(&self, name: &str) -> Result<()>;
 }
 
 pub trait ConfigUseCase {
     fn list(&self) -> Result<Vec<String>>;
-    fn read(&self, name: &str) -> Result<Driver>;
-    fn add(&self, spec: Driver) -> Result<()>;
+    fn read(&self, name: &str) -> Result<DriverConfig>;
+    fn add(&self, spec: DriverConfig) -> Result<()>;
     fn remove(&self, name: &str) -> Result<()>;
     fn set(&self, name: &str, key: &str, value: &str) -> Result<()>;
 }
@@ -63,11 +63,11 @@ where
         self.repository.list_names()
     }
 
-    fn read(&self, name: &str) -> Result<Driver> {
+    fn read(&self, name: &str) -> Result<DriverConfig> {
         self.repository.read_spec(name)
     }
 
-    fn add(&self, spec: Driver) -> Result<()> {
+    fn add(&self, spec: DriverConfig) -> Result<()> {
         if self.repository.list_names()?.contains(&spec.name) {
             return Err(Error::DuplicateDriver {
                 name: spec.name.clone(),
@@ -87,65 +87,65 @@ where
     }
 }
 
-pub(crate) fn apply_set(spec: &mut Driver, key: &str, value: &str) -> Result<()> {
+pub(crate) fn apply_set(spec: &mut DriverConfig, key: &str, value: &str) -> Result<()> {
     match key {
         "path" => {
             spec.path = PathBuf::from(value);
         }
         "storage.root" => match &mut spec.storage {
-            StorageSpec::Local { root } | StorageSpec::OneDrive { root, .. } => {
+            StorageConfig::Local { root } | StorageConfig::OneDrive { root, .. } => {
                 *root = PathBuf::from(value);
             }
         },
         "storage.endpoint" => match &mut spec.storage {
-            StorageSpec::OneDrive { endpoint, .. } => {
+            StorageConfig::OneDrive { endpoint, .. } => {
                 *endpoint = value.to_owned();
             }
-            StorageSpec::Local { .. } => {
+            StorageConfig::Local { .. } => {
                 return Err(Error::InvalidStorageKey {
                     key: key.to_owned(),
                 });
             }
         },
         "storage.access_token" => match &mut spec.storage {
-            StorageSpec::OneDrive { access_token, .. } => {
+            StorageConfig::OneDrive { access_token, .. } => {
                 *access_token = Some(value.to_owned());
             }
-            StorageSpec::Local { .. } => {
+            StorageConfig::Local { .. } => {
                 return Err(Error::InvalidStorageKey {
                     key: key.to_owned(),
                 });
             }
         },
         "storage.refresh_token" => match &mut spec.storage {
-            StorageSpec::OneDrive { refresh_token, .. } => {
+            StorageConfig::OneDrive { refresh_token, .. } => {
                 *refresh_token = Some(value.to_owned());
             }
-            StorageSpec::Local { .. } => {
+            StorageConfig::Local { .. } => {
                 return Err(Error::InvalidStorageKey {
                     key: key.to_owned(),
                 });
             }
         },
         "storage.client_id" => match &mut spec.storage {
-            StorageSpec::OneDrive { client_id, .. } => {
+            StorageConfig::OneDrive { client_id, .. } => {
                 *client_id = Some(value.to_owned());
             }
-            StorageSpec::Local { .. } => {
+            StorageConfig::Local { .. } => {
                 return Err(Error::InvalidStorageKey {
                     key: key.to_owned(),
                 });
             }
         },
         "storage.token_expiry_buffer_secs" => match &mut spec.storage {
-            StorageSpec::OneDrive {
+            StorageConfig::OneDrive {
                 token_expiry_buffer_secs,
                 ..
             } => {
                 let secs = parse_u64(value.to_owned())?;
                 *token_expiry_buffer_secs = Some(secs);
             }
-            StorageSpec::Local { .. } => {
+            StorageConfig::Local { .. } => {
                 return Err(Error::InvalidStorageKey {
                     key: key.to_owned(),
                 });
@@ -169,14 +169,14 @@ fn parse_u64(value: String) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::{Application, ConfigRepository, ConfigUseCase, Error, Result};
-    use crate::domain::driver::{Driver, StorageSpec, TelemetrySpec};
+    use crate::domain::driver::{DriverConfig, StorageConfig, TelemetrySpec};
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::path::PathBuf;
 
     #[derive(Default)]
     struct TestRepository {
-        specs: RefCell<HashMap<String, Driver>>,
+        specs: RefCell<HashMap<String, DriverConfig>>,
     }
 
     impl ConfigRepository for TestRepository {
@@ -186,7 +186,7 @@ mod tests {
             Ok(names)
         }
 
-        fn read_spec(&self, name: &str) -> Result<Driver> {
+        fn read_spec(&self, name: &str) -> Result<DriverConfig> {
             self.specs
                 .borrow()
                 .get(name)
@@ -196,7 +196,7 @@ mod tests {
                 })
         }
 
-        fn write_spec(&self, spec: &Driver) -> Result<()> {
+        fn write_spec(&self, spec: &DriverConfig) -> Result<()> {
             self.specs
                 .borrow_mut()
                 .insert(spec.name.clone(), spec.clone());
@@ -214,7 +214,7 @@ mod tests {
     }
 
     impl TestConfigApp {
-        fn with_existing(self, spec: Driver) -> Self {
+        fn with_existing(self, spec: DriverConfig) -> Self {
             self.repository
                 .specs
                 .borrow_mut()
@@ -222,7 +222,7 @@ mod tests {
             self
         }
 
-        fn add(&self, spec: Driver) -> Result<()> {
+        fn add(&self, spec: DriverConfig) -> Result<()> {
             self.application().add(spec)
         }
 
@@ -230,7 +230,7 @@ mod tests {
             self.application().set(name, key, value)
         }
 
-        fn read(&self, name: &str) -> Result<Driver> {
+        fn read(&self, name: &str) -> Result<DriverConfig> {
             self.application().read(name)
         }
 
@@ -245,22 +245,22 @@ mod tests {
         }
     }
 
-    fn local_driver_spec(name: &str) -> Driver {
-        Driver {
+    fn local_driver_spec(name: &str) -> DriverConfig {
+        DriverConfig {
             name: name.to_owned(),
             path: PathBuf::from(format!("/mnt/{name}")),
-            storage: StorageSpec::Local {
+            storage: StorageConfig::Local {
                 root: PathBuf::from(format!("/data/{name}")),
             },
             telemetry: TelemetrySpec::default(),
         }
     }
 
-    fn onedrive_driver_spec(name: &str) -> Driver {
-        Driver {
+    fn onedrive_driver_spec(name: &str) -> DriverConfig {
+        DriverConfig {
             name: name.to_owned(),
             path: PathBuf::from(format!("/mnt/{name}")),
-            storage: StorageSpec::OneDrive {
+            storage: StorageConfig::OneDrive {
                 root: PathBuf::from("/"),
                 endpoint: "https://graph.microsoft.com/v1.0".to_owned(),
                 access_token: None,

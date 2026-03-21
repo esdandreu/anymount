@@ -30,18 +30,18 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// A configured driver definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Driver {
+pub struct DriverConfig {
     /// Stable driver name derived from config.
     pub name: String,
     /// Local mount path exposed by the driver.
     pub path: PathBuf,
     /// Storage backend configuration for this driver.
-    pub storage: StorageSpec,
+    pub storage: StorageConfig,
     /// Optional telemetry configuration for this driver.
     pub telemetry: TelemetrySpec,
 }
 
-impl Driver {
+impl DriverConfig {
     /// Validates driver invariants.
     ///
     /// # Errors
@@ -57,15 +57,15 @@ impl Driver {
 
     pub fn onedrive_endpoint(&self) -> Option<&str> {
         match &self.storage {
-            StorageSpec::OneDrive { endpoint, .. } => Some(endpoint.as_str()),
-            StorageSpec::Local { .. } => None,
+            StorageConfig::OneDrive { endpoint, .. } => Some(endpoint.as_str()),
+            StorageConfig::Local { .. } => None,
         }
     }
 }
 
 /// Supported storage backends.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StorageSpec {
+pub enum StorageConfig {
     /// Local directory storage.
     Local {
         /// Root directory exposed by the driver.
@@ -88,7 +88,7 @@ pub enum StorageSpec {
     },
 }
 
-impl StorageSpec {
+impl StorageConfig {
     /// Short label for CLI and status output (`local`, `onedrive`, ...).
     pub fn label(&self) -> &'static str {
         match self {
@@ -175,14 +175,14 @@ pub enum OtlpTransport {
 
 #[cfg(test)]
 mod tests {
-    use super::{Driver, Error, StorageSpec, TelemetrySpec};
+    use super::{DriverConfig, Error, StorageConfig, TelemetrySpec};
     use std::path::PathBuf;
 
-    fn local_driver_spec(name: &str) -> Driver {
-        Driver {
+    fn local_driver_spec(name: &str) -> DriverConfig {
+        DriverConfig {
             name: name.to_owned(),
             path: PathBuf::from(format!("/mnt/{name}")),
-            storage: StorageSpec::Local {
+            storage: StorageConfig::Local {
                 root: PathBuf::from(format!("/data/{name}")),
             },
             telemetry: TelemetrySpec::default(),
@@ -191,10 +191,10 @@ mod tests {
 
     #[test]
     fn onedrive_spec_requires_token_material() {
-        let spec = Driver {
+        let spec = DriverConfig {
             name: "demo".to_owned(),
             path: PathBuf::from("/mnt/demo"),
-            storage: StorageSpec::OneDrive {
+            storage: StorageConfig::OneDrive {
                 root: PathBuf::from("/"),
                 endpoint: "https://graph.microsoft.com/v1.0".to_owned(),
                 access_token: None,

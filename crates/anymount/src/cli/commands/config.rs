@@ -5,8 +5,8 @@ use crate::application::config::{
 use crate::cli::commands::provide::{
     LocalStorageArgs, OneDriveStorageArgs, ProvideStorageSubcommand,
 };
-use crate::config::{ConfigDir, DriverFileConfig};
-use crate::domain::driver::Driver;
+use crate::config::{ConfigDir, DriverFileConfig, StorageFileConfig};
+use crate::domain::driver::DriverConfig;
 use clap::{Args, Subcommand};
 use inquire::{Select, Text};
 use std::path::{Path, PathBuf};
@@ -117,11 +117,11 @@ impl ConfigRepository for ConfigRepositoryAdapter {
         self.config_dir.list().map_err(Into::into)
     }
 
-    fn read_spec(&self, name: &str) -> crate::application::config::Result<Driver> {
+    fn read_spec(&self, name: &str) -> crate::application::config::Result<DriverConfig> {
         self.config_dir.read_spec(name).map_err(Into::into)
     }
 
-    fn write_spec(&self, spec: &Driver) -> crate::application::config::Result<()> {
+    fn write_spec(&self, spec: &DriverConfig) -> crate::application::config::Result<()> {
         self.config_dir.write_spec(spec).map_err(Into::into)
     }
 
@@ -162,7 +162,7 @@ where
     U: ConfigUseCase,
 {
     let resolved = resolve_add_args(args)?;
-    let spec = Driver {
+    let spec = DriverConfig {
         name: resolved.name.clone(),
         path: resolved.path,
         storage: resolved.storage.to_storage_spec(),
@@ -330,7 +330,7 @@ fn parse_u64(value: String) -> crate::cli::Result<u64> {
         .map_err(|source| crate::cli::Error::ParseInteger { value, source })
 }
 
-fn config_from_spec(spec: &Driver) -> DriverFileConfig {
+fn config_from_spec(spec: &DriverConfig) -> DriverFileConfig {
     DriverFileConfig {
         path: spec.path.clone(),
         storage: spec.storage.clone().into(),
@@ -345,12 +345,12 @@ fn apply_set(cfg: &mut DriverFileConfig, key: &str, value: &str) -> crate::cli::
             cfg.path = PathBuf::from(value);
         }
         "storage.root" => match &mut cfg.storage {
-            StorageConfig::Local { root } | StorageConfig::OneDrive { root, .. } => {
+            StorageFileConfig::Local { root } | StorageFileConfig::OneDrive { root, .. } => {
                 *root = PathBuf::from(value);
             }
         },
         "storage.endpoint" => match &mut cfg.storage {
-            StorageConfig::OneDrive { endpoint, .. } => {
+            StorageFileConfig::OneDrive { endpoint, .. } => {
                 *endpoint = value.to_owned();
             }
             _ => {
@@ -360,7 +360,7 @@ fn apply_set(cfg: &mut DriverFileConfig, key: &str, value: &str) -> crate::cli::
             }
         },
         "storage.access_token" => match &mut cfg.storage {
-            StorageConfig::OneDrive { access_token, .. } => {
+            StorageFileConfig::OneDrive { access_token, .. } => {
                 *access_token = Some(value.to_owned());
             }
             _ => {
@@ -370,7 +370,7 @@ fn apply_set(cfg: &mut DriverFileConfig, key: &str, value: &str) -> crate::cli::
             }
         },
         "storage.refresh_token" => match &mut cfg.storage {
-            StorageConfig::OneDrive { refresh_token, .. } => {
+            StorageFileConfig::OneDrive { refresh_token, .. } => {
                 *refresh_token = Some(value.to_owned());
             }
             _ => {
@@ -380,7 +380,7 @@ fn apply_set(cfg: &mut DriverFileConfig, key: &str, value: &str) -> crate::cli::
             }
         },
         "storage.client_id" => match &mut cfg.storage {
-            StorageConfig::OneDrive { client_id, .. } => {
+            StorageFileConfig::OneDrive { client_id, .. } => {
                 *client_id = Some(value.to_owned());
             }
             _ => {
@@ -390,7 +390,7 @@ fn apply_set(cfg: &mut DriverFileConfig, key: &str, value: &str) -> crate::cli::
             }
         },
         "storage.token_expiry_buffer_secs" => match &mut cfg.storage {
-            StorageConfig::OneDrive {
+            StorageFileConfig::OneDrive {
                 token_expiry_buffer_secs,
                 ..
             } => {
@@ -444,24 +444,25 @@ mod tests {
     use super::*;
     use crate::application::config::{ConfigUseCase, Result as ConfigApplicationResult};
     use crate::cli::commands::provide::{LocalStorageArgs, ProvideStorageSubcommand};
-    use crate::domain::driver::{Driver, StorageSpec, TelemetrySpec};
+    use crate::config::StorageFileConfig;
+    use crate::domain::driver::{DriverConfig, StorageConfig, TelemetrySpec};
     use std::cell::RefCell;
 
     fn local_config() -> DriverFileConfig {
         DriverFileConfig {
             path: PathBuf::from("/mnt/local"),
-            storage: StorageConfig::Local {
+            storage: StorageFileConfig::Local {
                 root: PathBuf::from("/data"),
             },
             telemetry: Default::default(),
         }
     }
 
-    fn local_spec(name: &str) -> Driver {
-        Driver {
+    fn local_spec(name: &str) -> DriverConfig {
+        DriverConfig {
             name: name.to_owned(),
             path: PathBuf::from("/mnt/local"),
-            storage: StorageSpec::Local {
+            storage: StorageConfig::Local {
                 root: PathBuf::from("/data"),
             },
             telemetry: TelemetrySpec::default(),
@@ -470,7 +471,7 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingUseCase {
-        added: RefCell<Vec<Driver>>,
+        added: RefCell<Vec<DriverConfig>>,
         set_calls: RefCell<Vec<(String, String, String)>>,
     }
 
@@ -479,11 +480,11 @@ mod tests {
             Ok(Vec::new())
         }
 
-        fn read(&self, name: &str) -> ConfigApplicationResult<Driver> {
+        fn read(&self, name: &str) -> ConfigApplicationResult<DriverConfig> {
             Ok(local_spec(name))
         }
 
-        fn add(&self, spec: Driver) -> ConfigApplicationResult<()> {
+        fn add(&self, spec: DriverConfig) -> ConfigApplicationResult<()> {
             self.added.borrow_mut().push(spec);
             Ok(())
         }
@@ -503,7 +504,7 @@ mod tests {
     fn onedrive_config() -> DriverFileConfig {
         DriverFileConfig {
             path: PathBuf::from("/mnt/onedrive"),
-            storage: StorageConfig::OneDrive {
+            storage: StorageFileConfig::OneDrive {
                 root: PathBuf::from("/"),
                 endpoint: "https://graph.microsoft.com/v1.0".to_owned(),
                 access_token: None,
@@ -526,7 +527,7 @@ mod tests {
     fn apply_set_storage_root_local() {
         let mut cfg = local_config();
         apply_set(&mut cfg, "storage.root", "/new/root").expect("set failed");
-        if let StorageConfig::Local { root } = &cfg.storage {
+        if let StorageFileConfig::Local { root } = &cfg.storage {
             assert_eq!(root, &PathBuf::from("/new/root"));
         } else {
             panic!("expected Local");
@@ -537,7 +538,7 @@ mod tests {
     fn apply_set_storage_root_onedrive() {
         let mut cfg = onedrive_config();
         apply_set(&mut cfg, "storage.root", "/Documents").expect("set failed");
-        if let StorageConfig::OneDrive { root, .. } = &cfg.storage {
+        if let StorageFileConfig::OneDrive { root, .. } = &cfg.storage {
             assert_eq!(root, &PathBuf::from("/Documents"));
         } else {
             panic!("expected OneDrive");
@@ -548,7 +549,7 @@ mod tests {
     fn apply_set_endpoint() {
         let mut cfg = onedrive_config();
         apply_set(&mut cfg, "storage.endpoint", "https://other.api").expect("set failed");
-        if let StorageConfig::OneDrive { endpoint, .. } = &cfg.storage {
+        if let StorageFileConfig::OneDrive { endpoint, .. } = &cfg.storage {
             assert_eq!(endpoint, "https://other.api");
         } else {
             panic!("expected OneDrive");
@@ -565,7 +566,7 @@ mod tests {
     fn apply_set_token_expiry_buffer_secs() {
         let mut cfg = onedrive_config();
         apply_set(&mut cfg, "storage.token_expiry_buffer_secs", "120").expect("set failed");
-        if let StorageConfig::OneDrive {
+        if let StorageFileConfig::OneDrive {
             token_expiry_buffer_secs,
             ..
         } = &cfg.storage

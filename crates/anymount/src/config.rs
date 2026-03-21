@@ -1,5 +1,5 @@
 use crate::domain::driver::{
-    Driver, OtlpSpec as DomainOtlpSpec, OtlpTransport as DomainOtlpTransport, StorageSpec,
+    DriverConfig, OtlpSpec as DomainOtlpSpec, OtlpTransport as DomainOtlpTransport, StorageConfig,
     TelemetrySpec,
 };
 use serde::{Deserialize, Serialize};
@@ -74,7 +74,7 @@ fn default_true() -> bool {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum StorageConfig {
+pub enum StorageFileConfig {
     Local {
         root: PathBuf,
     },
@@ -92,8 +92,7 @@ pub enum StorageConfig {
     },
 }
 
-impl StorageConfig {
-    /// Short label for CLI and status output (`local`, `onedrive`, ...).
+impl StorageFileConfig {
     pub fn label(&self) -> &'static str {
         match self {
             Self::Local { .. } => "local",
@@ -138,14 +137,14 @@ pub enum OtlpTransport {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DriverFileConfig {
     pub path: PathBuf,
-    pub storage: StorageConfig,
+    pub storage: StorageFileConfig,
     #[serde(default)]
     pub telemetry: TelemetryFileConfig,
 }
 
 impl DriverFileConfig {
-    fn into_spec(self, name: String) -> Driver {
-        Driver {
+    fn into_spec(self, name: String) -> DriverConfig {
+        DriverConfig {
             name,
             path: self.path,
             storage: self.storage.into(),
@@ -153,7 +152,7 @@ impl DriverFileConfig {
         }
     }
 
-    fn from_spec(spec: &Driver) -> Self {
+    fn from_spec(spec: &DriverConfig) -> Self {
         Self {
             path: spec.path.clone(),
             storage: spec.storage.clone().into(),
@@ -162,11 +161,11 @@ impl DriverFileConfig {
     }
 }
 
-impl From<StorageConfig> for StorageSpec {
-    fn from(value: StorageConfig) -> Self {
+impl From<StorageFileConfig> for StorageConfig {
+    fn from(value: StorageFileConfig) -> Self {
         match value {
-            StorageConfig::Local { root } => Self::Local { root },
-            StorageConfig::OneDrive {
+            StorageFileConfig::Local { root } => Self::Local { root },
+            StorageFileConfig::OneDrive {
                 root,
                 endpoint,
                 access_token,
@@ -185,11 +184,11 @@ impl From<StorageConfig> for StorageSpec {
     }
 }
 
-impl From<StorageSpec> for StorageConfig {
-    fn from(value: StorageSpec) -> Self {
+impl From<StorageConfig> for StorageFileConfig {
+    fn from(value: StorageConfig) -> Self {
         match value {
-            StorageSpec::Local { root } => Self::Local { root },
-            StorageSpec::OneDrive {
+            StorageConfig::Local { root } => Self::Local { root },
+            StorageConfig::OneDrive {
                 root,
                 endpoint,
                 access_token,
@@ -379,7 +378,7 @@ impl ConfigDir {
     }
 
     /// Read a single driver spec by name.
-    pub fn read_spec(&self, name: &str) -> Result<Driver> {
+    pub fn read_spec(&self, name: &str) -> Result<DriverConfig> {
         let spec = self.read(name)?.into_spec(name.to_owned());
         spec.validate().map_err(|source| Error::InvalidDriverSpec {
             name: name.to_owned(),
@@ -389,7 +388,7 @@ impl ConfigDir {
     }
 
     /// Write (create or overwrite) a driver spec.
-    pub fn write_spec(&self, spec: &Driver) -> Result<()> {
+    pub fn write_spec(&self, spec: &DriverConfig) -> Result<()> {
         spec.validate().map_err(|source| Error::InvalidDriverSpec {
             name: spec.name.clone(),
             source,
@@ -398,7 +397,7 @@ impl ConfigDir {
     }
 
     /// Load all driver specs from the directory.
-    pub fn load_all_specs(&self) -> Result<Vec<Driver>> {
+    pub fn load_all_specs(&self) -> Result<Vec<DriverConfig>> {
         self.list()?
             .into_iter()
             .map(|name| self.read_spec(&name))
@@ -422,7 +421,7 @@ pub fn default_config_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::driver::{Driver, StorageSpec, TelemetrySpec};
+    use crate::domain::driver::{DriverConfig, StorageConfig, TelemetrySpec};
 
     fn tmp_config_dir() -> (tempfile::TempDir, ConfigDir) {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
@@ -430,11 +429,11 @@ mod tests {
         (tmp, cd)
     }
 
-    fn local_driver_spec(name: &str) -> Driver {
-        Driver {
+    fn local_driver_spec(name: &str) -> DriverConfig {
+        DriverConfig {
             name: name.to_owned(),
             path: PathBuf::from(format!("/mnt/{name}")),
-            storage: StorageSpec::Local {
+            storage: StorageConfig::Local {
                 root: PathBuf::from(format!("/data/{name}")),
             },
             telemetry: TelemetrySpec::default(),
@@ -444,7 +443,7 @@ mod tests {
     fn local_config() -> DriverFileConfig {
         DriverFileConfig {
             path: PathBuf::from("/mnt/local"),
-            storage: StorageConfig::Local {
+            storage: StorageFileConfig::Local {
                 root: PathBuf::from("/data"),
             },
             telemetry: TelemetryFileConfig::default(),
@@ -454,7 +453,7 @@ mod tests {
     fn onedrive_config() -> DriverFileConfig {
         DriverFileConfig {
             path: PathBuf::from("/mnt/onedrive"),
-            storage: StorageConfig::OneDrive {
+            storage: StorageFileConfig::OneDrive {
                 root: PathBuf::from("/"),
                 endpoint: "https://graph.microsoft.com/v1.0".to_owned(),
                 access_token: None,
@@ -487,7 +486,7 @@ mod tests {
         let (_tmp, cd) = tmp_config_dir();
         let cfg = DriverFileConfig {
             path: PathBuf::from("/mnt/otel"),
-            storage: StorageConfig::Local {
+            storage: StorageFileConfig::Local {
                 root: PathBuf::from("/data"),
             },
             telemetry: TelemetryFileConfig {
@@ -514,7 +513,7 @@ mod tests {
         cd.write("myod", &cfg).expect("write failed");
         let loaded = cd.read("myod").expect("read failed");
         assert_eq!(loaded.path, cfg.path);
-        if let StorageConfig::OneDrive {
+        if let StorageFileConfig::OneDrive {
             refresh_token,
             client_id,
             ..
@@ -600,7 +599,7 @@ mod tests {
         let (_tmp, cd) = tmp_config_dir();
         let cfg = DriverFileConfig {
             path: PathBuf::from("/mnt/od"),
-            storage: StorageConfig::OneDrive {
+            storage: StorageFileConfig::OneDrive {
                 root: PathBuf::from("/"),
                 endpoint: "https://graph.microsoft.com/v1.0".to_owned(),
                 access_token: None,
@@ -612,7 +611,7 @@ mod tests {
         };
         cd.write("sparse", &cfg).expect("write failed");
         let loaded = cd.read("sparse").expect("read failed");
-        if let StorageConfig::OneDrive {
+        if let StorageFileConfig::OneDrive {
             access_token,
             refresh_token,
             client_id,

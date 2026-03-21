@@ -1,13 +1,13 @@
 use super::windows_driver::ID_PREFIX;
 use super::{Error, Result};
-use crate::domain::driver::Driver;
+use crate::domain::driver::DriverConfig;
 use crate::Logger;
 use windows::{
     Foundation::Collections::IVectorView,
     Storage::Provider::{StorageProviderSyncRootInfo, StorageProviderSyncRootManager},
 };
 
-pub fn cleanup_registry<L: Logger>(specs: &[Driver], logger: &L) -> Result<()> {
+pub fn cleanup_registry<L: Logger>(specs: &[DriverConfig], logger: &L) -> Result<()> {
     _cleanup_registry::<StorageProviderSyncRootManager, L>(specs, logger)
 }
 
@@ -34,7 +34,7 @@ impl RegistryManager for StorageProviderSyncRootManager {
 }
 
 fn _cleanup_registry<Registry: RegistryManager, L: Logger>(
-    specs: &[Driver],
+    specs: &[DriverConfig],
     logger: &L,
 ) -> Result<()> {
     let sync_roots = Registry::get_currently_registered()?;
@@ -81,7 +81,7 @@ fn _cleanup_registry<Registry: RegistryManager, L: Logger>(
     Ok(())
 }
 
-fn is_path_configured(path: &str, specs: &[Driver]) -> bool {
+fn is_path_configured(path: &str, specs: &[DriverConfig]) -> bool {
     specs.iter().any(|spec| {
         let driver_path = spec.path.to_string_lossy().to_string();
         path.eq_ignore_ascii_case(&driver_path)

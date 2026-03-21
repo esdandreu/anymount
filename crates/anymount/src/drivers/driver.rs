@@ -1,5 +1,5 @@
 use super::Result;
-use crate::domain::driver::{Driver as DomainDriver, StorageSpec};
+use crate::domain::driver::{DriverConfig, StorageConfig};
 use crate::service::control::messages::ServiceMessage;
 use crate::storages::{LocalStorage, OneDriveConfig};
 use crate::Logger;
@@ -14,7 +14,7 @@ pub trait Driver {
 
 #[cfg(target_os = "windows")]
 pub fn connect_drivers(
-    specs: &[DomainDriver],
+    specs: &[DriverConfig],
     logger: &(impl Logger + 'static),
 ) -> Result<Vec<Box<dyn Driver>>> {
     connect_drivers_with_telemetry(specs, logger, None)
@@ -22,7 +22,7 @@ pub fn connect_drivers(
 
 #[cfg(target_os = "windows")]
 pub fn connect_drivers_with_telemetry(
-    specs: &[DomainDriver],
+    specs: &[DriverConfig],
     logger: &(impl Logger + 'static),
     service_tx: Option<Sender<ServiceMessage>>,
 ) -> Result<Vec<Box<dyn Driver>>> {
@@ -30,7 +30,7 @@ pub fn connect_drivers_with_telemetry(
     let mut drivers: Vec<Box<dyn Driver>> = Vec::new();
     for spec in specs {
         match &spec.storage {
-            StorageSpec::Local { root } => {
+            StorageConfig::Local { root } => {
                 let storage = LocalStorage::new(root.clone());
                 let driver = WindowsDriver::connect(
                     spec.path.clone(),
@@ -40,7 +40,7 @@ pub fn connect_drivers_with_telemetry(
                 )?;
                 drivers.push(Box::new(driver) as Box<dyn Driver>);
             }
-            StorageSpec::OneDrive {
+            StorageConfig::OneDrive {
                 root,
                 endpoint,
                 access_token,
@@ -73,7 +73,7 @@ pub fn connect_drivers_with_telemetry(
 
 #[cfg(target_os = "linux")]
 pub fn connect_drivers(
-    specs: &[DomainDriver],
+    specs: &[DriverConfig],
     logger: &(impl Logger + 'static),
 ) -> Result<Vec<Box<dyn Driver>>> {
     connect_drivers_with_telemetry(specs, logger, None)
@@ -81,7 +81,7 @@ pub fn connect_drivers(
 
 #[cfg(target_os = "linux")]
 pub fn connect_drivers_with_telemetry(
-    specs: &[DomainDriver],
+    specs: &[DriverConfig],
     logger: &(impl Logger + 'static),
     _service_tx: Option<Sender<ServiceMessage>>,
 ) -> Result<Vec<Box<dyn Driver>>> {
@@ -93,7 +93,7 @@ pub fn connect_drivers_with_telemetry(
     for spec in specs {
         let path = spec.path.clone();
         match &spec.storage {
-            StorageSpec::Local { root } => {
+            StorageConfig::Local { root } => {
                 let storage = LocalStorage::new(root.clone());
                 let (mount_path, session) = mount_storage(path, storage, logger.clone())?;
                 let name = mount_path
@@ -113,7 +113,7 @@ pub fn connect_drivers_with_telemetry(
                 ));
                 sessions.push((mount_path, session));
             }
-            StorageSpec::OneDrive {
+            StorageConfig::OneDrive {
                 root,
                 endpoint,
                 access_token,
@@ -160,7 +160,7 @@ pub fn connect_drivers_with_telemetry(
 
 #[cfg(all(any(target_os = "linux", target_os = "macos"), not(feature = "fuse")))]
 pub fn connect_drivers(
-    _specs: &[DomainDriver],
+    _specs: &[DriverConfig],
     _logger: &(impl Logger + 'static),
 ) -> Result<Vec<Box<dyn Driver>>> {
     Err(crate::drivers::Error::NotSupported)
@@ -168,7 +168,7 @@ pub fn connect_drivers(
 
 #[cfg(all(any(target_os = "linux", target_os = "macos"), not(feature = "fuse")))]
 pub fn connect_drivers_with_telemetry(
-    _specs: &[DomainDriver],
+    _specs: &[DriverConfig],
     _logger: &(impl Logger + 'static),
     _service_tx: Option<Sender<ServiceMessage>>,
 ) -> Result<Vec<Box<dyn Driver>>> {
@@ -177,7 +177,7 @@ pub fn connect_drivers_with_telemetry(
 
 #[cfg(feature = "fuse")]
 pub fn connect_drivers(
-    specs: &[DomainDriver],
+    specs: &[DriverConfig],
     logger: &(impl Logger + 'static),
 ) -> Result<Vec<Box<dyn Driver>>> {
     connect_drivers_with_telemetry(specs, logger, None)
@@ -185,7 +185,7 @@ pub fn connect_drivers(
 
 #[cfg(feature = "fuse")]
 pub fn connect_drivers_with_telemetry(
-    specs: &[DomainDriver],
+    specs: &[DriverConfig],
     logger: &(impl Logger + 'static),
     _service_tx: Option<Sender<ServiceMessage>>,
 ) -> Result<Vec<Box<dyn Driver>>> {
@@ -197,7 +197,7 @@ pub fn connect_drivers_with_telemetry(
         }
         let mount_path = spec.path.canonicalize()?;
         match &spec.storage {
-            StorageSpec::Local { root } => {
+            StorageConfig::Local { root } => {
                 let storage = LocalStorage::new(root.clone());
                 let fs = StorageFilesystem::new_with_cache(
                     storage,
@@ -213,7 +213,7 @@ pub fn connect_drivers_with_telemetry(
                     })?;
                 sessions.push((mount_path, session));
             }
-            StorageSpec::OneDrive {
+            StorageConfig::OneDrive {
                 root,
                 endpoint,
                 access_token,
@@ -282,16 +282,16 @@ impl Driver for FuseDriver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::driver::{Driver as DomainDriver, StorageSpec, TelemetrySpec};
+    use crate::domain::driver::{DriverConfig, StorageConfig, TelemetrySpec};
     use crate::NoOpLogger;
 
     #[test]
     fn storage_label_comes_from_domain_storage_spec() {
-        let local = StorageSpec::Local {
+        let local = StorageConfig::Local {
             root: PathBuf::from("/data"),
         };
         assert_eq!(local.label(), "local");
-        let onedrive = StorageSpec::OneDrive {
+        let onedrive = StorageConfig::OneDrive {
             root: PathBuf::from("/"),
             endpoint: "https://graph.microsoft.com/v1.0".to_owned(),
             access_token: None,
@@ -302,11 +302,11 @@ mod tests {
         assert_eq!(onedrive.label(), "onedrive");
     }
 
-    fn local_driver_spec(name: &str) -> DomainDriver {
-        DomainDriver {
+    fn local_driver_spec(name: &str) -> DriverConfig {
+        DriverConfig {
             name: name.to_owned(),
             path: PathBuf::from(format!("/mnt/{name}")),
-            storage: StorageSpec::Local {
+            storage: StorageConfig::Local {
                 root: PathBuf::from(format!("/data/{name}")),
             },
             telemetry: TelemetrySpec::default(),

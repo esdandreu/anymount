@@ -9,9 +9,9 @@ use crate::application::connect::{
 };
 use crate::auth::{OneDriveAuthFlow, TokenResponse};
 use crate::cli::commands::config::ProviderType;
-use crate::config::ConfigDir;
-use crate::domain::driver::Driver;
-use crate::{DriverFileConfig, Logger, StorageConfig, TracingLogger};
+use crate::config::{ConfigDir, StorageFileConfig};
+use crate::domain::driver::DriverConfig;
+use crate::{DriverFileConfig, Logger, TracingLogger};
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
     MouseEvent, MouseEventKind,
@@ -149,7 +149,7 @@ impl AppState {
     }
 }
 
-fn provider_entry_from_spec(spec: Driver) -> ProviderEntry {
+fn provider_entry_from_spec(spec: DriverConfig) -> ProviderEntry {
     let name = spec.name.clone();
     ProviderEntry {
         name,
@@ -177,11 +177,11 @@ impl ConfigRepository for TuiConfigRepository {
         self.config_dir.list().map_err(Into::into)
     }
 
-    fn read_spec(&self, name: &str) -> crate::application::config::Result<Driver> {
+    fn read_spec(&self, name: &str) -> crate::application::config::Result<DriverConfig> {
         self.config_dir.read_spec(name).map_err(Into::into)
     }
 
-    fn write_spec(&self, spec: &Driver) -> crate::application::config::Result<()> {
+    fn write_spec(&self, spec: &DriverConfig) -> crate::application::config::Result<()> {
         self.config_dir.write_spec(spec).map_err(Into::into)
     }
 
@@ -314,7 +314,7 @@ impl EditDraft {
 
     fn from_provider(provider: &ProviderEntry) -> Self {
         match &provider.config.storage {
-            StorageConfig::Local { root } => Self {
+            StorageFileConfig::Local { root } => Self {
                 name: provider.name.clone(),
                 path: provider.config.path.display().to_string(),
                 storage_type: ProviderType::Local,
@@ -326,7 +326,7 @@ impl EditDraft {
                 onedrive_client_id: String::new(),
                 onedrive_token_expiry_buffer_secs: String::new(),
             },
-            StorageConfig::OneDrive {
+            StorageFileConfig::OneDrive {
                 root,
                 endpoint,
                 access_token,
@@ -449,7 +449,7 @@ impl EditDraft {
                         "storage.local.root cannot be empty".to_owned(),
                     ));
                 }
-                StorageConfig::Local {
+                StorageFileConfig::Local {
                     root: PathBuf::from(self.local_root.trim()),
                 }
             }
@@ -468,7 +468,7 @@ impl EditDraft {
                     &self.onedrive_token_expiry_buffer_secs,
                     "storage.onedrive.token_expiry_buffer_secs",
                 )?;
-                StorageConfig::OneDrive {
+                StorageFileConfig::OneDrive {
                     root: PathBuf::from(self.onedrive_root.trim()),
                     endpoint: self.onedrive_endpoint.trim().to_owned(),
                     access_token: optional_trimmed(&self.onedrive_access_token),
@@ -1259,8 +1259,8 @@ fn render_mount_row(
 
 fn get_storage_type_label(storage: &StorageConfig) -> &'static str {
     match storage {
-        StorageConfig::Local { .. } => "local",
-        StorageConfig::OneDrive { .. } => "onedrive",
+        StorageFileConfig::Local { .. } => "local",
+        StorageFileConfig::OneDrive { .. } => "onedrive",
     }
 }
 
@@ -1744,7 +1744,7 @@ mod tests {
             name: name.to_owned(),
             config: DriverFileConfig {
                 path: PathBuf::from(format!("/mnt/{name}")),
-                storage: StorageConfig::Local {
+                storage: StorageFileConfig::Local {
                     root: PathBuf::from(format!("/data/{name}")),
                 },
                 telemetry: Default::default(),
@@ -1904,7 +1904,7 @@ mod tests {
         };
 
         let config = draft.to_provider_config().expect("conversion failed");
-        let StorageConfig::OneDrive {
+        let StorageFileConfig::OneDrive {
             access_token,
             refresh_token,
             client_id,
