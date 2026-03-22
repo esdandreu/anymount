@@ -1,11 +1,11 @@
 use super::Storage;
+use crate::Logger;
 use crate::drivers::windows::placeholders::{dehydrate_file, get_placeholder_info};
 use crate::service::control::messages::ServiceMessage;
 use crate::storages::{DirEntry, Error as StorageError, WriteAt};
-use crate::Logger;
 use cloud_filter::{
     error::CResult,
-    filter::{info, ticket, Request, SyncFilter},
+    filter::{Request, SyncFilter, info, ticket},
     metadata::Metadata,
     placeholder_file::PlaceholderFile,
     utility::{FileTime, WriteAt as CfWriteAt},

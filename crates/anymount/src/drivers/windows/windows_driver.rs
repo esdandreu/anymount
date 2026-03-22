@@ -1,31 +1,40 @@
-use super::{Driver, Error, Result, Storage};
-use crate::service::control::messages::ServiceMessage;
+use super::{Error, Result};
 use crate::Logger;
+use crate::drivers::Session;
+use crate::service::control::messages::ServiceMessage;
+use crate::storages::Storage;
 use cloud_filter::root::{
-    Connection, HydrationType, PopulationType, SecurityId, Session, SyncRootId, SyncRootIdBuilder,
-    SyncRootInfo,
+    Connection, HydrationType, PopulationType, SecurityId, Session as CloudSession, SyncRootId,
+    SyncRootIdBuilder, SyncRootInfo,
 };
-use std::path::{absolute, PathBuf};
-use std::sync::{mpsc::Sender, Arc};
+use std::path::{PathBuf, absolute};
+use std::sync::mpsc::Sender;
 
 pub const ID_PREFIX: &'static str = "Anymount";
 
-pub struct WindowsDriver<S: Storage, L: Logger> {
+pub struct WindowsSession<S, L>
+where
+    S: Storage,
+    L: Logger,
+{
     path: PathBuf,
     #[allow(dead_code)]
     id: SyncRootId,
     #[allow(dead_code)]
     connection: Option<Connection<super::Callbacks<S, L>>>,
-    pub logger: L,
 }
 
-impl<S: Storage, L: Logger + 'static> WindowsDriver<S, L> {
+impl<S, L> WindowsSession<S, L>
+where
+    S: Storage,
+    L: Logger,
+{
     pub fn connect(
         path: PathBuf,
         storage: S,
         logger: L,
         service_tx: Option<Sender<ServiceMessage>>,
-    ) -> Result<Arc<Self>> {
+    ) -> Result<Box<dyn Session>> {
         let security_id =
             SecurityId::current_user().map_err(|source| Error::CloudFilterOperation {
                 operation: "resolve current user security id",
@@ -81,27 +90,30 @@ impl<S: Storage, L: Logger + 'static> WindowsDriver<S, L> {
             logger.info(format!("Sync root registered: {}", name));
         }
 
-        let session = Session::new();
+        let session = CloudSession::new();
         let connection = session
             .connect(
                 &path,
-                super::Callbacks::new(path.clone(), storage, logger.clone(), service_tx),
+                super::Callbacks::new(path.clone(), storage, logger, service_tx),
             )
             .map_err(|source| Error::CloudFilterOperation {
                 operation: "connect to sync root",
                 source,
             })?;
 
-        Ok(Arc::new(Self {
+        Ok(Box::new(Self {
             path,
             id,
             connection: Some(connection),
-            logger,
         }))
     }
 }
 
-impl<S: Storage, L: Logger + 'static> Driver for Arc<WindowsDriver<S, L>> {
+impl<S, L> Session for WindowsSession<S, L>
+where
+    S: Storage,
+    L: Logger,
+{
     fn kind(&self) -> &'static str {
         "CloudFilter"
     }

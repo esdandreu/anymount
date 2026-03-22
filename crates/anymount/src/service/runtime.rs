@@ -1,6 +1,6 @@
 use crate::logger::Logger;
-use crate::service::control::messages::ServiceMessage;
 use crate::service::Result;
+use crate::service::control::messages::ServiceMessage;
 use std::sync::mpsc::Receiver;
 
 pub struct ServiceRuntime<L: Logger> {
@@ -30,7 +30,7 @@ mod tests {
     use crate::logger::Logger;
     use crate::service::control::messages::ServiceMessage;
     use std::fmt::Display;
-    use std::sync::{mpsc, Arc, Mutex};
+    use std::sync::{Arc, Mutex, mpsc};
 
     #[derive(Clone, Default)]
     struct RecordingLogger {

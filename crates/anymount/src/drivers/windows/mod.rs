@@ -5,10 +5,8 @@ pub mod placeholders;
 pub mod register;
 pub mod windows_driver;
 
-pub use crate::drivers::Driver;
-pub use crate::storages::Storage;
-pub use callbacks::Callbacks;
-pub use cleanup_registry::cleanup_registry;
+pub(crate) use callbacks::Callbacks;
+pub(crate) use cleanup_registry::cleanup_registry;
 pub use error::{Error, Result};
 pub use register::{HydrationPolicy, RegistrationConfig};
-pub use windows_driver::WindowsDriver;
+pub use windows_driver::WindowsSession;

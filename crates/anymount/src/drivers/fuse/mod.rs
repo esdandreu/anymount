@@ -1,8 +1,8 @@
 // Copyright 2026 Dotphoton AG
 
+use crate::Logger;
 use crate::drivers::fuse::error::{Error, Result};
 use crate::storages::{DirEntry, Storage, WriteAt};
-use crate::Logger;
 use fuser::{
     Errno, FileAttr, FileHandle, FileType, Generation, INodeNo, OpenFlags, ReplyAttr, ReplyData,
     ReplyDirectory, ReplyEntry, Request,
@@ -10,8 +10,8 @@ use fuser::{
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 pub use crate::drivers::fuse::error::{Error as FuseError, Result as FuseResult};
@@ -86,7 +86,7 @@ impl Default for CachedDirCache {
 
 pub trait CachePort: Send + Sync {
     fn sync_metadata_placeholders(&self, dir_path: &Path, entries: &[CachedDirEntry])
-        -> Result<()>;
+    -> Result<()>;
     fn read_range(&self, path: &Path, start: u64, end: u64) -> Result<Vec<u8>>;
     fn write_range(&self, path: &Path, start: u64, data: &[u8], size: u64) -> Result<()>;
 }
@@ -495,14 +495,14 @@ impl<S: Storage, L: Logger + 'static> fuser::Filesystem for StorageFilesystem<S,
 #[cfg(test)]
 mod tests {
     use super::{
-        CachePort, CachedDirCache, CachedDirEntry, NoCacheFsCache, StorageFilesystem,
-        DOT_DOT_ENTRY_OFFSET, DOT_ENTRY_OFFSET, FIRST_CHILD_ENTRY_OFFSET,
+        CachePort, CachedDirCache, CachedDirEntry, DOT_DOT_ENTRY_OFFSET, DOT_ENTRY_OFFSET,
+        FIRST_CHILD_ENTRY_OFFSET, NoCacheFsCache, StorageFilesystem,
     };
     use crate::drivers::fuse::error::Error;
     use crate::storages::{Storage, WriteAt};
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant, SystemTime};
 
     #[derive(Clone)]

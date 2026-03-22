@@ -1,12 +1,12 @@
 #![allow(unused_imports)]
 use super::Result;
+use crate::Logger;
 use crate::domain::driver::{DriverConfig, StorageConfig};
 use crate::service::control::messages::ServiceMessage;
 use crate::storages;
-use crate::Logger;
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
 use std::sync::Arc;
+use std::sync::mpsc::Sender;
 
 pub trait Session: Send + Sync + 'static {
     fn path(&self) -> &PathBuf;
@@ -35,7 +35,7 @@ pub fn connect_drivers_with_telemetry(
     logger: &(impl Logger + 'static),
     service_tx: Option<Sender<ServiceMessage>>,
 ) -> Result<Drivers> {
-    use super::windows::{cleanup_registry, WindowsSession};
+    use super::windows::{WindowsSession, cleanup_registry};
     let mut drivers: Vec<Box<dyn Session>> = Vec::new();
     for spec in specs {
         let storage = storages::new(spec.storage.clone())?;
@@ -86,7 +86,7 @@ pub fn connect_drivers_with_telemetry(
     _service_tx: Option<Sender<ServiceMessage>>,
 ) -> Result<Drivers> {
     use super::linux::dbus::AccountExporter;
-    use super::linux::{export_on_dbus, mount_storage, new_runtime, LinuxDriver};
+    use super::linux::{LinuxDriver, export_on_dbus, mount_storage, new_runtime};
     let rt = new_runtime()?;
     let mut accounts: Vec<(std::path::PathBuf, AccountExporter)> = Vec::new();
     let mut sessions: Vec<(std::path::PathBuf, fuser::BackgroundSession)> = Vec::new();
@@ -264,8 +264,8 @@ impl Session for FuseDriver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::driver::{DriverConfig, StorageConfig, TelemetrySpec};
     use crate::NoOpLogger;
+    use crate::domain::driver::{DriverConfig, StorageConfig, TelemetrySpec};
 
     #[test]
     fn storage_label_comes_from_domain_storage_spec() {

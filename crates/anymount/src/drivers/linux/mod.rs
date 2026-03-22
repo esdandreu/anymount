@@ -8,4 +8,4 @@ pub mod linux_driver;
 
 pub use error::{Error, Result};
 pub use fuse::{SparseFsCache, StorageFilesystem};
-pub use linux_driver::{export_on_dbus, mount_storage, new_runtime, LinuxDriver};
+pub use linux_driver::{LinuxDriver, export_on_dbus, mount_storage, new_runtime};

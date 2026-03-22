@@ -17,7 +17,7 @@ use crossterm::event::{
     MouseEvent, MouseEventKind,
 };
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use crossterm::{cursor, execute};
 use ratatui::layout::Rect;
@@ -26,7 +26,7 @@ use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
 use std::fs;
-use std::io::{stdout, Write};
+use std::io::{Write, stdout};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;

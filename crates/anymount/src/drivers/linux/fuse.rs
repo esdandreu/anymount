@@ -3,11 +3,11 @@
 //! Linux FUSE filesystem with sparse file caching backed by the [`Storage`] trait.
 
 use super::{Error, Result};
+use crate::Logger;
 use crate::drivers::fuse::{
     CachePort as FuseCachePort, CachedDirEntry, StorageFilesystem as FuseStorageFilesystem,
 };
 use crate::storages::{DirEntry, Storage, WriteAt};
-use crate::Logger;
 use std::collections::{BTreeSet, HashMap};
 use std::fs::OpenOptions;
 use std::os::unix::fs::FileExt;

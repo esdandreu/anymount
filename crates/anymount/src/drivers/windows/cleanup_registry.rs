@@ -1,7 +1,7 @@
 use super::windows_driver::ID_PREFIX;
 use super::{Error, Result};
-use crate::domain::driver::DriverConfig;
 use crate::Logger;
+use crate::domain::driver::DriverConfig;
 use windows::{
     Foundation::Collections::IVectorView,
     Storage::Provider::{StorageProviderSyncRootInfo, StorageProviderSyncRootManager},

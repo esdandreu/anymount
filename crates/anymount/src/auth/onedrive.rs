@@ -132,9 +132,7 @@ impl OneDriveStartedAuthorization {
             .request(&self.authorizer.agent, thread::sleep, None)
             .map_err(|source| {
                 let message = source.to_string();
-                classify_wait_error(&message).unwrap_or(Error::TokenRequest {
-                    source,
-                })
+                classify_wait_error(&message).unwrap_or(Error::TokenRequest { source })
             })?;
         Ok(TokenResponse::from(token_result))
     }

@@ -6,9 +6,9 @@ use opentelemetry::KeyValue;
 use opentelemetry_otlp::{
     LogExporter, Protocol, SpanExporter, WithExportConfig, WithHttpConfig, WithTonicConfig,
 };
+use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::logs::SdkLoggerProvider;
 use opentelemetry_sdk::trace::SdkTracerProvider;
-use opentelemetry_sdk::Resource;
 use opentelemetry_semantic_conventions::resource::SERVICE_VERSION;
 use std::collections::HashMap;
 use std::time::Duration;

@@ -6,8 +6,8 @@ use super::dbus::{
 };
 use super::gtk_dbus::{ACTION_FREE_LOCAL_CACHE, ACTION_OPEN_FOLDER};
 use super::{Error, Result, StorageFilesystem};
-use crate::drivers::Session;
 use crate::Logger;
+use crate::drivers::Session;
 use crate::storages::Storage;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};

@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 use crate::application::config::{
     Application as ConfigApplication, ConfigRepository, ConfigUseCase,
     Error as ConfigApplicationError,

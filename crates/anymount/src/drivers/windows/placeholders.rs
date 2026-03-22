@@ -2,17 +2,17 @@ use super::{Error, Result};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::Path;
-use windows::core::PCWSTR;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Storage::CloudFilters::{
-    CfDehydratePlaceholder, CfGetPlaceholderInfo, CF_DEHYDRATE_FLAG_NONE, CF_IN_SYNC_STATE,
-    CF_PIN_STATE, CF_PLACEHOLDER_INFO_STANDARD, CF_PLACEHOLDER_STANDARD_INFO,
+    CF_DEHYDRATE_FLAG_NONE, CF_IN_SYNC_STATE, CF_PIN_STATE, CF_PLACEHOLDER_INFO_STANDARD,
+    CF_PLACEHOLDER_STANDARD_INFO, CfDehydratePlaceholder, CfGetPlaceholderInfo,
 };
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_FLAG_BACKUP_SEMANTICS,
-    FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+    FILE_FLAGS_AND_ATTRIBUTES, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
     FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES, OPEN_EXISTING,
 };
+use windows::core::PCWSTR;
 
 const FILE_ID_MAX_LENGTH: u32 = 400;
 

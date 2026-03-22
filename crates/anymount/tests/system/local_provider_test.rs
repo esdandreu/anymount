@@ -247,7 +247,7 @@ mod macos_tests {
         let mount_path = temp_dir.path().join("mount");
         std::fs::create_dir(&mount_path).unwrap();
 
-        let driver = crate::drivers::MacosDriver::new(
+        let driver = crate::drivers::FuseDriver::new(
             mount_path.clone(),
             todo!("FUSE session would be created here in real usage"),
         );
