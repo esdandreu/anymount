@@ -40,6 +40,77 @@ const COLOR_ROW_BG_SELECTED: Color = Color::Rgb(45, 66, 99);
 const COLOR_ROW_3D_SHADOW: Color = Color::DarkGray;
 const COLOR_BUTTON: Color = Color::Cyan;
 const COLOR_BUTTON_TEXT: Color = Color::Black;
+const MIN_TERMINAL_WIDTH: u16 = 80;
+const MIN_TERMINAL_HEIGHT: u16 = 24;
+const MIN_NAME_WIDTH: u16 = 8;
+const STORAGE_TYPE_WIDTH: u16 = 10;
+const MIN_PATH_WIDTH: u16 = 8;
+const BUTTONS_WIDTH: u16 = 13;
+const STATUS_WIDTH: u16 = 2;
+const COLUMN_GAP_WIDTH: u16 = 2;
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, Copy)]
+struct MountRowLayout {
+    show_name: bool,
+    show_path: bool,
+    show_storage_type: bool,
+    show_buttons: bool,
+    preferred_path_width: u16,
+    path_width: u16,
+}
+
+fn is_supported_size(area: Rect) -> bool {
+    area.width >= MIN_TERMINAL_WIDTH && area.height >= MIN_TERMINAL_HEIGHT
+}
+
+fn compute_mount_row_layout(
+    available_width: u16,
+    show_path: bool,
+    show_storage_type: bool,
+    show_buttons: bool,
+) -> MountRowLayout {
+    let preferred_path_width = 25;
+    let mut remaining = available_width;
+
+    remaining = remaining.saturating_sub(STATUS_WIDTH);
+    remaining = remaining.saturating_sub(MIN_NAME_WIDTH);
+
+    let show_buttons = show_buttons && remaining >= BUTTONS_WIDTH + COLUMN_GAP_WIDTH;
+    if show_buttons {
+        remaining = remaining.saturating_sub(BUTTONS_WIDTH + COLUMN_GAP_WIDTH);
+    }
+
+    let mut show_storage_type = show_storage_type;
+    if show_storage_type {
+        let storage_budget = STORAGE_TYPE_WIDTH + COLUMN_GAP_WIDTH;
+        if remaining >= storage_budget + MIN_PATH_WIDTH + COLUMN_GAP_WIDTH {
+            remaining = remaining.saturating_sub(storage_budget);
+        } else {
+            show_storage_type = false;
+        }
+    }
+
+    let mut path_width = 0;
+    let mut show_path = show_path;
+    if show_path {
+        let path_budget = remaining.saturating_sub(COLUMN_GAP_WIDTH);
+        if path_budget >= MIN_PATH_WIDTH {
+            path_width = path_budget.min(preferred_path_width);
+        } else {
+            show_path = false;
+        }
+    }
+
+    MountRowLayout {
+        show_name: true,
+        show_path,
+        show_storage_type,
+        show_buttons,
+        preferred_path_width,
+        path_width,
+    }
+}
 
 #[derive(Debug, Clone)]
 struct ProviderEntry {
@@ -86,7 +157,7 @@ impl AppState {
             selected: 0,
             hovered: 0,
             is_keyboard_mode: true,
-            status: "j↑ select ↓k  c connect  d disconnect  ↵ edit".to_owned(),
+            status: String::new(),
             mode: UiMode::Browse,
         })
     }
@@ -268,7 +339,7 @@ const EDIT_FIELDS: [EditField; 10] = [
 impl EditField {
     fn label(self) -> &'static str {
         match self {
-            Self::Name => "provider.name",
+            Self::Name => "name",
             Self::Path => "path",
             Self::StorageType => "storage.type",
             Self::LocalRoot => "storage.local.root",
@@ -634,6 +705,7 @@ impl EditSession {
 enum EditAction {
     Continue,
     Cancel,
+    Quit,
     Saved(String),
     Deleted,
     Disconnected(String),
@@ -765,9 +837,14 @@ fn complete_filesystem_path(input: &str) -> Result<PathCompletion> {
     Ok(PathCompletion::NoMatch)
 }
 
-fn authenticate_onedrive<U>(draft: &mut EditDraft, use_case: &U) -> Result<String>
+fn authenticate_onedrive_with_browser<U, F>(
+    draft: &mut EditDraft,
+    use_case: &U,
+    mut open_browser: F,
+) -> Result<String>
 where
     U: AuthUseCase,
+    F: FnMut(&str) -> std::result::Result<(), String>,
 {
     if !matches!(draft.storage_type, ProviderType::OneDrive) {
         return Err(Error::Validation(
@@ -779,7 +856,7 @@ where
         .start_onedrive_auth(optional_trimmed(&draft.onedrive_client_id))
         .map_err(Error::from)?;
     eprintln!("{}", started.message());
-    if open::that(started.verification_uri()).is_err() {
+    if open_browser(&started.verification_uri()).is_err() {
         eprintln!("(Could not open browser; open the URL above manually.)");
     }
     eprintln!();
@@ -788,6 +865,15 @@ where
 
     draft.apply_onedrive_auth_tokens(tokens)?;
     Ok("OneDrive authentication completed; refresh token populated. Press s to save.".to_owned())
+}
+
+fn authenticate_onedrive<U>(draft: &mut EditDraft, use_case: &U) -> Result<String>
+where
+    U: AuthUseCase,
+{
+    authenticate_onedrive_with_browser(draft, use_case, |uri| {
+        open::that(uri).map_err(|error| error.to_string())
+    })
 }
 
 fn authenticate_onedrive_in_terminal(draft: &mut EditDraft) -> Result<String> {
@@ -859,6 +945,9 @@ fn run_loop(terminal: &mut DefaultTerminal, cd: &ConfigDir, state: &mut AppState
                                 state.mode = UiMode::Browse;
                                 state.status = "Edit canceled".to_owned();
                             }
+                            EditAction::Quit => {
+                                break;
+                            }
                             EditAction::Saved(name) => {
                                 state.mode = UiMode::Browse;
                                 refresh_state(cd, state)?;
@@ -896,7 +985,7 @@ fn run_loop(terminal: &mut DefaultTerminal, cd: &ConfigDir, state: &mut AppState
                 }
             }
             Event::Mouse(mouse) => {
-                handle_mouse_event(terminal, state, mouse)?;
+                handle_mouse_event(terminal, cd, state, mouse)?;
             }
             _ => {}
         }
@@ -907,6 +996,7 @@ fn run_loop(terminal: &mut DefaultTerminal, cd: &ConfigDir, state: &mut AppState
 
 fn handle_mouse_event(
     terminal: &mut DefaultTerminal,
+    cd: &ConfigDir,
     state: &mut AppState,
     mouse: MouseEvent,
 ) -> Result<()> {
@@ -935,7 +1025,39 @@ fn handle_mouse_event(
                 state.selected = row;
                 let provider = state.selected_provider().cloned();
                 if let Some(p) = provider {
-                    state.mode = UiMode::Edit(EditSession::new_for_edit(&p));
+                    let is_connected = p.is_connected();
+                    let style = if is_connected {
+                        RowStyle::HoveredConnected
+                    } else {
+                        RowStyle::HoveredDisconnected
+                    };
+                    let rect = Rect::new(list_area.x, mouse.row, list_area.width, 1);
+                    let model = mount_row_render_model(rect.width, style, true);
+                    let row_rect = Rect::new(
+                        rect.x + model.left_offset,
+                        rect.y,
+                        model.row_rect.width,
+                        rect.height,
+                    );
+                    match hit_test_row_action(row_rect, mouse.column, is_connected) {
+                        Some(RowAction::Connect) => {
+                            match connect_selected_provider_for_config(cd, state) {
+                                Ok(Some(name)) => state.status = format!("Connected '{name}'"),
+                                Ok(None) => state.status = "No mount selected".to_owned(),
+                                Err(e) => state.status = format!("Connect failed: {e}"),
+                            }
+                        }
+                        Some(RowAction::Disconnect) => {
+                            match disconnect_selected_provider(cd, state) {
+                                Ok(Some(name)) => state.status = format!("Disconnected '{name}'"),
+                                Ok(None) => state.status = "No mount selected".to_owned(),
+                                Err(e) => state.status = format!("Disconnect failed: {e}"),
+                            }
+                        }
+                        Some(RowAction::Edit) | None => {
+                            state.mode = UiMode::Edit(EditSession::new_for_edit(&p));
+                        }
+                    }
                 }
             } else if row == state.providers.len() {
                 let default_name = suggest_new_provider_name(state);
@@ -950,7 +1072,8 @@ fn handle_mouse_event(
 
 fn handle_browse_key(code: KeyCode, cd: &ConfigDir, state: &mut AppState) -> Result<bool> {
     match code {
-        KeyCode::Char('q') | KeyCode::Esc => Ok(true),
+        KeyCode::Char('q') => Ok(true),
+        KeyCode::Esc => Ok(false),
         KeyCode::Down | KeyCode::Char('j') => {
             state.is_keyboard_mode = true;
             state.select_next();
@@ -1005,13 +1128,22 @@ fn handle_edit_key(code: KeyCode, cd: &ConfigDir, session: &mut EditSession) -> 
     match session.mode {
         EditMode::Navigate => match code {
             KeyCode::Esc => Ok(EditAction::Cancel),
+            KeyCode::Char('q') => Ok(EditAction::Quit),
             KeyCode::Up | KeyCode::Char('k') | KeyCode::BackTab => {
                 session.select_prev();
                 Ok(EditAction::Continue)
             }
-            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
+            KeyCode::Down | KeyCode::Char('j') => {
                 session.select_next();
                 Ok(EditAction::Continue)
+            }
+            KeyCode::Tab => {
+                if let Some(message) = session.complete_selected_path()? {
+                    Ok(EditAction::Message(message))
+                } else {
+                    session.select_next();
+                    Ok(EditAction::Continue)
+                }
             }
             KeyCode::Enter => {
                 if matches!(session.selected_field(), EditField::StorageType) {
@@ -1032,9 +1164,31 @@ fn handle_edit_key(code: KeyCode, cd: &ConfigDir, session: &mut EditSession) -> 
                 let name = session.draft.name.clone();
                 Ok(EditAction::Disconnected(name))
             }
+            KeyCode::Char('l') | KeyCode::Char('L')
+                if matches!(session.selected_field(), EditField::StorageType) =>
+            {
+                session.draft.storage_type = ProviderType::Local;
+                session.ensure_selected_visible();
+                Ok(EditAction::Continue)
+            }
+            KeyCode::Char('o') | KeyCode::Char('O')
+                if matches!(session.selected_field(), EditField::StorageType) =>
+            {
+                session.draft.storage_type = ProviderType::OneDrive;
+                session.ensure_selected_visible();
+                Ok(EditAction::Continue)
+            }
             _ if is_onedrive_auth_key(code) => {
                 let message = authenticate_onedrive_in_terminal(&mut session.draft)?;
                 Ok(EditAction::Message(message))
+            }
+            KeyCode::Backspace => {
+                session.backspace();
+                Ok(EditAction::Continue)
+            }
+            KeyCode::Char(c) => {
+                session.append_char(c);
+                Ok(EditAction::Continue)
             }
             _ => Ok(EditAction::Continue),
         },
@@ -1158,6 +1312,152 @@ enum RowStyle {
     HoveredDisconnected,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RowAction {
+    Connect,
+    Disconnect,
+    Edit,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, Copy)]
+struct MountRowRenderModel {
+    left_offset: u16,
+    shadow_width: u16,
+    row_rect: Rect,
+    right_overflow: u16,
+}
+
+fn mount_row_render_model(
+    available_width: u16,
+    style: RowStyle,
+    _show_buttons: bool,
+) -> MountRowRenderModel {
+    let left_offset = match style {
+        RowStyle::Normal => 0,
+        RowStyle::Disconnected => 1,
+        RowStyle::HoveredConnected | RowStyle::HoveredDisconnected => 2,
+    };
+    let row_rect = bounded_row_rect(Rect::new(0, 0, available_width, 1), left_offset);
+    let right_edge = row_rect.x.saturating_add(row_rect.width);
+    let right_overflow = right_edge.saturating_sub(available_width);
+
+    MountRowRenderModel {
+        left_offset,
+        shadow_width: left_offset,
+        row_rect,
+        right_overflow,
+    }
+}
+
+fn bounded_row_rect(rect: Rect, left_offset: u16) -> Rect {
+    Rect::new(
+        rect.x,
+        rect.y,
+        rect.width.saturating_sub(left_offset),
+        rect.height,
+    )
+}
+
+fn row_button_labels(is_connected: bool) -> (&'static str, &'static str) {
+    if is_connected {
+        ("[ ⇐ ]", "[ ↵ ]")
+    } else {
+        ("[ ⇒ ]", "[ ↵ ]")
+    }
+}
+
+fn row_action_areas(row_rect: Rect, is_connected: bool) -> Option<(Rect, Rect)> {
+    let inner_width = row_rect.width.saturating_sub(2);
+    let inner_x = row_rect.x + 1;
+    let (primary_label, edit_label) = row_button_labels(is_connected);
+    let total_width = primary_label.chars().count() as u16 + 1 + edit_label.chars().count() as u16;
+    if inner_width < total_width {
+        return None;
+    }
+
+    let start_x = inner_x + inner_width - total_width;
+    let primary_rect = Rect::new(
+        start_x,
+        row_rect.y,
+        primary_label.chars().count() as u16,
+        row_rect.height,
+    );
+    let edit_rect = Rect::new(
+        start_x + primary_rect.width + 1,
+        row_rect.y,
+        edit_label.chars().count() as u16,
+        row_rect.height,
+    );
+    Some((primary_rect, edit_rect))
+}
+
+fn hit_test_row_action(row_rect: Rect, column: u16, is_connected: bool) -> Option<RowAction> {
+    let (primary_rect, edit_rect) = row_action_areas(row_rect, is_connected)?;
+    if column >= primary_rect.x && column < primary_rect.x + primary_rect.width {
+        return Some(if is_connected {
+            RowAction::Disconnect
+        } else {
+            RowAction::Connect
+        });
+    }
+    if column >= edit_rect.x && column < edit_rect.x + edit_rect.width {
+        return Some(RowAction::Edit);
+    }
+    None
+}
+
+fn truncate_cell(value: &str, width: u16) -> String {
+    let width = width as usize;
+    if width == 0 {
+        return String::new();
+    }
+
+    let len = value.chars().count();
+    if len <= width {
+        return format!("{value:<width$}");
+    }
+    if width == 1 {
+        return "…".to_owned();
+    }
+
+    let mut result: String = value.chars().take(width - 1).collect();
+    result.push('…');
+    result
+}
+
+fn format_mount_row_text(
+    entry: &ProviderEntry,
+    available_width: u16,
+    show_buttons: bool,
+) -> String {
+    let layout = compute_mount_row_layout(available_width, true, true, show_buttons);
+    let mut segments = vec![truncate_cell(&entry.name, MIN_NAME_WIDTH)];
+
+    if layout.show_path {
+        segments.push(truncate_cell(
+            &entry.config.path.display().to_string(),
+            layout.path_width,
+        ));
+    }
+
+    if layout.show_storage_type {
+        segments.push(truncate_cell(
+            get_storage_type_label(&entry.config.storage),
+            STORAGE_TYPE_WIDTH,
+        ));
+    }
+
+    let mut line = segments.join("  ");
+    if layout.show_buttons {
+        if !line.is_empty() {
+            line.push_str("  ");
+        }
+        line.push_str("[ ⇒ ] [ ↵ ]");
+    }
+    line
+}
+
 fn render_mount_row(
     frame: &mut Frame,
     entry: &ProviderEntry,
@@ -1171,13 +1471,7 @@ fn render_mount_row(
         RowStyle::HoveredConnected | RowStyle::HoveredDisconnected
     );
     let is_connected = entry.is_connected();
-
-    let (displacement, shadow_width) = match style {
-        RowStyle::Normal => (0, 0),
-        RowStyle::Disconnected => (1, 1),
-        RowStyle::HoveredConnected => (2, 2),
-        RowStyle::HoveredDisconnected => (2, 2),
-    };
+    let model = mount_row_render_model(rect.width, style, show_buttons);
 
     let bg_color = if is_hovered {
         COLOR_ROW_BG_HOVERED
@@ -1192,21 +1486,21 @@ fn render_mount_row(
         COLOR_DISCONNECTED
     };
 
-    if shadow_width > 0 {
-        let shadow_rect = Rect::new(
-            rect.x.saturating_sub(shadow_width),
-            rect.y,
-            shadow_width,
-            rect.height,
-        );
+    if model.shadow_width > 0 {
+        let shadow_rect = Rect::new(rect.x, rect.y, model.shadow_width, rect.height);
         frame.render_widget(
-            Paragraph::new(" ".repeat(shadow_width as usize))
+            Paragraph::new(" ".repeat(model.shadow_width as usize))
                 .style(Style::default().bg(COLOR_ROW_3D_SHADOW)),
             shadow_rect,
         );
     }
 
-    let row_rect = Rect::new(rect.x + displacement, rect.y, rect.width, rect.height);
+    let row_rect = Rect::new(
+        rect.x + model.left_offset,
+        rect.y,
+        model.row_rect.width,
+        rect.height,
+    );
     let row_block = Block::default()
         .bg(bg_color)
         .borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT);
@@ -1217,14 +1511,31 @@ fn render_mount_row(
     } else {
         " "
     };
-    let content = format!(
-        "{}{}  {:12}  {:25}  {:10}",
-        keyboard_indicator,
-        status_icon,
-        entry.name,
-        entry.config.path.display(),
-        get_storage_type_label(&entry.config.storage),
+    let content_width = row_rect.width.saturating_sub(2);
+    let button_width = if show_buttons {
+        row_action_areas(row_rect, is_connected)
+            .map(|(primary_rect, edit_rect)| primary_rect.width + edit_rect.width + 1)
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let content_padding = if show_buttons && button_width > 0 {
+        2
+    } else {
+        0
+    };
+    let content = format_mount_row_text(
+        entry,
+        content_width.saturating_sub(button_width + content_padding),
+        false,
     );
+    let content = if content_width > 0 {
+        let prefix = format!("{keyboard_indicator}{status_icon}  ");
+        let line = format!("{prefix}{content}");
+        truncate_cell(&line, content_width)
+    } else {
+        String::new()
+    };
     let text_style = Style::default().fg(status_color);
 
     frame.render_widget(
@@ -1238,22 +1549,17 @@ fn render_mount_row(
     );
 
     if show_buttons {
-        let buttons = if is_connected {
-            "[ ⇐ ] [ ↵ ]"
-        } else {
-            "[ ⇒ ] [ ↵ ]"
-        };
-        frame.render_widget(
-            Paragraph::new(buttons)
-                .style(Style::default().fg(COLOR_BUTTON))
-                .alignment(ratatui::layout::Alignment::Right),
-            Rect::new(
-                row_rect.x + 1,
-                row_rect.y,
-                row_rect.width.saturating_sub(2),
-                row_rect.height,
-            ),
-        );
+        if let Some((primary_rect, edit_rect)) = row_action_areas(row_rect, is_connected) {
+            let (primary_label, edit_label) = row_button_labels(is_connected);
+            frame.render_widget(
+                Paragraph::new(primary_label).style(Style::default().fg(COLOR_BUTTON)),
+                primary_rect,
+            );
+            frame.render_widget(
+                Paragraph::new(edit_label).style(Style::default().fg(COLOR_BUTTON)),
+                edit_rect,
+            );
+        }
     }
 }
 
@@ -1311,8 +1617,29 @@ fn render_add_row(frame: &mut Frame, rect: Rect, is_hovered: bool) {
     );
 }
 
+fn browse_footer_text() -> &'static str {
+    "j/k/↑/↓ select  c connect  d disconnect  ↵ edit  r refresh  q quit"
+}
+
+fn edit_footer_text(is_new: bool) -> String {
+    let save_label = if is_new { "Create" } else { "Save" };
+    format!("[ d Disc. ] [ x ] [ c {save_label} ] [ q Quit ]")
+}
+
+fn unsupported_size_message() -> String {
+    format!(
+        "Terminal size not supported. Minimum supported size is {}x{}.",
+        MIN_TERMINAL_WIDTH, MIN_TERMINAL_HEIGHT
+    )
+}
+
 fn draw_ui(frame: &mut Frame, _cd: &ConfigDir, state: &AppState) {
     let area = frame.area();
+    if !is_supported_size(area) {
+        draw_unsupported_size(frame, area);
+        return;
+    }
+
     let (list_area, footer_area) = if matches!(state.mode, UiMode::Edit(_)) {
         (
             Rect::new(0, 0, area.width, area.height.saturating_sub(4)),
@@ -1340,6 +1667,18 @@ fn draw_ui(frame: &mut Frame, _cd: &ConfigDir, state: &AppState) {
     }
 
     draw_footer(frame, footer_area, state);
+}
+
+fn draw_unsupported_size(frame: &mut Frame, area: Rect) {
+    let block = Block::default().borders(Borders::ALL);
+    let inner = Rect::new(
+        area.x + 1,
+        area.y + area.height.saturating_div(2),
+        area.width.saturating_sub(2),
+        1,
+    );
+    frame.render_widget(block, area);
+    frame.render_widget(Paragraph::new(unsupported_size_message()), inner);
 }
 
 fn draw_main_menu(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -1381,13 +1720,22 @@ fn draw_main_menu(frame: &mut Frame, area: Rect, state: &AppState) {
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, state: &AppState) {
-    let content = state.status.clone();
     let block = Block::default()
         .bg(COLOR_ROW_BG_NORMAL)
         .borders(Borders::TOP);
 
     frame.render_widget(block, area);
-    frame.render_widget(Paragraph::new(content), area);
+    let legend = match state.mode {
+        UiMode::Browse | UiMode::DeleteConfirm { .. } => browse_footer_text(),
+        UiMode::Edit(_) => "",
+    };
+    let legend_area = Rect::new(area.x, area.y, area.width, 1);
+    frame.render_widget(Paragraph::new(legend), legend_area);
+
+    if area.height > 1 && !state.status.is_empty() {
+        let status_area = Rect::new(area.x, area.y + 1, area.width, area.height - 1);
+        frame.render_widget(Paragraph::new(state.status.clone()), status_area);
+    }
 }
 
 fn draw_edit_menu(frame: &mut Frame, session: &EditSession) {
@@ -1423,19 +1771,18 @@ fn draw_edit_menu(frame: &mut Frame, session: &EditSession) {
     }
 
     let is_new = session.original_name.is_none();
-    let save_label = if is_new { "Create" } else { "Save" };
-    let padding = " ".repeat((edit_area.width.saturating_sub(60)) as usize);
-    let button_text = format!(
-        "{}[ ⇑ ] [ ⇓ ] [ d Disc. ] [ x ] [ c {} ]",
-        padding, save_label
-    );
+    let nav_text = "[ ⇑ ] [ ⇓ ]";
+    let action_text = edit_footer_text(is_new);
+    let button_text = format!("{nav_text}  {action_text}");
 
     let block = Block::default()
         .bg(COLOR_ROW_BG_NORMAL)
         .borders(Borders::TOP);
     frame.render_widget(block, button_area);
     frame.render_widget(
-        Paragraph::new(button_text).style(Style::default().fg(COLOR_BUTTON)),
+        Paragraph::new(button_text)
+            .style(Style::default().fg(COLOR_BUTTON))
+            .alignment(ratatui::layout::Alignment::Right),
         button_area,
     );
 }
@@ -1752,6 +2099,112 @@ mod tests {
         }
     }
 
+    #[test]
+    fn terminal_size_support_rejects_smaller_than_80x24() {
+        assert!(!is_supported_size(Rect::new(0, 0, 79, 24)));
+        assert!(!is_supported_size(Rect::new(0, 0, 80, 23)));
+        assert!(is_supported_size(Rect::new(0, 0, 80, 24)));
+    }
+
+    #[test]
+    fn row_layout_drops_path_before_storage_type() {
+        let layout = compute_mount_row_layout(80, true, true, true);
+
+        assert!(layout.show_name);
+        assert!(layout.show_buttons);
+        assert!(layout.path_width <= layout.preferred_path_width);
+    }
+
+    #[test]
+    fn row_layout_can_remove_path_and_storage_type_but_keeps_name_and_buttons() {
+        let layout = compute_mount_row_layout(32, true, true, true);
+
+        assert!(layout.show_name);
+        assert!(layout.show_buttons);
+        assert!(!layout.show_path || !layout.show_storage_type);
+    }
+
+    #[test]
+    fn render_model_uses_left_displacement_for_hovered_rows() {
+        let model = mount_row_render_model(80, RowStyle::HoveredConnected, true);
+
+        assert!(model.left_offset > 0);
+        assert_eq!(model.right_overflow, 0);
+    }
+
+    #[test]
+    fn row_text_truncates_path_before_name() {
+        let line = format_mount_row_text(&local_provider("backup"), 40, true);
+
+        assert!(line.contains("backup"));
+    }
+
+    #[test]
+    fn hovered_row_rect_stays_within_frame_width() {
+        let rect = bounded_row_rect(Rect::new(0, 0, 80, 1), 2);
+
+        assert!(rect.x + rect.width <= 80);
+    }
+
+    #[test]
+    fn browse_footer_contains_full_shortcut_legend() {
+        let footer = browse_footer_text();
+
+        assert!(footer.contains("j"));
+        assert!(footer.contains("r"));
+        assert!(footer.contains("q"));
+    }
+
+    #[test]
+    fn unsupported_size_message_mentions_minimum() {
+        let message = unsupported_size_message();
+
+        assert!(message.contains("80x24"));
+    }
+
+    #[test]
+    fn hit_test_returns_edit_when_click_is_inside_edit_button() {
+        let row_rect = Rect::new(0, 0, 30, 1);
+        let (_, edit_rect) = row_action_areas(row_rect, true).expect("buttons should fit");
+
+        let target = hit_test_row_action(row_rect, edit_rect.x, true);
+
+        assert_eq!(target, Some(RowAction::Edit));
+    }
+
+    #[test]
+    fn hit_test_returns_connect_or_disconnect_for_primary_action_button() {
+        let row_rect = Rect::new(0, 0, 30, 1);
+        let (primary_rect, _) = row_action_areas(row_rect, true).expect("buttons should fit");
+
+        let target = hit_test_row_action(row_rect, primary_rect.x, true);
+
+        assert_eq!(target, Some(RowAction::Disconnect));
+    }
+
+    #[test]
+    fn edit_q_quits_tui() {
+        let (_tmp, cd) = tmp_config_dir();
+        let mut session = EditSession::new_for_add("provider-1".to_owned());
+
+        let action = handle_edit_key(KeyCode::Char('q'), &cd, &mut session).expect("key failed");
+
+        assert!(matches!(action, EditAction::Quit));
+    }
+
+    #[test]
+    fn edit_footer_contains_quit_and_save_shortcuts() {
+        let footer = edit_footer_text(false);
+
+        assert!(footer.contains("q"));
+        assert!(footer.contains("c Save"));
+    }
+
+    #[test]
+    fn edit_field_labels_match_spec_name_field() {
+        assert_eq!(EditField::Name.label(), "name");
+    }
+
     #[derive(Default)]
     struct RecordingConnectApp {
         connected_names: RefCell<Vec<String>>,
@@ -1943,12 +2396,21 @@ mod tests {
     fn authenticate_onedrive_updates_draft_from_application_response() {
         let mut draft = EditDraft::new_empty("demo".to_owned());
         draft.storage_type = ProviderType::OneDrive;
+        let opened = RefCell::new(Vec::new());
 
-        let status = authenticate_onedrive(&mut draft, &FakeAuthApp::success("refresh"))
-            .expect("auth should work");
+        let status = authenticate_onedrive_with_browser(
+            &mut draft,
+            &FakeAuthApp::success("refresh"),
+            |uri: &str| {
+                opened.borrow_mut().push(uri.to_owned());
+                Ok(())
+            },
+        )
+        .expect("auth should work");
 
         assert!(status.contains("refresh token populated"));
         assert_eq!(draft.onedrive_refresh_token, "refresh".to_owned());
+        assert_eq!(opened.borrow().as_slice(), ["https://example.com/device"]);
     }
 
     #[test]
@@ -1959,38 +2421,55 @@ mod tests {
     }
 
     #[test]
-    fn edit_text_requires_enter_before_typing() {
+    fn browse_q_quits() {
+        let (_tmp, cd) = tmp_config_dir();
+        let mut state = AppState {
+            providers: vec![local_provider("alpha")],
+            selected: 0,
+            hovered: 0,
+            is_keyboard_mode: true,
+            status: String::new(),
+            mode: UiMode::Browse,
+        };
+
+        assert!(handle_browse_key(KeyCode::Char('q'), &cd, &mut state).expect("key failed"));
+    }
+
+    #[test]
+    fn browse_escape_does_not_quit() {
+        let (_tmp, cd) = tmp_config_dir();
+        let mut state = AppState {
+            providers: vec![local_provider("alpha")],
+            selected: 0,
+            hovered: 0,
+            is_keyboard_mode: true,
+            status: String::new(),
+            mode: UiMode::Browse,
+        };
+
+        assert!(!handle_browse_key(KeyCode::Esc, &cd, &mut state).expect("key failed"));
+    }
+
+    #[test]
+    fn typing_on_active_edit_field_updates_value_without_enter() {
         let (_tmp, cd) = tmp_config_dir();
         let mut session = EditSession::new_for_add("provider-1".to_owned());
         session.selected_field = EditField::Name;
 
-        let _ = handle_edit_key(KeyCode::Char('j'), &cd, &mut session).expect("key failed");
-        assert_eq!(session.draft.name, "provider-1");
-        assert_eq!(session.selected_field, EditField::Path);
-        assert_eq!(session.mode, EditMode::Navigate);
+        let _ = handle_edit_key(KeyCode::Char('v'), &cd, &mut session).expect("key failed");
 
-        let _ = handle_edit_key(KeyCode::Enter, &cd, &mut session).expect("enter failed");
-        assert_eq!(session.mode, EditMode::TextInput);
-        let _ = handle_edit_key(KeyCode::Char('j'), &cd, &mut session).expect("key failed");
-        assert_eq!(session.draft.path, "j");
-
-        let _ = handle_edit_key(KeyCode::Enter, &cd, &mut session).expect("enter failed");
-        assert_eq!(session.mode, EditMode::Navigate);
+        assert_eq!(session.draft.name, "provider-1v");
     }
 
     #[test]
-    fn storage_type_enter_opens_choice_list() {
+    fn typing_o_on_storage_type_selects_onedrive() {
         let (_tmp, cd) = tmp_config_dir();
         let mut session = EditSession::new_for_add("provider-1".to_owned());
         session.selected_field = EditField::StorageType;
         assert_eq!(session.draft.storage_type, ProviderType::Local);
 
-        let _ = handle_edit_key(KeyCode::Enter, &cd, &mut session).expect("enter failed");
-        assert!(matches!(session.mode, EditMode::StorageTypeChoice { .. }));
-        let _ = handle_edit_key(KeyCode::Down, &cd, &mut session).expect("down failed");
-        let _ = handle_edit_key(KeyCode::Enter, &cd, &mut session).expect("enter failed");
+        let _ = handle_edit_key(KeyCode::Char('o'), &cd, &mut session).expect("key failed");
 
-        assert_eq!(session.mode, EditMode::Navigate);
         assert_eq!(session.draft.storage_type, ProviderType::OneDrive);
     }
 
