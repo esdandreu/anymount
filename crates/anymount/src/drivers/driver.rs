@@ -1,7 +1,8 @@
+#![allow(unused_imports)]
 use super::Result;
 use crate::domain::driver::{DriverConfig, StorageConfig};
 use crate::service::control::messages::ServiceMessage;
-use crate::storages::{LocalStorage, OneDriveConfig};
+use crate::storages;
 use crate::Logger;
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
@@ -34,19 +35,19 @@ pub fn connect_drivers_with_telemetry(
     logger: &(impl Logger + 'static),
     service_tx: Option<Sender<ServiceMessage>>,
 ) -> Result<Drivers> {
-    use super::windows::{cleanup_registry, WindowsDriver};
-    let mut drivers: Vec<Box<dyn Driver>> = Vec::new();
+    use super::windows::{cleanup_registry, WindowsSession};
+    let mut drivers: Vec<Box<dyn Session>> = Vec::new();
     for spec in specs {
+        let storage = storages::new(spec.storage.clone())?;
         match &spec.storage {
             StorageConfig::Local { root } => {
-                let storage = LocalStorage::new(root.clone());
-                let driver = WindowsDriver::connect(
+                let driver = WindowsSession::connect(
                     spec.path.clone(),
                     storage,
                     logger.clone(),
                     service_tx.clone(),
                 )?;
-                drivers.push(Box::new(driver) as Box<dyn Driver>);
+                drivers.push(driver);
             }
             StorageConfig::OneDrive {
                 root,
@@ -56,22 +57,13 @@ pub fn connect_drivers_with_telemetry(
                 client_id,
                 token_expiry_buffer_secs,
             } => {
-                let config = OneDriveConfig {
-                    root: root.clone(),
-                    endpoint: endpoint.clone(),
-                    access_token: access_token.clone(),
-                    refresh_token: refresh_token.clone(),
-                    client_id: client_id.clone(),
-                    token_expiry_buffer_secs: *token_expiry_buffer_secs,
-                };
-                let storage = config.connect()?;
-                let driver = WindowsDriver::connect(
+                let driver = WindowsSession::connect(
                     spec.path.clone(),
                     storage,
                     logger.clone(),
                     service_tx.clone(),
                 )?;
-                drivers.push(Box::new(driver) as Box<dyn Driver>);
+                drivers.push(driver);
             }
         }
     }
@@ -100,9 +92,9 @@ pub fn connect_drivers_with_telemetry(
     let mut sessions: Vec<(std::path::PathBuf, fuser::BackgroundSession)> = Vec::new();
     for spec in specs {
         let path = spec.path.clone();
+        let storage = storages::new(spec.storage.clone())?;
         match &spec.storage {
             StorageConfig::Local { root } => {
-                let storage = LocalStorage::new(root.clone());
                 let (mount_path, session) = mount_storage(path, storage, logger.clone())?;
                 let name = mount_path
                     .file_name()
@@ -129,15 +121,6 @@ pub fn connect_drivers_with_telemetry(
                 client_id,
                 token_expiry_buffer_secs,
             } => {
-                let one_drive_config = OneDriveConfig {
-                    root: root.clone(),
-                    endpoint: endpoint.clone(),
-                    access_token: access_token.clone(),
-                    refresh_token: refresh_token.clone(),
-                    client_id: client_id.clone(),
-                    token_expiry_buffer_secs: *token_expiry_buffer_secs,
-                };
-                let storage = one_drive_config.connect()?;
                 let (mount_path, session) = mount_storage(path, storage, logger.clone())?;
                 let name = mount_path
                     .file_name()
@@ -159,9 +142,9 @@ pub fn connect_drivers_with_telemetry(
         }
     }
     rt.block_on(export_on_dbus(&accounts, logger))?;
-    let drivers: Vec<Box<dyn Driver>> = sessions
+    let drivers: Vec<Box<dyn Session>> = sessions
         .into_iter()
-        .map(|(path, session)| Box::new(LinuxDriver::new(path, session)) as Box<dyn Driver>)
+        .map(|(path, session)| Box::new(LinuxDriver::new(path, session)) as Box<dyn Session>)
         .collect();
     Ok(drivers)
 }
@@ -204,9 +187,9 @@ pub fn connect_drivers_with_telemetry(
             std::fs::create_dir_all(&spec.path)?;
         }
         let mount_path = spec.path.canonicalize()?;
+        let storage = storages::new(spec.storage.clone())?;
         match &spec.storage {
             StorageConfig::Local { root } => {
-                let storage = LocalStorage::new(root.clone());
                 let fs = StorageFilesystem::new_with_cache(
                     storage,
                     Arc::new(NoCacheFsCache::new()),
@@ -229,15 +212,6 @@ pub fn connect_drivers_with_telemetry(
                 client_id,
                 token_expiry_buffer_secs,
             } => {
-                let config = OneDriveConfig {
-                    root: root.clone(),
-                    endpoint: endpoint.clone(),
-                    access_token: access_token.clone(),
-                    refresh_token: refresh_token.clone(),
-                    client_id: client_id.clone(),
-                    token_expiry_buffer_secs: *token_expiry_buffer_secs,
-                };
-                let storage = config.connect()?;
                 let fs = StorageFilesystem::new_with_cache(
                     storage,
                     Arc::new(NoCacheFsCache::new()),
@@ -254,9 +228,9 @@ pub fn connect_drivers_with_telemetry(
             }
         }
     }
-    let drivers: Vec<Box<dyn Driver>> = sessions
+    let drivers: Vec<Box<dyn Session>> = sessions
         .into_iter()
-        .map(|(path, session)| Box::new(FuseDriver::new(path, session)) as Box<dyn Driver>)
+        .map(|(path, session)| Box::new(FuseDriver::new(path, session)) as Box<dyn Session>)
         .collect();
     Ok(drivers)
 }
