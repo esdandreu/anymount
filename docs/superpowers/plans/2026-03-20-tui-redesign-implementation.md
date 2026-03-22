@@ -1,1149 +1,654 @@
 # TUI Redesign Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use
+> superpowers:subagent-driven-development (recommended) or
+> superpowers:executing-plans to implement this plan task-by-task. Steps use
+> checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Implement a complete TUI redesign with datacenter rack aesthetic, 3D row effects for connected/disconnected mounts, and a clean edit menu.
+**Goal:** Make the TUI match the redesigned rack-style spec, including
+`80x24` support, width-safe rendering, real row button interactions, and edit
+screen behavior that matches the written design.
 
-**Architecture:** Rewrite the TUI rendering to use custom row widgets with 3D effects instead of standard ratatui List widgets. Maintain the existing state management (AppState, EditSession) but update UI rendering completely. Use mouse hover tracking via crossterm events.
+**Architecture:** Keep the current TUI state machine in
+`crates/anymount/src/tui/tui.rs`, but introduce explicit layout helpers for
+minimum-size checks, row width budgeting, truncation, and mouse hit-testing.
+Drive the rewrite with tests around pure layout and input logic first, then
+swap the rendering code to use those helpers so the UI cannot render outside
+the frame.
 
-**Tech Stack:** ratatui 0.29, crossterm 0.28
+**Tech Stack:** Rust, ratatui 0.29, crossterm 0.28, cargo test, mise tasks
 
 ---
 
 ## File Structure
 
-- **Modify:** `crates/anymount/src/tui/tui.rs` - Complete UI rewrite
-- **Modify:** `crates/anymount/src/tui/mod.rs` - No changes needed (exports)
-- **Modify:** `crates/anymount/src/tui/error.rs` - Add any new error variants if needed
+- **Modify:** `crates/anymount/src/tui/tui.rs` - add layout helpers, render
+  guardrails, button hit-testing, and spec-compliant input handling
+- **Modify:** `docs/superpowers/specs/2026-03-20-tui-redesign-design.md` - no
+  further changes expected during implementation unless a new ambiguity is
+  found
+
+Keep the implementation in `tui.rs` unless a helper extraction becomes
+necessary to keep functions readable. Do not split files preemptively.
 
 ---
 
-## Task 1: Define Color Constants and Row Types
+## Task 1: Lock In Minimum Terminal Size And Width Budget Rules
 
 **Files:**
-- Modify: `crates/anymount/src/tui/tui.rs:1-50`
+- Modify: `crates/anymount/src/tui/tui.rs`
+- Test: `crates/anymount/src/tui/tui.rs`
 
-- [ ] **Step 1: Add new color constants and row state enum**
+- [ ] **Step 1: Write failing tests for size support and row column priority**
 
-Replace the existing constants around line 35-38:
-
-```rust
-const COLOR_BORDER: Color = Color::Blue;
-const COLOR_HIGHLIGHT: Color = Color::Yellow;
-const COLOR_CONTEXT: Color = Color::Cyan;
-const COLOR_STATUS: Color = Color::Green;
-```
-
-With:
+Add pure tests for:
 
 ```rust
-const COLOR_CONNECTED: Color = Color::Green;
-const COLOR_DISCONNECTED: Color = Color::DarkGray;
-const COLOR_SELECTED: Color = Color::White;
-const COLOR_ROW_BG_NORMAL: Color = Color::Reset;
-const COLOR_ROW_BG_HOVERED: Color = Color::Rgb(30, 40, 60);
-const COLOR_ROW_BG_SELECTED: Color = Color::Rgb(45, 66, 99);
-const COLOR_ROW_3D_SHADOW: Color = Color::DarkGray;
-const COLOR_BUTTON: Color = Color::Cyan;
-const COLOR_BUTTON_TEXT: Color = Color::Black;
-```
+#[test]
+fn terminal_size_support_rejects_smaller_than_80x24() {
+    assert!(!is_supported_size(Rect::new(0, 0, 79, 24)));
+    assert!(!is_supported_size(Rect::new(0, 0, 80, 23)));
+    assert!(is_supported_size(Rect::new(0, 0, 80, 24)));
+}
 
-Add new enum for row connection state (after ProviderEntry around line 44):
+#[test]
+fn row_layout_drops_path_before_storage_type() {
+    let layout = compute_mount_row_layout(80, true, true, true);
 
-```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ConnectionState {
-    Connected,
-    Disconnected,
+    assert!(layout.show_name);
+    assert!(layout.show_buttons);
+    assert!(layout.path_width <= layout.preferred_path_width);
+}
+
+#[test]
+fn row_layout_can_remove_path_and_storage_type_but_keeps_name_and_buttons() {
+    let layout = compute_mount_row_layout(32, true, true, true);
+
+    assert!(layout.show_name);
+    assert!(layout.show_buttons);
+    assert!(!layout.show_path || !layout.show_storage_type);
 }
 ```
 
-- [ ] **Step 2: Simplify - no separate RowState needed**
+- [ ] **Step 2: Run the targeted tests and confirm they fail**
 
-The spec shows keyboard focus and mouse hover use the same row index. The hovered row shows 3D effect. Keyboard vs mouse distinction only affects the `⇅` indicator. We'll use:
-- `hovered` index for both mouse hover and keyboard focus
-- `is_hovered` checks for 3D effect and button display
-- `is_keyboard_focused` (optional) for `⇅` indicator
-
-Remove the RowState struct - we'll compute styles in the render function.
-
-- [ ] **Step 3: Commit**
+Run:
 
 ```bash
-git add crates/anymount/src/tui/tui.rs
-git commit -m "feat(tui): add color constants and row state types for new design"
+cargo test tui::tui::tests::terminal_size_support_rejects_smaller_than_80x24
 ```
 
----
+Expected: FAIL because `is_supported_size` and `compute_mount_row_layout` do
+not exist yet.
 
-## Task 2: Update AppState for Mouse Hover Tracking
+- [ ] **Step 3: Add minimal width-budgeting helpers**
 
-**Files:**
-- Modify: `crates/anymount/src/tui/tui.rs:54-129`
-
-- [ ] **Step 1: Add hovered_index to AppState**
-
-Modify AppState struct (around line 54):
+Implement small pure helpers in `tui.rs`:
 
 ```rust
-#[derive(Debug, Clone)]
-struct AppState {
-    providers: Vec<ProviderEntry>,
-    selected: usize,
-    hovered: usize,
-    status: String,
-    mode: UiMode,
+const MIN_TERMINAL_WIDTH: u16 = 80;
+const MIN_TERMINAL_HEIGHT: u16 = 24;
+
+fn is_supported_size(area: Rect) -> bool {
+    area.width >= MIN_TERMINAL_WIDTH && area.height >= MIN_TERMINAL_HEIGHT
+}
+
+struct MountRowLayout {
+    show_name: bool,
+    show_path: bool,
+    show_storage_type: bool,
+    show_buttons: bool,
+    preferred_path_width: u16,
+    path_width: u16,
 }
 ```
 
-- [ ] **Step 2: Update load method**
+Add width allocation logic that:
+- always reserves buttons and name
+- shrinks path first
+- removes path before storage type
+- removes storage type only after path is exhausted
 
-Modify AppState::load (around line 62) to initialize hovered:
+- [ ] **Step 4: Re-run the targeted tests**
 
-```rust
-Ok(Self {
-    providers,
-    selected: 0,
-    hovered: 0,
-    status: "j↑ select ↓k  c connect  d disconnect  ↵ edit".to_owned(),
-    mode: UiMode::Browse,
-})
+Run:
+
+```bash
+cargo test tui::tui::tests::terminal_size_support_rejects_smaller_than_80x24
+cargo test tui::tui::tests::row_layout_drops_path_before_storage_type
+cargo test tui::tui::tests::row_layout_can_remove_path_and_storage_type_but_keeps_name_and_buttons
 ```
 
-- [ ] **Step 3: Update refresh method to preserve hovered**
-
-Modify AppState::refresh (around line 80):
-
-```rust
-fn refresh<U>(&mut self, use_case: &U) -> Result<()>
-where
-    U: ConfigUseCase,
-{
-    let selected_name = self.selected_name().map(ToOwned::to_owned);
-    let refreshed = Self::load(use_case)?;
-    self.providers = refreshed.providers;
-    self.status = refreshed.status;
-    self.hovered = 0;
-    if let Some(name) = selected_name {
-        if let Some(pos) = self
-            .providers
-            .iter()
-            .position(|provider| provider.name == name)
-        {
-            self.selected = pos;
-            return Ok(());
-        }
-    }
-    self.selected = self.selected.min(self.providers.len().saturating_sub(1));
-    Ok(())
-}
-```
-
-- [ ] **Step 4: Add hovered row methods to AppState**
-
-Modify AppState to add these methods (add after select_prev):
-
-```rust
-fn hovered_name(&self) -> Option<&str> {
-    self.providers
-        .get(self.hovered)
-        .map(|provider| provider.name.as_str())
-}
-
-fn hovered_provider(&self) -> Option<&ProviderEntry> {
-    self.providers.get(self.hovered)
-}
-
-fn select_next(&mut self) {
-    if self.providers.is_empty() {
-        return;
-    }
-    self.hovered = (self.hovered + 1) % (self.providers.len() + 1); // +1 for Add row
-    self.selected = self.hovered;
-}
-
-fn select_prev(&mut self) {
-    if self.providers.is_empty() {
-        return;
-    }
-    if self.hovered == 0 {
-        self.hovered = self.providers.len(); // Jump to Add row
-    } else {
-        self.hovered -= 1;
-    }
-    self.selected = self.hovered;
-}
-
-fn is_add_row(&self) -> bool {
-    self.hovered >= self.providers.len()
-}
-```
+Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add crates/anymount/src/tui/tui.rs
-git commit -m "feat(tui): add hovered tracking and Add row support to AppState"
+git commit -m "test(tui): add terminal size and row layout guards"
 ```
 
 ---
 
-## Task 3: Create Rack Row Rendering
+## Task 2: Make Rack Rows Width-Safe And Spec-Compliant
 
 **Files:**
 - Modify: `crates/anymount/src/tui/tui.rs`
+- Test: `crates/anymount/src/tui/tui.rs`
 
-- [ ] **Step 1: Create RowStyle enum**
+- [ ] **Step 1: Write failing tests for truncation and left displacement**
 
-Add before draw_ui function (around line 1315):
-
-```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RowStyle {
-    Normal,           // Connected, not hovered
-    Disconnected,     // Disconnected, not hovered (slightly pulled out)
-    HoveredConnected,  // Mouse hovered + connected
-    HoveredDisconnected, // Mouse hovered + disconnected
-}
-```
-
-- [ ] **Step 2: Create render_mount_row function**
-
-First, add connection state checking. Add method to ProviderEntry (around line 41):
-
-```rust
-impl ProviderEntry {
-    fn is_connected(&self) -> bool {
-        crate::cli::provider_control::provider_daemon_ready(&self.name)
-    }
-}
-```
-
-Add after RowStyle:
-
-```rust
-fn render_mount_row(
-    frame: &mut Frame,
-    entry: &ProviderEntry,
-    rect: Rect,
-    style: RowStyle,
-    show_buttons: bool,
-) {
-    let is_hovered = matches!(
-        style,
-        RowStyle::HoveredConnected | RowStyle::HoveredDisconnected
-    );
-    let is_connected = entry.is_connected();
-
-    // Per spec: All disconnected rows have 3D effect, hovered rows have more
-    // Calculate 3D effect dimensions
-    let (displacement, shadow_width) = match style {
-        RowStyle::Normal => (0, 0),                     // Connected, not hovered
-        RowStyle::Disconnected => (1, 1),                // Disconnected, not hovered - subtle 3D
-        RowStyle::HoveredConnected => (2, 2),           // Connected, hovered - pronounced 3D
-        RowStyle::HoveredDisconnected => (2, 2),        // Disconnected, hovered - pronounced 3D
-    };
-
-    let bg_color = if is_hovered {
-        COLOR_ROW_BG_HOVERED
-    } else {
-        COLOR_ROW_BG_NORMAL
-    };
-
-    let status_icon = if is_connected { "●" } else { "○" };
-    let status_color = if is_connected { COLOR_CONNECTED } else { COLOR_DISCONNECTED };
-
-    // Shadow area (left side for 3D effect)
-    if shadow_width > 0 {
-        let shadow_rect = Rect::new(
-            rect.x.saturating_sub(shadow_width),
-            rect.y,
-            shadow_width,
-            rect.height,
-        );
-        frame.render_widget(
-            Paragraph::new(" ".repeat(shadow_width as usize))
-                .style(Style::default().bg(COLOR_ROW_3D_SHADOW)),
-            shadow_rect,
-        );
-    }
-
-    // Main row background
-    let row_rect = Rect::new(rect.x + displacement, rect.y, rect.width, rect.height);
-    let row_block = Block::default()
-        .bg(bg_color)
-        .border_bottom(Borders::BOT)
-        .border_left(Borders::LEFT)
-        .border_right(Borders::RIGHT);
-    frame.render_widget(row_block, row_rect);
-
-    // Row content
-    let content = format!(
-        " {}  {:12}  {:25}  {:10}",
-        status_icon,
-        entry.name,
-        entry.config.path.display(),
-        get_storage_type_label(&entry.config.storage),
-    );
-    let text_style = Style::default().fg(status_color);
-
-    frame.render_widget(
-        Paragraph::new(content).style(text_style).alignment(Alignment::Left),
-        row_rect.inner(&ratatui::padding::Padding::new(1, 0, 1, 0)),
-    );
-
-    // Buttons (if hovered)
-    if show_buttons {
-        let buttons = if is_connected {
-            "[ ⇐ ] [ ↵ ]"
-        } else {
-            "[ ⇒ ] [ ↵ ]"
-        };
-        frame.render_widget(
-            Paragraph::new(buttons)
-                .style(Style::default().fg(COLOR_BUTTON))
-                .alignment(Alignment::Right),
-            Rect::new(
-                row_rect.x + 1,
-                row_rect.y,
-                row_rect.width.saturating_sub(2),
-                row_rect.height,
-            ),
-        );
-    }
-}
-
-fn get_storage_type_label(storage: &StorageConfig) -> &'static str {
-    match storage {
-        StorageConfig::Local { .. } => "local",
-        StorageConfig::OneDrive { .. } => "onedrive",
-    }
-}
-```
-
-- [ ] **Step 3: Create render_add_row function**
-
-```rust
-fn render_add_row(
-    frame: &mut Frame,
-    rect: Rect,
-    is_hovered: bool,
-) {
-    let bg_color = if is_hovered {
-        COLOR_ROW_BG_HOVERED
-    } else {
-        COLOR_ROW_BG_NORMAL
-    };
-
-    let row_block = Block::default()
-        .bg(bg_color)
-        .border_bottom(Borders::BOT)
-        .border_left(Borders::LEFT)
-        .border_right(Borders::RIGHT);
-
-    let displacement = if is_hovered { 2 } else { 0 };
-    let shadow_width = if is_hovered { 2 } else { 0 };
-
-    if shadow_width > 0 {
-        let shadow_rect = Rect::new(
-            rect.x.saturating_sub(shadow_width),
-            rect.y,
-            shadow_width,
-            rect.height,
-        );
-        frame.render_widget(
-            Paragraph::new(" ".repeat(shadow_width as usize))
-                .style(Style::default().bg(COLOR_ROW_3D_SHADOW)),
-            shadow_rect,
-        );
-    }
-
-    let row_rect = Rect::new(rect.x + displacement, rect.y, rect.width, rect.height);
-    frame.render_widget(row_block, row_rect);
-
-    let content = if is_hovered {
-        "+                                                  [ ↵ Add ]"
-    } else {
-        "+"
-    };
-
-    frame.render_widget(
-        Paragraph::new(content)
-            .style(Style::default().fg(COLOR_BUTTON))
-            .alignment(Alignment::Left),
-        row_rect.inner(&ratatui::padding::Padding::new(1, 0, 1, 0)),
-    );
-}
-```
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add crates/anymount/src/tui/tui.rs
-git commit -m "feat(tui): add rack row rendering functions with 3D effect"
-```
-
----
-
-## Task 4: Rewrite Main Menu Rendering
-
-**Files:**
-- Modify: `crates/anymount/src/tui/tui.rs:1318-1420`
-
-- [ ] **Step 1: Rewrite draw_ui for main menu**
-
-Replace the entire draw_ui function content with the new rack-style layout:
-
-```rust
-fn draw_ui(frame: &mut Frame, cd: &ConfigDir, state: &AppState) {
-    let area = frame.area();
-    let (list_area, footer_area) = if matches!(state.mode, UiMode::Edit(_)) {
-        (
-            Rect::new(0, 0, area.width, area.height.saturating_sub(4)),
-            Rect::new(0, area.height.saturating_sub(4), area.width, 4),
-        )
-    } else {
-        (
-            Rect::new(0, 0, area.width, area.height.saturating_sub(2)),
-            Rect::new(0, area.height.saturating_sub(2), area.width, 2),
-        )
-    };
-
-    match &state.mode {
-        UiMode::Browse => {
-            draw_main_menu(frame, list_area, state);
-        }
-        UiMode::Edit(_) | UiMode::DeleteConfirm { .. } => {
-            draw_main_menu(frame, list_area, state);
-            if let UiMode::Edit(session) = &state.mode {
-                draw_edit_menu(frame, session);
-            } else if let UiMode::DeleteConfirm { name } = &state.mode {
-                draw_delete_dialog(frame, name);
-            }
-        }
-    }
-
-    draw_footer(frame, footer_area, state);
-}
-
-fn draw_main_menu(frame: &mut Frame, area: Rect, state: &AppState) {
-    let row_height = 1;
-    let mut y = area.y;
-
-    for (i, entry) in state.providers.iter().enumerate() {
-        let is_hovered = i == state.hovered;
-        let is_connected = entry.is_connected();
-
-        // Determine row style based on hover and connection state
-        let style = if is_hovered {
-            if is_connected {
-                RowStyle::HoveredConnected
-            } else {
-                RowStyle::HoveredDisconnected
-            }
-        } else {
-            if is_connected {
-                RowStyle::Normal // connected, not hovered
-            } else {
-                RowStyle::Disconnected // disconnected, not hovered
-            }
-        };
-
-        let rect = Rect::new(area.x, y, area.width, row_height);
-        render_mount_row(frame, entry, rect, style, is_hovered);
-        y += row_height;
-    }
-
-    // Add row
-    let add_rect = Rect::new(area.x, y, area.width, row_height);
-    render_add_row(frame, add_rect, state.is_add_row());
-}
-
-fn draw_footer(frame: &mut Frame, area: Rect, state: &AppState) {
-    let content = state.status.clone();
-    let block = Block::default()
-        .bg(COLOR_ROW_BG_NORMAL)
-        .borders(Borders::TOP);
-
-    frame.render_widget(Paragraph::new(content), area);
-}
-```
-
-Note: The `⇅` keyboard indicator is **required per spec** - it shows when keyboard is used for navigation.
-This requires explicit steps - see Task 4 Step 3 below.
-
-Also note: Storage type field visibility (show local vs onedrive fields) is already handled by the existing `EditDraft::field_active` and `visible_fields` methods in the codebase - no changes needed for this feature.
-
-- [ ] **Step 3: Add is_keyboard_mode tracking**
-
-In Task 2, also add to AppState:
-```rust
-struct AppState {
-    // ... existing fields ...
-    is_keyboard_mode: bool,
-}
-```
-
-Initialize in `AppState::load`:
-```rust
-is_keyboard_mode: true, // Default to keyboard mode
-```
-
-Set to `false` when mouse moves (in `handle_mouse_event`):
-```rust
-state.is_keyboard_mode = false;
-```
-
-Set to `true` when keyboard used (in `handle_browse_key`):
-```rust
-KeyCode::Down | KeyCode::Char('j') | KeyCode::Up | KeyCode::Char('k') => {
-    state.is_keyboard_mode = true;
-    state.select_next(); // or select_prev()
-    Ok(false)
-}
-```
-
-Update `render_mount_row` to accept and display `⇅`:
-```rust
-fn render_mount_row(
-    // ... existing params ...
-    is_keyboard_mode: bool,
-) {
-    // Show ⇅ before status icon when keyboard mode
-    let keyboard_indicator = if is_keyboard_mode && show_buttons { "⇅" } else { " " };
-    let content = format!(
-        "{}{}  {:12}  {:25}  {:10}",
-        keyboard_indicator,
-        status_icon,
-        // ...
-    );
-}
-```
-
-Pass the flag from `draw_main_menu`:
-```rust
-render_mount_row(frame, entry, rect, style, is_hovered, state.is_keyboard_mode);
-```
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add crates/anymount/src/tui/tui.rs
-git commit -m "feat(tui): add is_keyboard_mode tracking for ⇅ indicator"
-```
-
----
-
-## Task 5: Implement Mouse Hover Detection
-
-**Files:**
-- Modify: `crates/anymount/src/tui/tui.rs:946-1111`
-
-- [ ] **Step 1: Update handle_mouse_event**
-
-Replace the current mouse handling with hover detection:
-
-```rust
-fn handle_mouse_event(
-    terminal: &mut DefaultTerminal,
-    state: &mut AppState,
-    mouse: MouseEvent,
-) -> Result<()> {
-    if matches!(state.mode, UiMode::Edit(_)) {
-        return Ok(());
-    }
-
-    let size = terminal.size().map_err(|source| Error::Terminal {
-        operation: "read terminal size",
-        source,
-    })?;
-    let list_area = Rect::new(0, 0, size.width, size.height.saturating_sub(2));
-
-    match mouse.kind {
-        MouseEventKind::Moved(_, _) | MouseEventKind::Dragging(_, _) => {
-            let row = (mouse.row as usize).saturating_sub(list_area.y as usize);
-            if row <= state.providers.len() {
-                state.hovered = row;
-            }
-        }
-        MouseEventKind::Down(MouseButton::Left) => {
-            let row = (mouse.row as usize).saturating_sub(list_area.y as usize);
-            if row < state.providers.len() {
-                state.hovered = row;
-                state.selected = row;
-                // Trigger edit
-                let provider = state.selected_provider().cloned();
-                if let Some(p) = provider {
-                    state.mode = UiMode::Edit(EditSession::new_for_edit(&p));
-                }
-            } else if row == state.providers.len() {
-                // Add row
-                let default_name = suggest_new_provider_name(state);
-                state.mode = UiMode::Edit(EditSession::new_for_add(default_name));
-            }
-        }
-        _ => {}
-    }
-
-    Ok(())
-}
-```
-
-- [ ] **Step 2: Update handle_browse_key for c/d shortcuts**
-
-Modify handle_browse_key around line 1113 to add c/d handling:
-
-```rust
-fn handle_browse_key(code: KeyCode, cd: &ConfigDir, state: &mut AppState) -> Result<bool> {
-    match code {
-        KeyCode::Char('q') | KeyCode::Esc => Ok(true),
-        KeyCode::Down | KeyCode::Char('j') => {
-            state.select_next();
-            Ok(false)
-        }
-        KeyCode::Up | KeyCode::Char('k') => {
-            state.select_prev();
-            Ok(false)
-        }
-        KeyCode::Char('c') => {
-            // Connect
-            match connect_selected_provider_for_config(cd, state) {
-                Ok(Some(name)) => state.status = format!("Connected '{name}'"),
-                Ok(None) => state.status = "No mount selected".to_owned(),
-                Err(e) => state.status = format!("Connect failed: {e}"),
-            }
-            Ok(false)
-        }
-        KeyCode::Char('d') => {
-            // Disconnect
-            match disconnect_selected_provider(cd, state) {
-                Ok(Some(name)) => state.status = format!("Disconnected '{name}'"),
-                Ok(None) => state.status = "No mount selected".to_owned(),
-                Err(e) => state.status = format!("Disconnect failed: {e}"),
-            }
-            Ok(false)
-        }
-        KeyCode::Char('r') => {
-            match refresh_state(cd, state) {
-                Ok(()) => state.status = "Refreshed mount list".to_owned(),
-                Err(e) => state.status = format!("Refresh failed: {e}"),
-            }
-            Ok(false)
-        }
-        // Note: 'a' shortcut removed - per spec, only Enter on Add row adds new mount
-        KeyCode::Char('e') | KeyCode::Enter => {
-            if state.is_add_row() {
-                let default_name = suggest_new_provider_name(state);
-                state.mode = UiMode::Edit(EditSession::new_for_add(default_name));
-                state.status = "Adding new mount".to_owned();
-            } else if let Some(provider) = state.selected_provider() {
-                state.mode = UiMode::Edit(EditSession::new_for_edit(provider));
-                state.status = "Editing mount".to_owned();
-            } else {
-                state.status = "No mount selected".to_owned();
-            }
-            Ok(false)
-        }
-        _ => Ok(false),
-    }
-}
-```
-
-- [ ] **Step 3: Add disconnect function**
-
-Add after connect_all_providers (around line 1584):
-
-```rust
-fn disconnect_selected_provider<U>(use_case: &U, state: &AppState) -> Result<Option<String>>
-where
-    U: ConnectUseCase,
-{
-    let Some(name) = state.selected_name() else {
-        return Ok(None);
-    };
-    let name = name.to_owned();
-    run_disconnect(use_case, Some(name.clone()))?;
-    Ok(Some(name))
-}
-
-fn run_disconnect<U>(use_case: &U, name: Option<String>) -> Result<()>
-where
-    U: ConnectUseCase,
-{
-    if let Some(name) = name {
-        use_case.disconnect_name(&name).map_err(Error::from)
-    } else {
-        Ok(())
-    }
-}
-```
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add crates/anymount/src/tui/tui.rs
-git commit -m "feat(tui): implement mouse hover and connect/disconnect shortcuts"
-```
-
----
-
-## Task 6: Rewrite Edit Menu Rendering
-
-**Files:**
-- Modify: `crates/anymount/src/tui/tui.rs`
-
-- [ ] **Step 1: Add draw_edit_menu function**
-
-Add after draw_footer:
-
-```rust
-fn draw_edit_menu(frame: &mut Frame, session: &EditSession) {
-    let size = frame.area();
-    let edit_area = Rect::new(0, 0, size.width, size.height.saturating_sub(2));
-    let button_area = Rect::new(0, size.height.saturating_sub(2), size.width, 2);
-
-    // Draw fields
-    let visible_fields = session.draft.visible_fields();
-    let mut y = edit_area.y + 1;
-
-    for field in &visible_fields {
-        let is_active = *field == session.selected_field();
-        let value = session.draft.field_value(*field);
-        let shown = if value.is_empty() {
-            "<unset>".to_owned()
-        } else {
-            value
-        };
-
-        let bg = if is_active { COLOR_ROW_BG_SELECTED } else { COLOR_ROW_BG_NORMAL };
-        let cursor = if is_active { "█" } else { "" };
-        let content = format!("  {:25}  {}{}", field.label(), shown, cursor);
-
-        let rect = Rect::new(edit_area.x, y, edit_area.width, 1);
-        let block = Block::default().bg(bg);
-        frame.render_widget(Paragraph::new(content), rect);
-        y += 1;
-    }
-
-    // Draw buttons in bottom-right per spec
-    // Buttons: [ ⇑ ] [ ⇓ ] [ d Disc. ] [ x ] [ c Save ] or [ c Create ] for new mounts
-    let is_new = session.original_name.is_none();
-    let save_label = if is_new { "Create" } else { "Save" };
-    let padding = " ".repeat((edit_area.width.saturating_sub(60)) as usize);
-    let button_text = format!(
-        "{}[ ⇑ ] [ ⇓ ] [ d Disc. ] [ x ] [ c {} ]",
-        padding,
-        save_label
-    );
-
-    let block = Block::default()
-        .bg(COLOR_ROW_BG_NORMAL)
-        .border_top(Borders::TOP);
-    frame.render_widget(Paragraph::new(button_text).style(Style::default().fg(COLOR_BUTTON)), button_area);
-}
-```
-
-- [ ] **Step 2: Update help_lines for edit mode**
-
-Modify help_lines around line 1422:
-
-```rust
-fn help_lines(state: &AppState) -> Vec<Line<'static>> {
-    match &state.mode {
-        UiMode::Browse => vec![
-            Line::from("j↑ select ↓k  c connect  d disconnect  ↵ edit"),
-        ],
-        UiMode::Edit(ref session) => {
-            vec![Line::from(
-                "j↑ ⇓↓ select  type to edit  Tab complete  Esc back  c save  d disconnect  x delete",
-            )]
-        }
-        UiMode::ConfirmDelete => vec![
-            Line::from("Delete confirmation: y confirm  n/Esc cancel"),
-        ],
-    }
-}
-```
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add crates/anymount/src/tui/tui.rs
-git commit -m "feat(tui): rewrite edit menu with clean field list"
-```
-
----
-
-## Task 7: Add Delete Confirmation Dialog
-
-**Files:**
-- Modify: `crates/anymount/src/tui/tui.rs`
-
-- [ ] **Step 1: Add DeleteConfirm variant to UiMode with name tracking**
-
-```rust
-#[derive(Debug, Clone)]
-enum UiMode {
-    Browse,
-    Edit(EditSession),
-    DeleteConfirm { name: String },
-}
-```
-
-- [ ] **Step 2: Add draw_delete_dialog function**
-
-Add after draw_edit_menu:
-
-```rust
-fn draw_delete_dialog(frame: &mut Frame, name: &str) {
-    let size = frame.area();
-    let dialog_width = 50;
-    let dialog_height = 5;
-    let x = (size.width.saturating_sub(dialog_width)) / 2;
-    let y = (size.height.saturating_sub(dialog_height)) / 2;
-
-    let dialog_rect = Rect::new(x, y, dialog_width, dialog_height);
-
-    let content = format!(
-        "  Delete '{}'?  [ y ]  [ n ]",
-        name
-    );
-
-    let block = Block::default()
-        .bg(COLOR_ROW_BG_SELECTED)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(COLOR_BUTTON));
-
-    frame.render_widget(Clear, dialog_rect);
-    frame.render_widget(
-        Paragraph::new(content)
-            .style(Style::default().fg(COLOR_BUTTON_TEXT))
-            .block(block),
-        dialog_rect,
-    );
-}
-```
-
-Note: Import `Clear` widget from ratatui::widgets.
-
-- [ ] **Step 3: Update handle_edit_key for x key**
-
-Add to handle_edit_key in EditMode::Navigate:
-
-```rust
-KeyCode::Char('x') => {
-    let name = session.draft.name.clone();
-    state.mode = UiMode::DeleteConfirm { name };
-    Ok(EditAction::Continue)
-}
-```
-
-- [ ] **Step 4: Add handle_delete_confirm_key**
-
-```rust
-fn handle_delete_confirm_key(code: KeyCode, cd: &ConfigDir, state: &mut AppState) -> Result<bool> {
-    let name = if let UiMode::DeleteConfirm { ref name } = state.mode {
-        name.clone()
-    } else {
-        return Ok(false);
-    };
-
-    match code {
-        KeyCode::Char('y') => {
-            remove_provider(cd, &name)?;
-            state.mode = UiMode::Browse;
-            refresh_state(cd, state)?;
-            state.status = format!("Deleted '{}'", name);
-            Ok(false)
-        }
-        KeyCode::Char('n') | KeyCode::Esc => {
-            state.mode = UiMode::Browse;
-            state.status = "Delete canceled".to_owned();
-            Ok(false)
-        }
-        _ => Ok(false),
-    }
-}
-```
-
-- [ ] **Step 5: Update run_loop to handle DeleteConfirm mode**
-
-Modify run_loop:
-
-```rust
-let should_quit = match state.mode {
-    UiMode::Browse => handle_browse_key(key.code, cd, state)?,
-    UiMode::DeleteConfirm { .. } => handle_delete_confirm_key(key.code, cd, state)?,
-    UiMode::Edit(_) => {
-        let action = {
-            let UiMode::Edit(session) = &mut state.mode else {
-                unreachable!()
-            };
-            handle_edit_key(key.code, cd, session)?
-        };
-        match action {
-            EditAction::Continue => {}
-            EditAction::Cancel => {
-                state.mode = UiMode::Browse;
-                state.status = "Edit canceled".to_owned();
-            }
-            EditAction::Saved(name) => {
-                state.mode = UiMode::Browse;
-                refresh_state(cd, state)?;
-                state.status = format!("Saved mount '{}'", name);
-            }
-            EditAction::Deleted => {
-                state.mode = UiMode::Browse;
-            }
-            EditAction::Message(message) => {
-                state.status = message;
-            }
-        }
-        false
-    }
-};
-```
-
-- [ ] **Step 6: Add actions to EditAction enum**
-
-```rust
-enum EditAction {
-    Continue,
-    Cancel,
-    Saved(String),
-    Deleted,
-    Disconnected(String),
-    Message(String),
-}
-```
-
-- [ ] **Step 7: Update handle_edit_key for x and d**
-
-In handle_edit_key EditMode::Navigate:
-
-```rust
-KeyCode::Char('x') => {
-    Ok(EditAction::Deleted)
-}
-KeyCode::Char('d') => {
-    // Disconnect the mount being edited, return to browse mode
-    let name = session.draft.name.clone();
-    Ok(EditAction::Disconnected(name))
-}
-```
-
-- [ ] **Step 8: Update run_loop to handle Disconnected action**
-
-In the Edit match arm:
-
-```rust
-EditAction::Disconnected(name) => {
-    match disconnect_provider(cd, &name) {
-        Ok(()) => {
-            state.mode = UiMode::Browse;
-            state.status = format!("Disconnected '{}'", name);
-        }
-        Err(e) => {
-            state.status = format!("Disconnect failed: {}", e);
-        }
-    }
-}
-```
-
-Also add the disconnect_provider helper:
-
-```rust
-fn disconnect_provider(cd: &ConfigDir, name: &str) -> Result<()> {
-    suspend_terminal(|| {
-        let logger = TracingLogger::new();
-        let repository = TuiConnectRepository::new(cd.clone());
-        let control = TuiServiceControl;
-        let launcher = ProcessServiceLauncher::new(logger);
-        let app = ConnectApplication::new(cd.dir(), &repository, &control, &launcher);
-        app.disconnect_name(name).map_err(Error::from)
-    })
-}
-```
-
-- [ ] **Step 9: Commit**
-
-```bash
-git add crates/anymount/src/tui/tui.rs
-git commit -m "feat(tui): add delete confirmation dialog and disconnect action"
-```
-
----
-
-## Task 8: Update Tests for New Behavior
-
-**Files:**
-- Modify: `crates/anymount/src/tui/tui.rs:1764-2199`
-
-- [ ] **Step 1: Update existing tests for new AppState structure**
-
-Search for tests that construct AppState directly:
-```bash
-grep -n "AppState {" crates/anymount/src/tui/tui.rs
-```
-
-Update each to include `hovered: 0` and `is_keyboard_mode: true`:
-- Tests around line 1879, 1894, 1912, 1923, 2062
-
-- [ ] **Step 2: Add tests for new hover behavior**
+Add tests for pure formatting helpers:
 
 ```rust
 #[test]
-fn select_next_wraps_to_start() {
-    let mut state = AppState {
-        providers: vec![local_provider("a"), local_provider("b")],
-        selected: 1,
-        hovered: 1,
-        status: String::new(),
-        mode: UiMode::Browse,
-    };
+fn render_model_uses_left_displacement_for_hovered_rows() {
+    let model = mount_row_render_model(80, RowStyle::HoveredConnected, true);
+    assert!(model.left_offset > 0);
+    assert_eq!(model.right_overflow, 0);
+}
 
-    state.select_next();
-
-    assert_eq!(state.selected, 0);
-    assert_eq!(state.hovered, 0);
+#[test]
+fn row_text_truncates_path_before_name() {
+    let line = format_mount_row_text(&sample_provider(), 40, true);
+    assert!(line.contains("backup"));
 }
 ```
 
-- [ ] **Step 3: Run tests**
+- [ ] **Step 2: Run the targeted tests and confirm they fail**
+
+Run:
 
 ```bash
-cargo test -p anymount tui
+cargo test tui::tui::tests::render_model_uses_left_displacement_for_hovered_rows
 ```
 
-- [ ] **Step 4: Commit**
+Expected: FAIL because the helpers do not exist yet.
+
+- [ ] **Step 3: Replace direct row formatting with bounded helpers**
+
+Implement helpers that:
+- compute the visible row rect after left displacement
+- reduce width when displacement is applied instead of keeping the original
+  width
+- clip all draw areas to the frame
+- format columns using the width budget from Task 1
+- truncate with ellipsis where needed
+
+Update `render_mount_row` and `render_add_row` to use these helpers and remove
+the current `rect.x + displacement, rect.width` overflow behavior.
+
+- [ ] **Step 4: Add a focused regression test for the current crash cause**
+
+Add a test that exercises the helper with an `80`-column area and hovered row
+state and asserts that the computed drawing rect remains within the frame:
+
+```rust
+#[test]
+fn hovered_row_rect_stays_within_frame_width() {
+    let rect = bounded_row_rect(Rect::new(0, 0, 80, 1), 2);
+    assert!(rect.x + rect.width <= 80);
+}
+```
+
+- [ ] **Step 5: Run all TUI unit tests**
+
+Run:
+
+```bash
+cargo test tui::tui::tests:: -- --nocapture
+```
+
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add crates/anymount/src/tui/tui.rs
-git commit -m "test(tui): update and add tests for new TUI behavior"
+git commit -m "feat(tui): make rack row rendering width-safe"
 ```
 
 ---
 
-## Task 9: Add OneDrive OAuth Authentication
+## Task 3: Add Unsupported-Size Screen And Stable Footer
 
 **Files:**
 - Modify: `crates/anymount/src/tui/tui.rs`
+- Test: `crates/anymount/src/tui/tui.rs`
 
-- [ ] **Step 1: Update handle_edit_key for OneDrive auth keys**
+- [ ] **Step 1: Write failing tests for footer text and unsupported-size mode**
 
-In handle_edit_key EditMode::Navigate, add:
+Add tests for pure text helpers:
 
 ```rust
-_ if is_onedrive_auth_key(code) => {
-    let message = authenticate_onedrive_in_terminal(&mut session.draft)?;
-    Ok(EditAction::Message(message))
+#[test]
+fn browse_footer_contains_full_shortcut_legend() {
+    let footer = browse_footer_text();
+    assert!(footer.contains("j"));
+    assert!(footer.contains("r"));
+    assert!(footer.contains("q"));
+}
+
+#[test]
+fn unsupported_size_message_mentions_minimum() {
+    let message = unsupported_size_message();
+    assert!(message.contains("80x24"));
 }
 ```
 
-Note: `is_onedrive_auth_key` and `authenticate_onedrive_in_terminal` already exist in the codebase.
+- [ ] **Step 2: Run the targeted tests and confirm they fail**
 
-- [ ] **Step 2: Update edit menu footer text**
+Run:
 
-Modify help_lines to include OneDrive auth hint when editing OneDrive mount:
-
-```rust
-UiMode::Edit(ref session) => {
-    let mut line = String::from("j↑ ⇓↓ select  type to edit  Tab complete  Esc back  c save  d disconnect  x delete");
-    if matches!(session.draft.storage_type, ProviderType::OneDrive) {
-        line.push_str("  l/o OneDrive auth");
-    }
-    vec![Line::from(line)]
-}
+```bash
+cargo test tui::tui::tests::browse_footer_contains_full_shortcut_legend
 ```
 
-- [ ] **Step 3: Commit**
+Expected: FAIL because the helpers do not exist yet.
+
+- [ ] **Step 3: Add explicit unsupported-size rendering**
+
+Update `draw_ui` to:
+- check `is_supported_size(frame.area())` first
+- render a dedicated unsupported-size screen when too small
+- skip normal main/edit rendering in that state
+
+Add stable footer helpers so browse and edit modes have deterministic shortcut
+legends. Keep status feedback separate from the legend.
+
+- [ ] **Step 4: Re-run the targeted tests**
+
+Run:
+
+```bash
+cargo test tui::tui::tests::browse_footer_contains_full_shortcut_legend
+cargo test tui::tui::tests::unsupported_size_message_mentions_minimum
+```
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
 
 ```bash
 git add crates/anymount/src/tui/tui.rs
-git commit -m "feat(tui): update OneDrive auth hints in edit menu"
+git commit -m "feat(tui): add minimum terminal guard and stable footer"
 ```
 
 ---
 
-## Task 10: Add Path Completion for Path Fields
+## Task 4: Make Main-Menu Buttons Real Mouse Targets
 
 **Files:**
 - Modify: `crates/anymount/src/tui/tui.rs`
+- Test: `crates/anymount/src/tui/tui.rs`
 
-- [ ] **Step 1: Ensure Tab completion works in text input mode**
+- [ ] **Step 1: Write failing tests for button hit-testing**
 
-The `complete_selected_path` function already exists and correctly handles path fields (`EditField::Path` and `EditField::LocalRoot`). Ensure it's called in EditMode::TextInput:
+Add a small hit-test enum and tests:
 
 ```rust
-KeyCode::Tab => {
-    if let Some(message) = session.complete_selected_path()? {
-        Ok(EditAction::Message(message))
-    } else {
-        Ok(EditAction::Continue)
-    }
+#[test]
+fn hit_test_returns_edit_when_click_is_inside_edit_button() {
+    let target = hit_test_row_action(sample_row_geometry(), 72);
+    assert_eq!(target, Some(RowAction::Edit));
+}
+
+#[test]
+fn hit_test_returns_connect_or_disconnect_for_primary_action_button() {
+    let target = hit_test_row_action(sample_row_geometry(), 64);
+    assert_eq!(target, Some(RowAction::Disconnect));
 }
 ```
 
-- [ ] **Step 2: Commit**
+- [ ] **Step 2: Run the targeted tests and confirm they fail**
+
+Run:
+
+```bash
+cargo test tui::tui::tests::hit_test_returns_edit_when_click_is_inside_edit_button
+```
+
+Expected: FAIL because hit-testing does not exist yet.
+
+- [ ] **Step 3: Implement row button geometry and mouse dispatch**
+
+Add pure helpers for:
+- visible button labels
+- button rectangles inside a row
+- click-to-action mapping
+
+Update `handle_mouse_event` so left-click:
+- edits only when the edit button is clicked
+- connects or disconnects when the primary action button is clicked
+- selects the row when the click lands elsewhere in the row
+- adds a new mount when the add-row button is clicked
+
+- [ ] **Step 4: Run focused tests plus a connect/disconnect behavior test**
+
+Run:
+
+```bash
+cargo test tui::tui::tests::hit_test_returns_edit_when_click_is_inside_edit_button
+cargo test tui::tui::tests::hit_test_returns_connect_or_disconnect_for_primary_action_button
+```
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
 
 ```bash
 git add crates/anymount/src/tui/tui.rs
-git commit -m "feat(tui): ensure path completion works in edit menu"
+git commit -m "feat(tui): add real mouse hit-testing for row buttons"
 ```
 
 ---
 
-## Task 11: Integration Testing
+## Task 5: Align Browse-Key Behavior With The Spec
 
-- [ ] **Step 1: Build and run TUI**
+**Files:**
+- Modify: `crates/anymount/src/tui/tui.rs`
+- Test: `crates/anymount/src/tui/tui.rs`
 
-```bash
-cargo build -p anymount
-cargo run -p anymount -- tui
+- [ ] **Step 1: Write failing tests for quit and add-row behavior**
+
+Add tests around `handle_browse_key`:
+
+```rust
+#[test]
+fn browse_q_quits() {
+    assert!(handle_browse_key(KeyCode::Char('q'), &cd, &mut state).unwrap());
+}
+
+#[test]
+fn browse_escape_does_not_quit() {
+    assert!(!handle_browse_key(KeyCode::Esc, &cd, &mut state).unwrap());
+}
 ```
 
-- [ ] **Step 2: Manual testing checklist**
-- [ ] Main menu displays with rack aesthetic
-- [ ] Rows show connected (●) / disconnected (○) status
-- [ ] Hovering shows 3D displacement effect
-- [ ] Keyboard navigation works (j/k)
-- [ ] c key connects, d key disconnects
-- [ ] Enter opens edit menu
-- [ ] Edit menu shows fields with active highlighting
-- [ ] Navigation in edit menu works
-- [ ] Save (c) works
-- [ ] Delete (x) shows confirmation dialog
-- [ ] Escape returns to main menu
-- [ ] OneDrive auth (l/o) works when editing OneDrive mounts
-- [ ] Path completion (Tab) works for path fields
+- [ ] **Step 2: Run the targeted tests and confirm they fail**
 
-- [ ] **Step 3: Run all tests**
+Run:
 
 ```bash
-cargo test -p anymount
+cargo test tui::tui::tests::browse_escape_does_not_quit
 ```
 
-- [ ] **Step 4: Commit final changes**
+Expected: FAIL because `Esc` currently quits browse mode.
+
+- [ ] **Step 3: Update browse-mode key handling**
+
+Make `handle_browse_key` match the spec:
+- `q` quits
+- `Esc` does nothing in browse mode
+- `j/k` and arrows move selection
+- `Enter` edits selected row or opens add row
+- `c`, `d`, `r` continue to work
+
+- [ ] **Step 4: Re-run the targeted tests**
+
+Run:
 
 ```bash
-git add -A
-git commit -m "feat(tui): complete TUI redesign implementation"
+cargo test tui::tui::tests::browse_q_quits
+cargo test tui::tui::tests::browse_escape_does_not_quit
+```
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/anymount/src/tui/tui.rs
+git commit -m "fix(tui): align browse mode shortcuts with spec"
 ```
 
 ---
 
-## Summary
+## Task 6: Make Edit Fields Directly Editable
 
-| Task | Description |
-|------|-------------|
-| 1 | Define colors and row state types |
-| 2 | Update AppState for hover tracking |
-| 3 | Create rack row rendering functions |
-| 4 | Rewrite main menu rendering |
-| 5 | Implement mouse hover detection |
-| 6 | Rewrite edit menu rendering |
-| 7 | Add delete confirmation dialog |
-| 8 | Update tests |
-| 9 | Add OneDrive OAuth authentication |
-| 10 | Add path completion for path fields |
-| 11 | Integration testing |
+**Files:**
+- Modify: `crates/anymount/src/tui/tui.rs`
+- Test: `crates/anymount/src/tui/tui.rs`
+
+- [ ] **Step 1: Replace the old edit-entry test with spec-compliant failing tests**
+
+Remove or rewrite the current test that asserts Enter is required before
+typing. Add tests like:
+
+```rust
+#[test]
+fn typing_on_active_edit_field_updates_value_without_enter() {
+    let mut session = EditSession::new_for_add("provider-1".to_owned());
+    session.selected_field = EditField::Name;
+
+    let _ = handle_edit_key(KeyCode::Char('x'), &cd, &mut session).unwrap();
+    assert_eq!(session.draft.name, "provider-1x");
+}
+
+#[test]
+fn edit_q_quits_tui() {
+    assert_eq!(handle_edit_key(KeyCode::Char('q'), &cd, &mut session).unwrap(),
+        EditAction::Quit);
+}
+```
+
+- [ ] **Step 2: Run the targeted tests and confirm they fail**
+
+Run:
+
+```bash
+cargo test tui::tui::tests::typing_on_active_edit_field_updates_value_without_enter
+```
+
+Expected: FAIL because edit mode still requires `Enter` before typing and
+there is no `Quit` edit action.
+
+- [ ] **Step 3: Simplify edit input modes**
+
+Refactor `EditMode` and `handle_edit_key` so:
+- text fields accept typing immediately while selected
+- `Backspace` edits immediately
+- `Tab` performs path completion for path fields, otherwise moves next
+- `Esc` cancels the edit session
+- `q` returns a new `EditAction::Quit`
+
+Keep any special handling needed for storage type separate from free-text
+fields.
+
+- [ ] **Step 4: Re-run the targeted tests**
+
+Run:
+
+```bash
+cargo test tui::tui::tests::typing_on_active_edit_field_updates_value_without_enter
+```
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/anymount/src/tui/tui.rs
+git commit -m "feat(tui): make edit fields directly editable"
+```
+
+---
+
+## Task 7: Replace Hidden Storage-Type Choice With Visible Inline Behavior
+
+**Files:**
+- Modify: `crates/anymount/src/tui/tui.rs`
+- Test: `crates/anymount/src/tui/tui.rs`
+
+- [ ] **Step 1: Write failing tests for storage-type interaction**
+
+Add tests such as:
+
+```rust
+#[test]
+fn typing_o_on_storage_type_selects_onedrive() {
+    let mut session = EditSession::new_for_add("provider-1".to_owned());
+    session.selected_field = EditField::StorageType;
+
+    let _ = handle_edit_key(KeyCode::Char('o'), &cd, &mut session).unwrap();
+    assert_eq!(session.draft.storage_type, ProviderType::OneDrive);
+}
+
+#[test]
+fn storage_type_field_remains_visible_without_modal_choice_state() {
+    assert_eq!(storage_type_display(ProviderType::Local), "local");
+}
+```
+
+- [ ] **Step 2: Run the targeted tests and confirm they fail**
+
+Run:
+
+```bash
+cargo test tui::tui::tests::typing_o_on_storage_type_selects_onedrive
+```
+
+Expected: FAIL until the modal chooser path is removed.
+
+- [ ] **Step 3: Remove hidden chooser mode and render visible value**
+
+Update the edit flow so `storage.type`:
+- always shows its current value inline
+- responds to `l` / `o`
+- can cycle with arrows or `j/k` when the field is selected if that fits the
+  implementation cleanly
+- continues preserving local and OneDrive field values when switching
+
+- [ ] **Step 4: Re-run the targeted tests**
+
+Run:
+
+```bash
+cargo test tui::tui::tests::typing_o_on_storage_type_selects_onedrive
+```
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/anymount/src/tui/tui.rs
+git commit -m "feat(tui): make storage type selection visible and inline"
+```
+
+---
+
+## Task 8: Update Edit Rendering And Bottom Action Bar
+
+**Files:**
+- Modify: `crates/anymount/src/tui/tui.rs`
+- Test: `crates/anymount/src/tui/tui.rs`
+
+- [ ] **Step 1: Write failing tests for edit footer text and labels**
+
+Add tests for helper output:
+
+```rust
+#[test]
+fn edit_footer_contains_quit_and_save_shortcuts() {
+    let footer = edit_footer_text(false);
+    assert!(footer.contains("q"));
+    assert!(footer.contains("c Save"));
+}
+
+#[test]
+fn edit_field_labels_match_spec_name_field() {
+    assert_eq!(EditField::Name.label(), "name");
+}
+```
+
+- [ ] **Step 2: Run the targeted tests and confirm they fail**
+
+Run:
+
+```bash
+cargo test tui::tui::tests::edit_field_labels_match_spec_name_field
+```
+
+Expected: FAIL because the label is currently `provider.name`.
+
+- [ ] **Step 3: Update edit rendering helpers**
+
+Adjust `draw_edit_menu` and related helpers so:
+- labels match the spec
+- active field highlighting stays single-line
+- the bottom action bar is width-budgeted
+- save button text switches between `Save` and `Create`
+- footer legend includes `q`
+
+- [ ] **Step 4: Re-run the targeted tests**
+
+Run:
+
+```bash
+cargo test tui::tui::tests::edit_footer_contains_quit_and_save_shortcuts
+cargo test tui::tui::tests::edit_field_labels_match_spec_name_field
+```
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/anymount/src/tui/tui.rs
+git commit -m "feat(tui): align edit screen labels and actions with spec"
+```
+
+---
+
+## Task 9: Verify Real TUI Launch At 80x24 And Full Test Suite
+
+**Files:**
+- Modify: `crates/anymount/src/tui/tui.rs` if verification reveals issues
+
+- [ ] **Step 1: Run focused unit tests for the TUI module**
+
+Use the project task runner where possible. Run:
+
+```bash
+cargo test tui::tui::tests:: -- --nocapture
+```
+
+Expected: PASS.
+
+- [ ] **Step 2: Run the full test suite**
+
+Run:
+
+```bash
+mise run test
+```
+
+Expected: PASS.
+
+- [ ] **Step 3: Verify a real TUI launch in an `80x24` terminal**
+
+Seed a temporary config and launch the TUI:
+
+```bash
+XDG_CONFIG_HOME=/tmp/anymount-tui-plan mise run anymount -- config add backup --path /mnt/backup local /data/backup
+XDG_CONFIG_HOME=/tmp/anymount-tui-plan COLUMNS=80 LINES=24 target/release/anymount-cli
+```
+
+Expected:
+- no panic on startup
+- rack rows render within bounds
+- `q` exits cleanly
+
+- [ ] **Step 4: If verification exposed any issue, add a regression test and
+  fix it**
+
+Keep the regression small and local to `tui.rs`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/anymount/src/tui/tui.rs
+git commit -m "test(tui): verify redesigned tui at 80x24"
+```
+

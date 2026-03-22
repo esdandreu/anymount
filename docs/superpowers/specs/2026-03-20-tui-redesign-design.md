@@ -4,6 +4,23 @@
 
 Complete rework of the terminal user interface with a datacenter storage rack aesthetic.
 
+## Scope Clarifications
+
+- This redesign is a strict compliance pass against this spec plus the
+  clarifications below.
+- `q` quits the TUI from both the main menu and the edit menu.
+- `Esc` returns from the edit menu to the main menu and discards unsaved
+  changes.
+- The TUI must support `80x24` terminals as a first-class minimum size.
+- When the terminal is smaller than the supported minimum, render a dedicated
+  "Terminal size not supported" screen instead of attempting partial layout.
+- Main-menu rows must stay single-line.
+- Row content should compress horizontally before truncating.
+- Truncation priority for main-menu rows:
+  1. Shrink and then remove the path column first.
+  2. Remove the storage type column next if space is still insufficient.
+  3. Preserve the name column and action buttons.
+
 ## Main Menu
 
 ### Visual Design
@@ -11,20 +28,20 @@ Complete rework of the terminal user interface with a datacenter storage rack ae
 The main menu presents mounts as physical rack units:
 
 ```
-┌────────────────────────────────────────────────────────┐                
-│ ●  backup       /mnt/backup      local                 │                
+ ┌────────────────────────────────────────────────────────┐                
+ │ ●  backup       /mnt/backup      local                 │                
 ┌┴───────────────────────────────────────────────────────┬┤                
 │ ○  backup       /mnt/backup      local                 ││                
 └┬───────────────────────────────────────────────────────┴┤                
-│ ●  backup       /mnt/backup      local      [ ⇐ ][ ↵ ] │ Mouse Hover    
+ │ ●  backup       /mnt/backup      local      [ ⇐ ][ ↵ ] │ Mouse Hover    
 ┌┴───────────────────────────────────────────────────────┬┤                
 ⇅ ○  backup       /mnt/backup      local      [ ⇒ ][ ↵ ] ││ Keyboard Hover 
 ├────────────────────────────────────────────────────────┤│                
 │ ○  backup       /mnt/backup      local                 ││                
 └┬───────────────────────────────────────────────────────┴┤                
-│                                                        │                
-└────────────────────────────────────────────────────────┘                
- j↑ select ↓k       ⇐ disconnect connect ⇒      info ↵
+ │                                                        │                
+ └────────────────────────────────────────────────────────┘                
+   j↑ select ↓k       ⇐ disconnect connect ⇒      info ↵
 ```
 
 ### Layout Rules
@@ -36,6 +53,8 @@ The main menu presents mounts as physical rack units:
    - Left border extended to create depth shadow
    - Right border offset to create pulled-out appearance
    - Row appears to hang off the left side of the rack
+5. **Width safety** — all rack rows must fit within the visible frame without
+   drawing past the terminal buffer
 
 ### Row Content
 
@@ -59,6 +78,7 @@ Each mount row displays:
 - Two buttons visible:
   - `[ ⇐ ]` — Disconnect button (for connected mounts)
   - `[ ↵ ]` — Edit button
+- Buttons are interactive and respond to mouse clicks individually
 
 #### Keyboard Focused
 ```
@@ -69,6 +89,7 @@ Each mount row displays:
 - Two buttons visible:
   - `[ ⇒ ]` — Connect button (for disconnected mounts)
   - `[ ↵ ]` — Edit button
+- Buttons remain visible while keyboard-focused even without mouse hover
 
 #### Add Row
 ```
@@ -91,6 +112,9 @@ Each mount row displays:
 ```
 j↑ select ↓k       c connect   d disconnect      ↵ edit
 ```
+
+The footer is a stable shortcut legend, not a transient status message line.
+If status feedback is shown, it must not replace the shortcut legend.
 
 | Key | Action |
 |-----|--------|
@@ -133,6 +157,9 @@ Or for new mounts (not yet saved):
 1. **No row separators** — clean vertical list
 2. **No column separators** — field/value spacing is self-explanatory
 3. **No header** — content is intuitive
+4. **Single-line fields** — each visible field remains one line high
+5. **Width safety** — the form must fit within the supported terminal size
+   without drawing outside the frame
 
 ### Field Display
 
@@ -161,7 +188,7 @@ Similar to main menu, the edit menu has select controls:
 The active field (currently being edited):
 - Has **highlighted background color**
 - Shows **text cursor** (`█`) at end of current value
-- Can be typed into directly
+- Can be typed into directly without pressing `Enter` first
 
 ### Navigation
 
@@ -175,6 +202,12 @@ The active field (currently being edited):
 | `d` | Disconnect mount |
 | `x` | Delete mount |
 | `Tab` | Path completion (for path fields) |
+| `q` | Quit |
+
+`Tab` is context-sensitive:
+- For `path` and storage root fields while editing text, it performs path
+  completion.
+- Otherwise it moves to the next field.
 
 ### Editable Fields
 
@@ -196,6 +229,7 @@ The active field (currently being edited):
 When `storage.type` is changed:
 - Show/hide relevant fields (local vs onedrive)
 - Preserve existing field values when switching back
+- Show the current choice directly in the field; avoid hidden chooser state
 
 ### Path Completion
 
@@ -265,6 +299,8 @@ Main Menu ──[Enter]──> Edit Menu
 - Keyboard events for navigation and shortcuts
 - Raw terminal mode for full control
 - Suspend/resume TUI for blocking operations (OAuth, connect)
+- Layout calculations must clip or reduce content before render so narrow
+  layouts cannot panic
 
 ## Keyboard Shortcuts Summary
 
@@ -292,3 +328,4 @@ Main Menu ──[Enter]──> Edit Menu
 | `Tab` | Path completion |
 | `Backspace` | Delete char |
 | `l` / `o` | OneDrive auth |
+| `q` | Quit |
