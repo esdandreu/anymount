@@ -484,7 +484,7 @@ mod tests {
         command
             .run_with(&use_case)
             .expect("connect-sync should succeed");
-        assert_eq!(use_case.borrow().inline_calls, vec!["demo"]);
-        assert_eq!(use_case.borrow().controlled_calls, vec!["demo"]);
+        assert_eq!(use_case.borrow().inline_calls, vec!["temp"]);
+        assert_eq!(use_case.borrow().controlled_calls, vec!["temp"]);
     }
 }

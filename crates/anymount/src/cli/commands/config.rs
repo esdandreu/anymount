@@ -177,13 +177,9 @@ where
     Ok(())
 }
 
-struct ResolvedAddArgs {
-    name: String,
-    path: PathBuf,
-    storage: ConnectSyncStorageSubcommand,
-}
-
-fn resolve_add_like_args(args: &AddLikeArgs) -> crate::cli::Result<ResolvedAddArgs> {
+pub(crate) fn resolve_driver_spec_from_add_like_args(
+    args: &AddLikeArgs,
+) -> crate::cli::Result<DriverConfig> {
     let name = match &args.name {
         Some(n) => n.clone(),
         None => prompt_name()?,
@@ -196,21 +192,10 @@ fn resolve_add_like_args(args: &AddLikeArgs) -> crate::cli::Result<ResolvedAddAr
         Some(s) => s.clone(),
         None => prompt_storage()?,
     };
-    Ok(ResolvedAddArgs {
+    Ok(DriverConfig {
         name,
         path,
-        storage,
-    })
-}
-
-pub(crate) fn resolve_driver_spec_from_add_like_args(
-    args: &AddLikeArgs,
-) -> crate::cli::Result<DriverConfig> {
-    let resolved = resolve_add_like_args(args)?;
-    Ok(DriverConfig {
-        name: resolved.name,
-        path: resolved.path,
-        storage: resolved.storage.to_storage_config(),
+        storage: storage.to_storage_config(),
         telemetry: Default::default(),
     })
 }
@@ -218,28 +203,20 @@ pub(crate) fn resolve_driver_spec_from_add_like_args(
 pub(crate) fn resolve_temp_driver_spec_from_add_like_args(
     args: &AddLikeArgs,
 ) -> crate::cli::Result<DriverConfig> {
-    let path = args.path.clone().ok_or_else(|| {
-        crate::cli::Error::Validation("temp requires --path <PATH>".to_owned())
-    })?;
+    let path = match &args.path {
+        Some(p) => p.clone(),
+        None => prompt_path()?,
+    };
     let storage = match &args.storage {
         Some(s) => s.clone(),
         None => prompt_storage()?,
     };
-
     Ok(DriverConfig {
-        name: temp_driver_name_from_path(&path),
+        name: "temp".to_owned(),
         path,
         storage: storage.to_storage_config(),
         telemetry: Default::default(),
     })
-}
-
-fn temp_driver_name_from_path(path: &Path) -> String {
-    path.file_name()
-        .and_then(|value| value.to_str())
-        .filter(|value| !value.is_empty())
-        .unwrap_or("temp")
-        .to_owned()
 }
 
 fn prompt_name() -> crate::cli::Result<String> {
