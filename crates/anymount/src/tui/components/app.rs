@@ -10,7 +10,7 @@ use super::super::theme_layout::{is_supported_size, unsupported_size_message};
 use super::delete_dialog::DeleteDialogComponent;
 use super::edit_form::EditFormComponent;
 use super::footer::FooterComponent;
-use super::provider_list::ProviderListComponent;
+use super::main::ProviderListComponent;
 use super::{AppAction, Component};
 use crate::config::ConfigDir;
 use crate::tui::Result;

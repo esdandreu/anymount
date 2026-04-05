@@ -8,7 +8,7 @@ pub(crate) mod app;
 pub(crate) mod delete_dialog;
 pub(crate) mod edit_form;
 pub(crate) mod footer;
-pub(crate) mod provider_list;
+pub(crate) mod main;
 
 #[derive(Debug, Clone)]
 pub(crate) enum AppAction {
