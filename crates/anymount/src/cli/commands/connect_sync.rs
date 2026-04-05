@@ -3,14 +3,15 @@ use crate::application::provide::{
     ProvideUseCase, TelemetryFactory,
 };
 use crate::application::types::ProvideRequest;
+use crate::cli::commands::config::{AddLikeArgs, resolve_temp_driver_spec_from_add_like_args};
 use crate::config::ConfigDir;
-use crate::domain::driver::{DriverConfig, StorageConfig, TelemetrySpec};
+use crate::domain::driver::{DriverConfig, StorageConfig};
 use crate::drivers::Session;
 use crate::service::ServiceRuntime;
 use crate::service::control::messages::{ControlMessage, ServiceMessage};
 use crate::{Logger, TracingLogger};
 use clap::{Args, Subcommand};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc;
 
 #[cfg(unix)]
@@ -19,19 +20,46 @@ use crate::service::control::unix::UnixControl;
 #[cfg(target_os = "windows")]
 use crate::service::control::windows::WindowsControl;
 
+/// Mount path plus storage for `connect temp` / `connect-sync temp`.
+#[derive(Args, Debug, Clone)]
+pub struct ConnectSyncTempSubcommand {
+    /// Mount point for the temporary driver.
+    #[arg(value_name = "PATH")]
+    pub path: PathBuf,
+
+    #[command(subcommand)]
+    pub storage: ConnectSyncStorageSubcommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum ConnectSyncSubcommand {
+    /// Run a temporary (non-configured) driver.
+    Temp(ConnectSyncTempSubcommand),
+    /// Run a configured driver by name (single token).
+    #[command(external_subcommand)]
+    Named(Vec<String>),
+}
+
 #[derive(Args, Debug, Clone)]
 pub struct ConnectSyncCommand {
-    #[arg(long, conflicts_with = "path")]
-    pub name: Option<String>,
-
-    #[arg(long, conflicts_with = "name")]
-    pub path: Option<PathBuf>,
-
     #[arg(long)]
     pub config_dir: Option<PathBuf>,
 
     #[command(subcommand)]
-    pub storage: Option<ConnectSyncStorageSubcommand>,
+    pub action: ConnectSyncSubcommand,
+}
+
+pub(crate) fn single_external_subcommand_name(
+    args: &[String],
+    empty_error: crate::cli::Error,
+) -> crate::cli::Result<&str> {
+    match args {
+        [one] => Ok(one.as_str()),
+        [] => Err(empty_error),
+        _ => Err(crate::cli::Error::Validation(
+            "expected exactly one configuration NAME".to_owned(),
+        )),
+    }
 }
 
 impl ConnectSyncCommand {
@@ -49,28 +77,26 @@ impl ConnectSyncCommand {
     where
         U: ProvideUseCase,
     {
-        if let Some(name) = &self.name {
-            use_case.run_named(name).map_err(map_connect_sync_error)
-        } else {
-            let spec = self.inline_spec()?;
-            use_case.run_inline(spec).map_err(map_connect_sync_error)
+        match &self.action {
+            ConnectSyncSubcommand::Temp(args) => {
+                let spec = resolve_temp_driver_spec_from_add_like_args(&AddLikeArgs {
+                    name: None,
+                    path: Some(args.path.clone()),
+                    storage: Some(args.storage.clone()),
+                })?;
+                let control_name = spec.name.clone();
+                use_case
+                    .run_inline_with_control(spec, control_name)
+                    .map_err(map_connect_sync_error)
+            }
+            ConnectSyncSubcommand::Named(tokens) => {
+                let name = single_external_subcommand_name(
+                    tokens,
+                    crate::cli::Error::MissingConnectSyncTarget,
+                )?;
+                use_case.run_named(name).map_err(map_connect_sync_error)
+            }
         }
-    }
-
-    fn inline_spec(&self) -> crate::cli::Result<DriverConfig> {
-        let Some(path) = &self.path else {
-            return Err(crate::cli::Error::MissingConnectSyncTarget);
-        };
-        let Some(storage) = &self.storage else {
-            return Err(crate::cli::Error::MissingConnectSyncTarget);
-        };
-
-        Ok(DriverConfig {
-            name: inline_driver_name(path),
-            path: path.clone(),
-            storage: storage.to_storage_config(),
-            telemetry: TelemetrySpec::default(),
-        })
     }
 
     fn config_dir(&self) -> ConfigDir {
@@ -251,14 +277,6 @@ fn map_connect_sync_error(error: ProvideError) -> crate::cli::Error {
     }
 }
 
-fn inline_driver_name(path: &Path) -> String {
-    path.file_name()
-        .and_then(|value| value.to_str())
-        .filter(|value| !value.is_empty())
-        .unwrap_or("inline")
-        .to_owned()
-}
-
 fn control_reply_for_request(
     bytes: &[u8],
     driver_name: &str,
@@ -367,6 +385,7 @@ mod tests {
     struct RecordingUseCase {
         named_calls: Vec<String>,
         inline_calls: Vec<String>,
+        controlled_calls: Vec<String>,
         fail_named: Option<String>,
     }
 
@@ -394,15 +413,24 @@ mod tests {
             self.borrow_mut().inline_calls.push(spec.name);
             Ok(())
         }
+
+        fn run_inline_with_control(
+            &self,
+            spec: DriverConfig,
+            control_name: String,
+        ) -> crate::application::provide::Result<()> {
+            let mut state = self.borrow_mut();
+            state.inline_calls.push(spec.name);
+            state.controlled_calls.push(control_name);
+            Ok(())
+        }
     }
 
     #[test]
     fn connect_sync_returns_error_when_driver_startup_fails() {
         let command = ConnectSyncCommand {
-            name: Some("demo".to_owned()),
-            path: None,
             config_dir: None,
-            storage: None,
+            action: ConnectSyncSubcommand::Named(vec!["demo".to_owned()]),
         };
 
         let err = command
@@ -416,10 +444,8 @@ mod tests {
     #[test]
     fn default_runner_can_be_called_with_injected_use_case() {
         let command = ConnectSyncCommand {
-            name: Some("demo".to_owned()),
-            path: None,
             config_dir: None,
-            storage: None,
+            action: ConnectSyncSubcommand::Named(vec!["demo".to_owned()]),
         };
 
         let use_case = std::cell::RefCell::new(RecordingUseCase::default());
@@ -430,44 +456,28 @@ mod tests {
     }
 
     #[test]
-    fn resolve_request_requires_name_or_path() {
+    fn named_external_rejects_multiple_tokens() {
         let command = ConnectSyncCommand {
-            name: None,
-            path: None,
             config_dir: None,
-            storage: None,
+            action: ConnectSyncSubcommand::Named(vec!["a".to_owned(), "b".to_owned()]),
         };
 
         let err = command
             .run_with(&std::cell::RefCell::new(RecordingUseCase::default()))
             .expect_err("command should fail");
-        assert!(matches!(err, crate::cli::Error::MissingConnectSyncTarget));
+        assert!(matches!(err, crate::cli::Error::Validation(_)));
     }
 
     #[test]
-    fn resolve_request_requires_storage_for_inline_path() {
+    fn resolve_temp_request_builds_single_driver_spec() {
         let command = ConnectSyncCommand {
-            name: None,
-            path: Some(PathBuf::from("/mnt/demo")),
             config_dir: None,
-            storage: None,
-        };
-
-        let err = command
-            .run_with(&std::cell::RefCell::new(RecordingUseCase::default()))
-            .expect_err("command should fail");
-        assert!(matches!(err, crate::cli::Error::MissingConnectSyncTarget));
-    }
-
-    #[test]
-    fn resolve_inline_request_builds_single_driver_spec() {
-        let command = ConnectSyncCommand {
-            name: None,
-            path: Some(PathBuf::from("/mnt/demo")),
-            config_dir: None,
-            storage: Some(ConnectSyncStorageSubcommand::Local(LocalStorageArgs {
-                root: PathBuf::from("/data/demo"),
-            })),
+            action: ConnectSyncSubcommand::Temp(ConnectSyncTempSubcommand {
+                path: PathBuf::from("/mnt/demo"),
+                storage: ConnectSyncStorageSubcommand::Local(LocalStorageArgs {
+                    root: PathBuf::from("/data/demo"),
+                }),
+            }),
         };
 
         let use_case = std::cell::RefCell::new(RecordingUseCase::default());
@@ -475,5 +485,6 @@ mod tests {
             .run_with(&use_case)
             .expect("connect-sync should succeed");
         assert_eq!(use_case.borrow().inline_calls, vec!["demo"]);
+        assert_eq!(use_case.borrow().controlled_calls, vec!["demo"]);
     }
 }

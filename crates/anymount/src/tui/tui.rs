@@ -1904,10 +1904,9 @@ fn spawn_provider_process(provider_name: &str, config_dir: &Path) -> Result<std:
         .map_err(|source| crate::cli::Error::ResolveCurrentExecutable { source })?;
     Command::new(current_exe)
         .arg("connect-sync")
-        .arg("--name")
-        .arg(provider_name)
         .arg("--config-dir")
         .arg(config_dir)
+        .arg(provider_name)
         .spawn()
         .map_err(|source| crate::cli::Error::SpawnDriver {
             driver_name: provider_name.to_owned(),

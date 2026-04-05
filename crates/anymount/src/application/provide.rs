@@ -34,6 +34,7 @@ pub trait DriverRuntimeHost {
 pub trait ProvideUseCase {
     fn run_named(&self, name: &str) -> Result<()>;
     fn run_inline(&self, spec: DriverConfig) -> Result<()>;
+    fn run_inline_with_control(&self, spec: DriverConfig, control_name: String) -> Result<()>;
 }
 
 pub struct Application<'a, R, T, H> {
@@ -70,6 +71,13 @@ where
         self.run_request(ProvideRequest {
             spec,
             control_name: None,
+        })
+    }
+
+    fn run_inline_with_control(&self, spec: DriverConfig, control_name: String) -> Result<()> {
+        self.run_request(ProvideRequest {
+            spec,
+            control_name: Some(control_name),
         })
     }
 }
@@ -158,6 +166,10 @@ mod tests {
             self.application().run_inline(spec)
         }
 
+        fn run_inline_with_control(&self, spec: DriverConfig, control_name: String) -> Result<()> {
+            self.application().run_inline_with_control(spec, control_name)
+        }
+
         fn hosted_specs(&self) -> Vec<String> {
             self.host.hosted.borrow().clone()
         }
@@ -201,6 +213,14 @@ mod tests {
     fn inline_provide_skips_repository_lookup() {
         let app = test_provide_app();
         app.run_inline(local_driver_spec("inline"))
+            .expect("inline provide should work");
+        assert_eq!(app.repository_reads(), 0);
+    }
+
+    #[test]
+    fn inline_provide_can_set_control_name() {
+        let app = test_provide_app();
+        app.run_inline_with_control(local_driver_spec("inline"), "temp-driver".to_owned())
             .expect("inline provide should work");
         assert_eq!(app.repository_reads(), 0);
     }
