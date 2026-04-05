@@ -1626,10 +1626,10 @@ fn edit_footer_text(is_new: bool) -> String {
     format!("[ d Disc. ] [ x ] [ c {save_label} ] [ q Quit ]")
 }
 
-fn unsupported_size_message() -> String {
+fn unsupported_size_message(area: Rect) -> String {
     format!(
-        "Terminal size not supported. Minimum supported size is {}x{}.",
-        MIN_TERMINAL_WIDTH, MIN_TERMINAL_HEIGHT
+        "Terminal size not supported. Current: {}x{}, required: {}x{}.",
+        area.width, area.height, MIN_TERMINAL_WIDTH, MIN_TERMINAL_HEIGHT
     )
 }
 
@@ -1678,7 +1678,7 @@ fn draw_unsupported_size(frame: &mut Frame, area: Rect) {
         1,
     );
     frame.render_widget(block, area);
-    frame.render_widget(Paragraph::new(unsupported_size_message()), inner);
+    frame.render_widget(Paragraph::new(unsupported_size_message(area)), inner);
 }
 
 fn draw_main_menu(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -2157,9 +2157,10 @@ mod tests {
 
     #[test]
     fn unsupported_size_message_mentions_minimum() {
-        let message = unsupported_size_message();
+        let message = unsupported_size_message(Rect::new(0, 0, 72, 20));
 
         assert!(message.contains("80x24"));
+        assert!(message.contains("72x20"));
     }
 
     #[test]
