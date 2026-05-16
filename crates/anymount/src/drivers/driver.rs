@@ -25,14 +25,6 @@ pub type Drivers = Vec<Box<dyn Session>>;
 pub fn connect_drivers(
     specs: &[DriverConfig],
     logger: &(impl Logger + 'static),
-) -> Result<Drivers> {
-    connect_drivers_with_telemetry(specs, logger, None)
-}
-
-#[cfg(target_os = "windows")]
-pub fn connect_drivers_with_telemetry(
-    specs: &[DriverConfig],
-    logger: &(impl Logger + 'static),
     service_tx: Option<Sender<ServiceMessage>>,
 ) -> Result<Drivers> {
     use super::windows::{WindowsSession, cleanup_registry};
@@ -73,14 +65,6 @@ pub fn connect_drivers_with_telemetry(
 
 #[cfg(target_os = "linux")]
 pub fn connect_drivers(
-    specs: &[DriverConfig],
-    logger: &(impl Logger + 'static),
-) -> Result<Drivers> {
-    connect_drivers_with_telemetry(specs, logger, None)
-}
-
-#[cfg(target_os = "linux")]
-pub fn connect_drivers_with_telemetry(
     specs: &[DriverConfig],
     logger: &(impl Logger + 'static),
     _service_tx: Option<Sender<ServiceMessage>>,
@@ -153,14 +137,6 @@ pub fn connect_drivers_with_telemetry(
 pub fn connect_drivers(
     _specs: &[DriverConfig],
     _logger: &(impl Logger + 'static),
-) -> Result<Drivers> {
-    Err(crate::drivers::Error::NotSupported)
-}
-
-#[cfg(all(any(target_os = "linux", target_os = "macos"), not(feature = "fuse")))]
-pub fn connect_drivers_with_telemetry(
-    _specs: &[DriverConfig],
-    _logger: &(impl Logger + 'static),
     _service_tx: Option<Sender<ServiceMessage>>,
 ) -> Result<Drivers> {
     Err(crate::drivers::Error::NotSupported)
@@ -168,14 +144,6 @@ pub fn connect_drivers_with_telemetry(
 
 #[cfg(feature = "fuse")]
 pub fn connect_drivers(
-    specs: &[DriverConfig],
-    logger: &(impl Logger + 'static),
-) -> Result<Drivers> {
-    connect_drivers_with_telemetry(specs, logger, None)
-}
-
-#[cfg(feature = "fuse")]
-pub fn connect_drivers_with_telemetry(
     specs: &[DriverConfig],
     logger: &(impl Logger + 'static),
     _service_tx: Option<Sender<ServiceMessage>>,
@@ -298,7 +266,7 @@ mod tests {
     #[test]
     fn connect_drivers_accepts_resolved_specs() {
         let spec = local_driver_spec("demo");
-        let result = connect_drivers(&[spec], &NoOpLogger::default());
+        let result = connect_drivers(&[spec], &NoOpLogger::default(), None);
         assert!(!matches!(result, Err(crate::drivers::Error::Storage(_))));
     }
 }
