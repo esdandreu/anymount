@@ -16,8 +16,8 @@ dev tools, environments and tasks.
 `connect` ensures configured named drivers are running in the background.
 It is non-blocking.
 
-`provide` runs one provider process and blocks for its lifetime. It supports
-either a named driver from config or an inline unnamed driver.
+`connect-sync` runs one provider process and blocks for its lifetime. It
+supports either a configured named driver or a temporary `temp` driver.
 
 Build and run the application:
 
@@ -25,10 +25,16 @@ Build and run the application:
 mise run anymount -- connect --all
 ```
 
-Run one driver process directly:
+Run one configured driver in the foreground:
 
 ```bash
-mise run anymount -- provide --name demo
+mise run anymount -- connect-sync demo
+```
+
+Ephemeral driver (mount path is the first argument after `temp`):
+
+```bash
+mise run anymount -- connect-sync temp /mnt/demo local /path/to/data
 ```
 
 Build the release binary (`target/release/anymount-cli`):
@@ -44,7 +50,7 @@ mise run build
 - `domain` models driver concepts and invariants. It owns driver,
   storage, and telemetry specifications without filesystem, UI, or platform
   code.
-- `application` implements use cases such as `connect`, `provide`, `auth`,
+- `application` implements use cases such as `connect`, `connect-sync`, `auth`,
   `status`, and config updates. It orchestrates work over domain types and
   internal ports.
 - Adapters live at the edges. CLI and TUI handle input and output, `config`
@@ -60,8 +66,10 @@ external details around those layers.
 ## Notable dependencies
 
 ### Windows
-- [**windows-rs**](https://github.com/microsoft/windows-rs) - Official Microsoft Rust bindings
-- [**cloud-filter**](https://github.com/ho-229/cloud-filter-rs) - Cloud Filter API wrapper
+- [**windows-rs**](https://github.com/microsoft/windows-rs) - Official
+  Microsoft Rust bindings
+- [**cloud-filter**](https://github.com/ho-229/cloud-filter-rs) - Cloud Filter
+  API wrapper
 
 ## Testing
 

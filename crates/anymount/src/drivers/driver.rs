@@ -25,14 +25,6 @@ pub type Drivers = Vec<Box<dyn Session>>;
 pub fn connect_drivers(
     specs: &[DriverConfig],
     logger: &(impl Logger + 'static),
-) -> Result<Drivers> {
-    connect_drivers_with_telemetry(specs, logger, None)
-}
-
-#[cfg(target_os = "windows")]
-pub fn connect_drivers_with_telemetry(
-    specs: &[DriverConfig],
-    logger: &(impl Logger + 'static),
     service_tx: Option<Sender<ServiceMessage>>,
 ) -> Result<Drivers> {
     use super::windows::{WindowsSession, cleanup_registry};
@@ -73,14 +65,6 @@ pub fn connect_drivers_with_telemetry(
 
 #[cfg(target_os = "linux")]
 pub fn connect_drivers(
-    specs: &[DriverConfig],
-    logger: &(impl Logger + 'static),
-) -> Result<Drivers> {
-    connect_drivers_with_telemetry(specs, logger, None)
-}
-
-#[cfg(target_os = "linux")]
-pub fn connect_drivers_with_telemetry(
     specs: &[DriverConfig],
     logger: &(impl Logger + 'static),
     _service_tx: Option<Sender<ServiceMessage>>,
@@ -153,14 +137,6 @@ pub fn connect_drivers_with_telemetry(
 pub fn connect_drivers(
     _specs: &[DriverConfig],
     _logger: &(impl Logger + 'static),
-) -> Result<Drivers> {
-    Err(crate::drivers::Error::NotSupported)
-}
-
-#[cfg(all(any(target_os = "linux", target_os = "macos"), not(feature = "fuse")))]
-pub fn connect_drivers_with_telemetry(
-    _specs: &[DriverConfig],
-    _logger: &(impl Logger + 'static),
     _service_tx: Option<Sender<ServiceMessage>>,
 ) -> Result<Drivers> {
     Err(crate::drivers::Error::NotSupported)
@@ -170,17 +146,9 @@ pub fn connect_drivers_with_telemetry(
 pub fn connect_drivers(
     specs: &[DriverConfig],
     logger: &(impl Logger + 'static),
-) -> Result<Drivers> {
-    connect_drivers_with_telemetry(specs, logger, None)
-}
-
-#[cfg(feature = "fuse")]
-pub fn connect_drivers_with_telemetry(
-    specs: &[DriverConfig],
-    logger: &(impl Logger + 'static),
     _service_tx: Option<Sender<ServiceMessage>>,
 ) -> Result<Drivers> {
-    use crate::drivers::fuse::{NoCacheFsCache, StorageFilesystem};
+    use crate::drivers::fuse::{FuseDriver, NoCacheFsCache, StorageFilesystem};
     let mut sessions: Vec<(PathBuf, fuser::BackgroundSession)> = Vec::new();
     for spec in specs {
         if !spec.path.exists() {
@@ -235,31 +203,6 @@ pub fn connect_drivers_with_telemetry(
     Ok(drivers)
 }
 
-#[cfg(feature = "fuse")]
-pub struct FuseDriver {
-    path: PathBuf,
-    _session: fuser::BackgroundSession,
-}
-
-#[cfg(feature = "fuse")]
-impl FuseDriver {
-    pub fn new(path: PathBuf, session: fuser::BackgroundSession) -> Self {
-        Self {
-            path,
-            _session: session,
-        }
-    }
-}
-
-#[cfg(feature = "fuse")]
-impl Session for FuseDriver {
-    fn path(&self) -> &PathBuf {
-        &self.path
-    }
-    fn kind(&self) -> &'static str {
-        "macos"
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -298,7 +241,7 @@ mod tests {
     #[test]
     fn connect_drivers_accepts_resolved_specs() {
         let spec = local_driver_spec("demo");
-        let result = connect_drivers(&[spec], &NoOpLogger::default());
+        let result = connect_drivers(&[spec], &NoOpLogger::default(), None);
         assert!(!matches!(result, Err(crate::drivers::Error::Storage(_))));
     }
 }

@@ -28,13 +28,13 @@ pub enum Error {
         source: std::num::ParseIntError,
     },
 
-    #[error("specify --name <NAME> or --all")]
+    #[error("specify <NAME> or --all")]
     MissingConnectTarget,
 
     #[error("specify --name <NAME> or --all")]
     MissingDisconnectTarget,
 
-    #[error("specify --name <NAME> or --path <PATH> with a storage subcommand")]
+    #[error("specify <NAME>, or use `temp` with add-like driver arguments")]
     MissingConnectSyncTarget,
 
     #[error("failed to install Ctrl-C handler: {source}")]

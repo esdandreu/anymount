@@ -56,11 +56,16 @@ mod tests {
 
     #[test]
     fn parse_connect_sync_name_command() {
-        let cli = Cli::try_parse_from(["anymount", "connect-sync", "--name", "demo"])
+        let cli = Cli::try_parse_from(["anymount", "connect-sync", "demo"])
             .expect("parse should succeed");
 
         match cli.command.expect("command should exist") {
-            Commands::ConnectSync(cmd) => assert_eq!(cmd.name.as_deref(), Some("demo")),
+            Commands::ConnectSync(cmd) => match &cmd.action {
+                crate::cli::commands::connect_sync::ConnectSyncSubcommand::Named(tokens) => {
+                    assert_eq!(tokens, &vec!["demo".to_owned()]);
+                }
+                other => panic!("unexpected connect-sync action: {other:?}"),
+            },
             other => panic!("unexpected command: {other:?}"),
         }
     }
@@ -87,11 +92,28 @@ mod tests {
     }
 
     #[test]
+    fn parse_connect_name_command() {
+        let cli = Cli::try_parse_from(["anymount", "connect", "demo"]).expect("parse");
+        match cli.command.expect("command should exist") {
+            Commands::Connect(cmd) => {
+                assert!(!cmd.all);
+                match &cmd.action {
+                    Some(crate::cli::commands::connect::ConnectSubcommand::Named(tokens)) => {
+                        assert_eq!(tokens, &vec!["demo".to_owned()]);
+                    }
+                    other => panic!("unexpected connect action: {other:?}"),
+                }
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
     fn parse_connect_sync_inline_command() {
         let cli = Cli::try_parse_from([
             "anymount",
             "connect-sync",
-            "--path",
+            "temp",
             "/tmp/demo",
             "local",
             "/data/demo",
@@ -99,10 +121,12 @@ mod tests {
         .expect("parse should succeed");
 
         match cli.command.expect("command should exist") {
-            Commands::ConnectSync(cmd) => {
-                assert!(cmd.name.is_none());
-                assert_eq!(cmd.path.as_deref(), Some(std::path::Path::new("/tmp/demo")));
-            }
+            Commands::ConnectSync(cmd) => match &cmd.action {
+                crate::cli::commands::connect_sync::ConnectSyncSubcommand::Temp(args) => {
+                    assert_eq!(args.path, std::path::Path::new("/tmp/demo"));
+                }
+                other => panic!("unexpected connect-sync action: {other:?}"),
+            },
             other => panic!("unexpected command: {other:?}"),
         }
     }

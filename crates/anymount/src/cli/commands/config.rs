@@ -53,6 +53,13 @@ pub struct AddArgs {
     pub storage: Option<ConnectSyncStorageSubcommand>,
 }
 
+#[derive(Debug, Clone)]
+pub struct AddLikeArgs {
+    pub name: Option<String>,
+    pub path: Option<PathBuf>,
+    pub storage: Option<ConnectSyncStorageSubcommand>,
+}
+
 #[derive(Args, Debug, Clone)]
 pub struct RemoveArgs {
     /// Provider name to remove.
@@ -159,25 +166,20 @@ fn execute_add<U>(use_case: &U, args: &AddArgs) -> crate::cli::Result<()>
 where
     U: ConfigUseCase,
 {
-    let resolved = resolve_add_args(args)?;
-    let spec = DriverConfig {
-        name: resolved.name.clone(),
-        path: resolved.path,
-        storage: resolved.storage.to_storage_config(),
-        telemetry: Default::default(),
-    };
+    let spec = resolve_driver_spec_from_add_like_args(&AddLikeArgs {
+        name: args.name.clone(),
+        path: args.path.clone(),
+        storage: args.storage.clone(),
+    })?;
+    let added_name = spec.name.clone();
     use_case.add(spec).map_err(map_config_error)?;
-    println!("Added driver '{}'", resolved.name);
+    println!("Added driver '{}'", added_name);
     Ok(())
 }
 
-struct ResolvedAddArgs {
-    name: String,
-    path: PathBuf,
-    storage: ConnectSyncStorageSubcommand,
-}
-
-fn resolve_add_args(args: &AddArgs) -> crate::cli::Result<ResolvedAddArgs> {
+pub(crate) fn resolve_driver_spec_from_add_like_args(
+    args: &AddLikeArgs,
+) -> crate::cli::Result<DriverConfig> {
     let name = match &args.name {
         Some(n) => n.clone(),
         None => prompt_name()?,
@@ -190,10 +192,30 @@ fn resolve_add_args(args: &AddArgs) -> crate::cli::Result<ResolvedAddArgs> {
         Some(s) => s.clone(),
         None => prompt_storage()?,
     };
-    Ok(ResolvedAddArgs {
+    Ok(DriverConfig {
         name,
         path,
-        storage,
+        storage: storage.to_storage_config(),
+        telemetry: Default::default(),
+    })
+}
+
+pub(crate) fn resolve_temp_driver_spec_from_add_like_args(
+    args: &AddLikeArgs,
+) -> crate::cli::Result<DriverConfig> {
+    let path = match &args.path {
+        Some(p) => p.clone(),
+        None => prompt_path()?,
+    };
+    let storage = match &args.storage {
+        Some(s) => s.clone(),
+        None => prompt_storage()?,
+    };
+    Ok(DriverConfig {
+        name: "temp".to_owned(),
+        path,
+        storage: storage.to_storage_config(),
+        telemetry: Default::default(),
     })
 }
 
@@ -704,15 +726,15 @@ mod tests {
 
     #[test]
     fn resolve_add_args_with_all_fields() {
-        let args = AddArgs {
+        let args = AddLikeArgs {
             name: Some("my-provider".to_owned()),
             path: Some(PathBuf::from("/mnt/test")),
             storage: Some(ConnectSyncStorageSubcommand::Local(LocalStorageArgs {
                 root: PathBuf::from("/data"),
             })),
         };
-        let resolved = resolve_add_args(&args).expect("resolve failed");
-        assert_eq!(resolved.name, "my-provider");
-        assert_eq!(resolved.path, PathBuf::from("/mnt/test"));
+        let spec = resolve_driver_spec_from_add_like_args(&args).expect("resolve failed");
+        assert_eq!(spec.name, "my-provider");
+        assert_eq!(spec.path, PathBuf::from("/mnt/test"));
     }
 }

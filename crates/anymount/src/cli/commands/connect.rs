@@ -2,24 +2,37 @@ use crate::application::connect::{
     Application as ConnectApplication, ConnectRepository, ConnectUseCase, Error as ConnectError,
     ServiceControl, ServiceLauncher,
 };
+use crate::cli::commands::config::{AddLikeArgs, resolve_temp_driver_spec_from_add_like_args};
+use crate::cli::commands::connect_sync::{
+    single_external_subcommand_name, ConnectSyncTempSubcommand,
+};
 use crate::config::ConfigDir;
+use crate::domain::driver::{DriverConfig, StorageConfig};
 use crate::{Logger, TracingLogger};
-use clap::Args;
+use clap::{Args, Subcommand};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[derive(Subcommand, Debug, Clone)]
+pub enum ConnectSubcommand {
+    /// Run a temporary (non-configured) driver.
+    Temp(ConnectSyncTempSubcommand),
+    /// Connect a configured driver by name (single token).
+    #[command(external_subcommand)]
+    Named(Vec<String>),
+}
+
 /// Connect command ensures configured driver processes are running.
 #[derive(Args, Debug, Clone)]
 pub struct ConnectCommand {
-    /// Connect a named driver from config.
-    #[arg(long, conflicts_with = "all")]
-    pub name: Option<String>,
-
     /// Connect all configured drivers.
-    #[arg(long, conflicts_with = "name")]
+    #[arg(long)]
     pub all: bool,
+
+    #[command(subcommand)]
+    pub action: Option<ConnectSubcommand>,
 
     /// Config directory override.
     #[arg(long)]
@@ -30,6 +43,15 @@ impl ConnectCommand {
     pub fn execute(&self) -> crate::cli::Result<()> {
         let logger = TracingLogger::new();
         let config_dir = self.config_dir();
+        self.validate_arguments()?;
+
+        if let Some(ConnectSubcommand::Temp(temp)) = &self.action {
+            let spec = resolve_temp_spec_from_subcommand(temp)?;
+            let mut child = spawn_temp_driver_process(&spec, config_dir.dir())?;
+            wait_until_ready(&spec.name, &mut child, &logger)?;
+            return Ok(());
+        }
+
         let repository = ConfigRepository::new(config_dir.clone());
         let control = ProviderServiceControl;
         let launcher = ProcessServiceLauncher::new(logger);
@@ -41,12 +63,23 @@ impl ConnectCommand {
     where
         U: ConnectUseCase,
     {
+        self.validate_arguments()?;
         if self.all {
             use_case.connect_all().map_err(map_connect_error)
-        } else if let Some(name) = &self.name {
-            use_case.connect_name(name).map_err(map_connect_error)
         } else {
-            Err(crate::cli::Error::MissingConnectTarget)
+            match &self.action {
+                None => Err(crate::cli::Error::MissingConnectTarget),
+                Some(ConnectSubcommand::Temp(_)) => Err(crate::cli::Error::Validation(
+                    "temp is only supported via connect execute()".to_owned(),
+                )),
+                Some(ConnectSubcommand::Named(tokens)) => {
+                    let name = single_external_subcommand_name(
+                        tokens,
+                        crate::cli::Error::MissingConnectTarget,
+                    )?;
+                    use_case.connect_name(name).map_err(map_connect_error)
+                }
+            }
         }
     }
 
@@ -56,6 +89,29 @@ impl ConnectCommand {
             None => ConfigDir::default(),
         }
     }
+
+    fn validate_arguments(&self) -> crate::cli::Result<()> {
+        if self.all {
+            if self.action.is_some() {
+                return Err(crate::cli::Error::Validation(
+                    "--all cannot be combined with a subcommand".to_owned(),
+                ));
+            }
+            return Ok(());
+        }
+
+        Ok(())
+    }
+}
+
+fn resolve_temp_spec_from_subcommand(
+    cmd: &ConnectSyncTempSubcommand,
+) -> crate::cli::Result<DriverConfig> {
+    resolve_temp_driver_spec_from_add_like_args(&AddLikeArgs {
+        name: None,
+        path: Some(cmd.path.clone()),
+        storage: Some(cmd.storage.clone()),
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -98,7 +154,7 @@ impl<L: Logger> ProcessServiceLauncher<L> {
 impl<L: Logger> ServiceLauncher for ProcessServiceLauncher<L> {
     fn launch(&self, driver_name: &str, config_dir: &Path) -> std::result::Result<(), String> {
         let mut child =
-            spawn_driver_process(driver_name, config_dir).map_err(|error| error.to_string())?;
+            spawn_named_driver_process(driver_name, config_dir).map_err(|error| error.to_string())?;
         wait_until_ready(driver_name, &mut child, &self.logger).map_err(|error| error.to_string())
     }
 }
@@ -116,23 +172,71 @@ fn map_connect_error(error: ConnectError) -> crate::cli::Error {
     }
 }
 
-fn spawn_driver_process(
+fn spawn_named_driver_process(
     driver_name: &str,
     config_dir: &Path,
 ) -> crate::cli::Result<std::process::Child> {
     let current_exe = std::env::current_exe()
         .map_err(|source| crate::cli::Error::ResolveCurrentExecutable { source })?;
     Command::new(current_exe)
-        .arg("provide")
-        .arg("--name")
-        .arg(driver_name)
+        .arg("connect-sync")
         .arg("--config-dir")
         .arg(config_dir)
+        .arg(driver_name)
         .spawn()
         .map_err(|source| crate::cli::Error::SpawnDriver {
             driver_name: driver_name.to_owned(),
             source,
         })
+}
+
+fn spawn_temp_driver_process(
+    spec: &DriverConfig,
+    config_dir: &Path,
+) -> crate::cli::Result<std::process::Child> {
+    let current_exe = std::env::current_exe()
+        .map_err(|source| crate::cli::Error::ResolveCurrentExecutable { source })?;
+    let mut command = Command::new(current_exe);
+    command.arg("connect-sync");
+    command.arg("--config-dir").arg(config_dir);
+    command.arg("temp").arg(&spec.path);
+
+    match &spec.storage {
+        StorageConfig::Local { root } => {
+            command.arg("local").arg(root);
+        }
+        StorageConfig::OneDrive {
+            root,
+            endpoint,
+            access_token,
+            refresh_token,
+            client_id,
+            token_expiry_buffer_secs,
+        } => {
+            command.arg("onedrive");
+            command.arg("--root").arg(root);
+            command.arg("--endpoint").arg(endpoint);
+            if let Some(token) = access_token {
+                command.arg("--access-token").arg(token);
+            }
+            if let Some(token) = refresh_token {
+                command.arg("--refresh-token").arg(token);
+            }
+            if let Some(id) = client_id {
+                command.arg("--client-id").arg(id);
+            }
+            if let Some(secs) = token_expiry_buffer_secs {
+                command
+                    .arg("--token-expiry-buffer-secs")
+                    .arg(secs.to_string());
+            }
+        }
+    }
+
+    command.spawn().map_err(|source| crate::cli::Error::SpawnDriver {
+        driver_name: spec.name.clone(),
+        source,
+    })
 }
 
 /// Poll frequently enough to make `connect` feel immediate while still giving
@@ -209,6 +313,7 @@ fn next_ready_action(
 mod tests {
     use super::*;
     use crate::application::connect::{ConnectUseCase, Error as ConnectError};
+    use crate::cli::commands::connect_sync::{ConnectSyncStorageSubcommand, LocalStorageArgs};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
@@ -268,8 +373,8 @@ mod tests {
     #[test]
     fn execute_from_config_name() {
         let cmd = ConnectCommand {
-            name: Some("test".to_owned()),
             all: false,
+            action: Some(ConnectSubcommand::Named(vec!["test".to_owned()])),
             config_dir: None,
         };
 
@@ -282,8 +387,8 @@ mod tests {
     #[test]
     fn execute_all_uses_application_use_case() {
         let cmd = ConnectCommand {
-            name: None,
             all: true,
+            action: None,
             config_dir: None,
         };
 
@@ -296,8 +401,8 @@ mod tests {
     #[test]
     fn connect_without_args_returns_missing_target_error() {
         let cmd = ConnectCommand {
-            name: None,
             all: false,
+            action: None,
             config_dir: None,
         };
 
@@ -310,8 +415,8 @@ mod tests {
     #[test]
     fn execute_maps_application_failure_for_all() {
         let cmd = ConnectCommand {
-            name: None,
             all: true,
+            action: None,
             config_dir: None,
         };
 
@@ -325,8 +430,8 @@ mod tests {
     #[test]
     fn execute_maps_application_failure_for_name() {
         let cmd = ConnectCommand {
-            name: Some("demo".to_owned()),
             all: false,
+            action: Some(ConnectSubcommand::Named(vec!["demo".to_owned()])),
             config_dir: None,
         };
 
@@ -334,6 +439,56 @@ mod tests {
             ._execute(&RecordingUseCase::default().with_name_error("demo", "spawn failed"))
             .expect_err("connect should fail");
 
+        assert!(matches!(err, crate::cli::Error::Validation(_)));
+    }
+
+    #[test]
+    fn all_with_subcommand_fails_validation() {
+        let cmd = ConnectCommand {
+            all: true,
+            action: Some(ConnectSubcommand::Named(vec!["demo".to_owned()])),
+            config_dir: None,
+        };
+
+        let err = cmd
+            ._execute(&RecordingUseCase::default())
+            .expect_err("all with subcommand should fail");
+        assert!(matches!(err, crate::cli::Error::Validation(_)));
+    }
+
+    #[test]
+    fn named_external_rejects_multiple_tokens() {
+        let cmd = ConnectCommand {
+            all: false,
+            action: Some(ConnectSubcommand::Named(vec![
+                "a".to_owned(),
+                "b".to_owned(),
+            ])),
+            config_dir: None,
+        };
+
+        let err = cmd
+            ._execute(&RecordingUseCase::default())
+            .expect_err("multiple name tokens should fail");
+        assert!(matches!(err, crate::cli::Error::Validation(_)));
+    }
+
+    #[test]
+    fn temp_subcommand_is_not_routed_through_execute_injected_tests() {
+        let cmd = ConnectCommand {
+            all: false,
+            action: Some(ConnectSubcommand::Temp(ConnectSyncTempSubcommand {
+                path: PathBuf::from("/mnt/demo"),
+                storage: ConnectSyncStorageSubcommand::Local(LocalStorageArgs {
+                    root: PathBuf::from("/data/demo"),
+                }),
+            })),
+            config_dir: None,
+        };
+
+        let err = cmd
+            ._execute(&RecordingUseCase::default())
+            .expect_err("temp should not use _execute");
         assert!(matches!(err, crate::cli::Error::Validation(_)));
     }
 

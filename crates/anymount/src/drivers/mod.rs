@@ -8,10 +8,10 @@ pub mod linux;
 pub mod fuse;
 
 #[cfg(feature = "fuse")]
-pub use driver::FuseDriver;
+pub use fuse::FuseDriver;
 
 pub mod driver;
 pub mod error;
 
-pub use driver::{Session, connect_drivers, connect_drivers_with_telemetry};
+pub use driver::{Session, connect_drivers};
 pub use error::{Error, Result};

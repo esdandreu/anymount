@@ -40,8 +40,8 @@ impl TestFixture {
         let binary_path = env!("CARGO_BIN_EXE_anymount-cli");
         let child = Command::new(binary_path)
             .args([
-                "provide",
-                "--path",
+                "connect-sync",
+                "temp",
                 mount_path.to_str().unwrap(),
                 "local",
                 data_path.to_str().unwrap(),
@@ -173,8 +173,8 @@ fn provider_handles_empty_directory() {
     let binary_path = env!("CARGO_BIN_EXE_anymount-cli");
     let mut child = Command::new(binary_path)
         .args([
-            "provide",
-            "--path",
+            "connect-sync",
+            "temp",
             mount_path.to_str().unwrap(),
             "local",
             data_path.to_str().unwrap(),
