@@ -52,7 +52,9 @@ pub fn run() -> super::Result<()> {
 }
 
 fn provide_otel_handles(cli: &Cli) -> super::Result<Option<crate::telemetry::OtelHandles>> {
-    use crate::cli::commands::connect_sync::{ConnectSyncSubcommand, single_external_subcommand_name};
+    use crate::cli::commands::connect_sync::{
+        ConnectSyncSubcommand, single_external_subcommand_name,
+    };
 
     let Some(Commands::ConnectSync(command)) = cli.command.as_ref() else {
         return Ok(None);
@@ -60,10 +62,9 @@ fn provide_otel_handles(cli: &Cli) -> super::Result<Option<crate::telemetry::Ote
 
     let name = match &command.action {
         ConnectSyncSubcommand::Temp(_) => return Ok(None),
-        ConnectSyncSubcommand::Named(tokens) => single_external_subcommand_name(
-            tokens,
-            crate::cli::Error::MissingConnectSyncTarget,
-        )?,
+        ConnectSyncSubcommand::Named(tokens) => {
+            single_external_subcommand_name(tokens, crate::cli::Error::MissingConnectSyncTarget)?
+        }
     };
 
     let config_dir = command

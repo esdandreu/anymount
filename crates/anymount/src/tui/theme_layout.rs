@@ -94,10 +94,29 @@ mod tests {
     use ratatui::layout::Rect;
 
     #[test]
-    fn terminal_size_support_rejects_smaller_than_72x20() {
-        assert!(!is_supported_size(Rect::new(0, 0, 71, 20)));
-        assert!(!is_supported_size(Rect::new(0, 0, 72, 19)));
-        assert!(is_supported_size(Rect::new(0, 0, 72, 20)));
+    fn terminal_size_support_accepts_minimum() {
+        assert!(is_supported_size(Rect::new(
+            0,
+            0,
+            MIN_TERMINAL_WIDTH,
+            MIN_TERMINAL_HEIGHT
+        )));
+    }
+
+    #[test]
+    fn terminal_size_support_rejects_smaller_than_minimum() {
+        assert!(!is_supported_size(Rect::new(
+            0,
+            0,
+            MIN_TERMINAL_WIDTH - 1,
+            MIN_TERMINAL_HEIGHT
+        )));
+        assert!(!is_supported_size(Rect::new(
+            0,
+            0,
+            MIN_TERMINAL_WIDTH,
+            MIN_TERMINAL_HEIGHT - 1
+        )));
     }
 
     #[test]
@@ -122,7 +141,7 @@ mod tests {
     fn unsupported_size_message_mentions_minimum() {
         let message = unsupported_size_message(Rect::new(0, 0, 70, 18));
 
-        assert!(message.contains("72x20"));
+        assert!(message.contains(&format!("{}x{}", MIN_TERMINAL_WIDTH, MIN_TERMINAL_HEIGHT)));
         assert!(message.contains("70x18"));
     }
 }

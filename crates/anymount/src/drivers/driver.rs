@@ -203,7 +203,6 @@ pub fn connect_drivers(
     Ok(drivers)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

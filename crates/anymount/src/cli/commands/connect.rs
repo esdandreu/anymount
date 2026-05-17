@@ -4,7 +4,7 @@ use crate::application::connect::{
 };
 use crate::cli::commands::config::{AddLikeArgs, resolve_temp_driver_spec_from_add_like_args};
 use crate::cli::commands::connect_sync::{
-    single_external_subcommand_name, ConnectSyncTempSubcommand,
+    ConnectSyncTempSubcommand, single_external_subcommand_name,
 };
 use crate::config::ConfigDir;
 use crate::domain::driver::{DriverConfig, StorageConfig};
@@ -153,8 +153,8 @@ impl<L: Logger> ProcessServiceLauncher<L> {
 
 impl<L: Logger> ServiceLauncher for ProcessServiceLauncher<L> {
     fn launch(&self, driver_name: &str, config_dir: &Path) -> std::result::Result<(), String> {
-        let mut child =
-            spawn_named_driver_process(driver_name, config_dir).map_err(|error| error.to_string())?;
+        let mut child = spawn_named_driver_process(driver_name, config_dir)
+            .map_err(|error| error.to_string())?;
         wait_until_ready(driver_name, &mut child, &self.logger).map_err(|error| error.to_string())
     }
 }
@@ -233,10 +233,12 @@ fn spawn_temp_driver_process(
         }
     }
 
-    command.spawn().map_err(|source| crate::cli::Error::SpawnDriver {
-        driver_name: spec.name.clone(),
-        source,
-    })
+    command
+        .spawn()
+        .map_err(|source| crate::cli::Error::SpawnDriver {
+            driver_name: spec.name.clone(),
+            source,
+        })
 }
 
 /// Poll frequently enough to make `connect` feel immediate while still giving

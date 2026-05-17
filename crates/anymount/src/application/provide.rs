@@ -167,7 +167,8 @@ mod tests {
         }
 
         fn run_inline_with_control(&self, spec: DriverConfig, control_name: String) -> Result<()> {
-            self.application().run_inline_with_control(spec, control_name)
+            self.application()
+                .run_inline_with_control(spec, control_name)
         }
 
         fn hosted_specs(&self) -> Vec<String> {
