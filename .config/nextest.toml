@@ -1,0 +1,7 @@
+# This configuration defines the `ci` profile for cargo-nextest, which is used
+# by GitHub Actions to generate JUnit test reports for Codecov.
+
+[profile.default]
+
+[profile.ci]
+junit = { path = "junit.xml" }
