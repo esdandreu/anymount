@@ -218,7 +218,7 @@ impl<L: Logger + 'static> DriverRuntimeHost for RuntimeHost<L> {
                 }
             })?;
 
-            let drivers: Vec<Box<dyn Session>> = crate::connect_drivers_with_telemetry(
+            let drivers: Vec<Box<dyn Session>> = crate::connect_drivers(
                 std::slice::from_ref(&request.spec),
                 &self.logger,
                 Some(tx.clone()),

@@ -13,6 +13,6 @@ pub mod telemetry;
 pub mod tui;
 
 pub use config::{Config, ConfigDir, DriverFileConfig, TelemetryFileConfig};
-pub use drivers::{Session, connect_drivers, connect_drivers_with_telemetry};
+pub use drivers::{Session, connect_drivers};
 pub use logger::{Logger, NoOpLogger, TracingLogger};
 pub use storages::Storage;

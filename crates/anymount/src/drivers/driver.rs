@@ -148,7 +148,7 @@ pub fn connect_drivers(
     logger: &(impl Logger + 'static),
     _service_tx: Option<Sender<ServiceMessage>>,
 ) -> Result<Drivers> {
-    use crate::drivers::fuse::{NoCacheFsCache, StorageFilesystem};
+    use crate::drivers::fuse::{FuseDriver, NoCacheFsCache, StorageFilesystem};
     let mut sessions: Vec<(PathBuf, fuser::BackgroundSession)> = Vec::new();
     for spec in specs {
         if !spec.path.exists() {
@@ -203,31 +203,6 @@ pub fn connect_drivers(
     Ok(drivers)
 }
 
-#[cfg(feature = "fuse")]
-pub struct FuseDriver {
-    path: PathBuf,
-    _session: fuser::BackgroundSession,
-}
-
-#[cfg(feature = "fuse")]
-impl FuseDriver {
-    pub fn new(path: PathBuf, session: fuser::BackgroundSession) -> Self {
-        Self {
-            path,
-            _session: session,
-        }
-    }
-}
-
-#[cfg(feature = "fuse")]
-impl Session for FuseDriver {
-    fn path(&self) -> &PathBuf {
-        &self.path
-    }
-    fn kind(&self) -> &'static str {
-        "macos"
-    }
-}
 
 #[cfg(test)]
 mod tests {

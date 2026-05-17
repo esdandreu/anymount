@@ -16,6 +16,12 @@ use std::time::{Duration, Instant, SystemTime};
 
 pub use crate::drivers::fuse::error::{Error as FuseError, Result as FuseResult};
 
+pub mod driver;
+
+#[cfg(feature = "fuse")]
+pub use driver::FuseDriver;
+
+
 pub const ROOT_INO: u64 = 1;
 pub const TTL: Duration = Duration::from_secs(1);
 const DIR_CACHE_TTL: Duration = Duration::from_secs(2);
