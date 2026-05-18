@@ -20,8 +20,10 @@ pub enum Error {
     FuseMount {
         path: PathBuf,
         #[source]
-        source: fuser::Errno,
+        source: std::io::Error,
     },
+    #[error(transparent)]
+    Storage(#[from] crate::storages::error::Error),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

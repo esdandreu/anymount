@@ -6,13 +6,12 @@ use super::{Error, Result};
 use crate::Logger;
 pub use crate::drivers::fuse::StorageFilesystem;
 use crate::drivers::fuse::{CachePort as FuseCachePort, CachedDirEntry};
-use crate::storages::{DirEntry, Storage, WriteAt};
+use crate::storages::Storage;
 use std::collections::{BTreeSet, HashMap};
 use std::fs::OpenOptions;
 use std::os::unix::fs::FileExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
 
 const DATA_CACHE_BLOCK_SIZE: u64 = 64 * 1024;
 
@@ -170,12 +169,40 @@ impl SparseFsCache {
     }
 }
 
+impl From<Error> for crate::drivers::fuse::Error {
+    fn from(err: Error) -> Self {
+        match err {
+            Error::Storage(source) => crate::drivers::fuse::Error::Storage(source),
+            Error::CacheIo {
+                operation,
+                path,
+                source,
+            } => crate::drivers::fuse::Error::CacheIo {
+                operation,
+                path,
+                source,
+            },
+            Error::CacheRangeNotCached { path, start, end } => {
+                crate::drivers::fuse::Error::CacheRangeNotCached { path, start, end }
+            }
+            Error::CacheUnexpectedEof { path } => {
+                crate::drivers::fuse::Error::CacheUnexpectedEof { path }
+            }
+            other => crate::drivers::fuse::Error::CacheIo {
+                operation: "linux driver error",
+                path: PathBuf::new(),
+                source: std::io::Error::new(std::io::ErrorKind::Other, other.to_string()),
+            },
+        }
+    }
+}
+
 impl FuseCachePort for SparseFsCache {
     fn sync_metadata_placeholders(
         &self,
         dir_path: &Path,
         entries: &[CachedDirEntry],
-    ) -> Result<()> {
+    ) -> crate::drivers::fuse::Result<()> {
         let metadata_dir = self.cache_path(dir_path);
         std::fs::create_dir_all(&metadata_dir).map_err(|source| Error::CacheIo {
             operation: "create metadata cache directory",
@@ -193,9 +220,9 @@ impl FuseCachePort for SparseFsCache {
         Ok(())
     }
 
-    fn read_range(&self, path: &Path, start: u64, end: u64) -> Result<Vec<u8>> {
+    fn read_range(&self, path: &Path, start: u64, end: u64) -> crate::drivers::fuse::Result<Vec<u8>> {
         if !self.is_range_cached(path, start, end) {
-            return Err(Error::CacheRangeNotCached {
+            return Err(crate::drivers::fuse::Error::CacheRangeNotCached {
                 path: path.to_path_buf(),
                 start,
                 end,
@@ -215,7 +242,7 @@ impl FuseCachePort for SparseFsCache {
         Ok(buf)
     }
 
-    fn write_range(&self, path: &Path, start: u64, data: &[u8], size: u64) -> Result<()> {
+    fn write_range(&self, path: &Path, start: u64, data: &[u8], size: u64) -> crate::drivers::fuse::Result<()> {
         let data_path = self.cache_path(path);
         Self::ensure_sparse_file(&data_path, size)?;
         let file = OpenOptions::new()

@@ -32,7 +32,7 @@ pub fn connect_drivers(
     for spec in specs {
         let storage = storages::new(spec.storage.clone())?;
         match &spec.storage {
-            StorageConfig::Local { root } => {
+            StorageConfig::Local { root: _ } => {
                 let driver = WindowsSession::connect(
                     spec.path.clone(),
                     storage,
@@ -41,14 +41,7 @@ pub fn connect_drivers(
                 )?;
                 drivers.push(driver);
             }
-            StorageConfig::OneDrive {
-                root,
-                endpoint,
-                access_token,
-                refresh_token,
-                client_id,
-                token_expiry_buffer_secs,
-            } => {
+            StorageConfig::OneDrive { .. } => {
                 let driver = WindowsSession::connect(
                     spec.path.clone(),
                     storage,
@@ -78,7 +71,7 @@ pub fn connect_drivers(
         let path = spec.path.clone();
         let storage = storages::new(spec.storage.clone())?;
         match &spec.storage {
-            StorageConfig::Local { root } => {
+            StorageConfig::Local { root: _ } => {
                 let (mount_path, session) = mount_storage(path, storage, logger.clone())?;
                 let name = mount_path
                     .file_name()
@@ -97,14 +90,7 @@ pub fn connect_drivers(
                 ));
                 sessions.push((mount_path, session));
             }
-            StorageConfig::OneDrive {
-                root,
-                endpoint,
-                access_token,
-                refresh_token,
-                client_id,
-                token_expiry_buffer_secs,
-            } => {
+            StorageConfig::OneDrive { .. } => {
                 let (mount_path, session) = mount_storage(path, storage, logger.clone())?;
                 let name = mount_path
                     .file_name()
@@ -157,7 +143,7 @@ pub fn connect_drivers(
         let mount_path = spec.path.canonicalize()?;
         let storage = storages::new(spec.storage.clone())?;
         match &spec.storage {
-            StorageConfig::Local { root } => {
+            StorageConfig::Local { root: _ } => {
                 let fs = StorageFilesystem::new_with_cache(
                     storage,
                     Arc::new(NoCacheFsCache::new()),
@@ -172,14 +158,7 @@ pub fn connect_drivers(
                     })?;
                 sessions.push((mount_path, session));
             }
-            StorageConfig::OneDrive {
-                root,
-                endpoint,
-                access_token,
-                refresh_token,
-                client_id,
-                token_expiry_buffer_secs,
-            } => {
+            StorageConfig::OneDrive { .. } => {
                 let fs = StorageFilesystem::new_with_cache(
                     storage,
                     Arc::new(NoCacheFsCache::new()),

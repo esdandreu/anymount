@@ -3,6 +3,9 @@ pub enum Error {
     #[error(transparent)]
     Storage(#[from] crate::storages::Error),
 
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+
     #[cfg(target_os = "windows")]
     #[error(transparent)]
     CloudFilter(#[from] crate::drivers::windows::Error),
