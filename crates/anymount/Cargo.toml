@@ -93,7 +93,6 @@ tempfile = "3"
 [features]
 default = []
 windows = []
-fuse = ["fuser"]
 
 [lints.clippy]
 unwrap_used = "deny"
