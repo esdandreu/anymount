@@ -133,7 +133,7 @@ pub fn connect_drivers(
     Ok(drivers)
 }
 
-#[cfg(all(any(target_os = "linux", target_os = "macos"), not(feature = "fuse")))]
+#[cfg(all(target_os = "macos", not(feature = "fuse")))]
 pub fn connect_drivers(
     _specs: &[DriverConfig],
     _logger: &(impl Logger + 'static),
@@ -142,7 +142,7 @@ pub fn connect_drivers(
     Err(crate::drivers::Error::NotSupported)
 }
 
-#[cfg(feature = "fuse")]
+#[cfg(all(target_os = "macos", feature = "fuse"))]
 pub fn connect_drivers(
     specs: &[DriverConfig],
     logger: &(impl Logger + 'static),

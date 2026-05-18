@@ -1,8 +1,9 @@
 // Copyright 2026 Dotphoton AG
 
 use crate::Logger;
-use crate::drivers::fuse::error::{Error, Result};
+pub mod error;
 use crate::storages::{DirEntry, Storage, WriteAt};
+pub use error::{Error, Result};
 use fuser::{
     Errno, FileAttr, FileHandle, FileType, Generation, INodeNo, OpenFlags, ReplyAttr, ReplyData,
     ReplyDirectory, ReplyEntry, Request,
@@ -29,7 +30,7 @@ pub const DOT_ENTRY_OFFSET: u64 = 1;
 pub const DOT_DOT_ENTRY_OFFSET: u64 = 2;
 pub const FIRST_CHILD_ENTRY_OFFSET: u64 = 3;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct CachedDirEntry {
     pub file_name: String,
     pub is_dir: bool,
@@ -37,7 +38,7 @@ pub struct CachedDirEntry {
     pub accessed: SystemTime,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct CachedDir {
     pub entries: Vec<CachedDirEntry>,
     pub loaded_at: Instant,

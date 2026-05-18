@@ -4,9 +4,8 @@
 
 use super::{Error, Result};
 use crate::Logger;
-use crate::drivers::fuse::{
-    CachePort as FuseCachePort, CachedDirEntry, StorageFilesystem as FuseStorageFilesystem,
-};
+pub use crate::drivers::fuse::StorageFilesystem;
+use crate::drivers::fuse::{CachePort as FuseCachePort, CachedDirEntry};
 use crate::storages::{DirEntry, Storage, WriteAt};
 use std::collections::{BTreeSet, HashMap};
 use std::fs::OpenOptions;
@@ -234,7 +233,7 @@ impl FuseCachePort for SparseFsCache {
     }
 }
 
-impl<S: Storage, L: Logger + 'static> FuseStorageFilesystem<S, L> {
+impl<S: Storage, L: Logger + 'static> StorageFilesystem<S, L> {
     pub fn new(storage: S, cache_root: PathBuf, logger: L) -> Result<Self> {
         let cache = Arc::new(SparseFsCache::new(cache_root)?);
         Ok(Self::new_with_cache(storage, cache, logger))
@@ -244,8 +243,7 @@ impl<S: Storage, L: Logger + 'static> FuseStorageFilesystem<S, L> {
 #[cfg(test)]
 mod tests {
     use super::SparseFsCache;
-    use crate::drivers::fuse::CachedDirEntry;
-    use crate::drivers::fuse::StorageFilesystem;
+    use crate::drivers::fuse::{CachePort, CachedDirEntry, StorageFilesystem};
     use crate::storages::{LocalStorage, Storage, WriteAt};
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
