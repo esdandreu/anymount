@@ -72,7 +72,6 @@ libc = "0.2"
 
 # Windows-specific dependencies
 [target.'cfg(target_os = "windows")'.dependencies]
-fuser = { version = "0.17", optional = true }
 cloud-filter = { git = "https://github.com/esdandreu/cloud-filter-rs" }
 windows = { version = "0.58", features = [
     "Win32_Foundation",
@@ -94,7 +93,7 @@ tempfile = "3"
 [features]
 default = []
 windows = []
-fuse = ["dep:fuser"]
+fuse = ["fuser"]
 
 [lints.clippy]
 unwrap_used = "deny"
