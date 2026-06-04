@@ -15,12 +15,17 @@ pub trait StartedAuthSession {
 }
 
 pub trait AuthFlow {
-    fn start(&self, client_id: Option<String>) -> Result<Box<dyn StartedAuthSession>>;
+    fn start(
+        &self,
+        client_id: Option<String>,
+    ) -> Result<Box<dyn StartedAuthSession>>;
 }
 
 pub trait AuthUseCase {
-    fn start_onedrive_auth(&self, client_id: Option<String>)
-    -> Result<Box<dyn StartedAuthSession>>;
+    fn start_onedrive_auth(
+        &self,
+        client_id: Option<String>,
+    ) -> Result<Box<dyn StartedAuthSession>>;
 }
 
 pub struct Application<'a, F> {
@@ -47,7 +52,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{Application, AuthFlow, AuthUseCase, Result, StartedAuthSession};
+    use super::{
+        Application, AuthFlow, AuthUseCase, Result, StartedAuthSession,
+    };
     use crate::auth::TokenResponse;
 
     struct TestSession {
@@ -77,7 +84,10 @@ mod tests {
     }
 
     impl AuthFlow for TestAuthFlow {
-        fn start(&self, _client_id: Option<String>) -> Result<Box<dyn StartedAuthSession>> {
+        fn start(
+            &self,
+            _client_id: Option<String>,
+        ) -> Result<Box<dyn StartedAuthSession>> {
             Ok(Box::new(TestSession {
                 message: "open https://example.test/device".to_owned(),
                 verification_uri: "https://example.test/device".to_owned(),
@@ -95,7 +105,11 @@ mod tests {
     }
 
     impl TestAuthApp {
-        fn with_tokens(mut self, refresh_token: &str, access_token: &str) -> Self {
+        fn with_tokens(
+            mut self,
+            refresh_token: &str,
+            access_token: &str,
+        ) -> Self {
             self.flow.refresh_token = Some(refresh_token.to_owned());
             self.flow.access_token = Some(access_token.to_owned());
             self

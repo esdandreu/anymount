@@ -69,7 +69,8 @@ impl Logger for TracingLogger {
                 .map(|(k, v)| format!("{}={}", k, v))
                 .collect::<Vec<_>>()
                 .join(" ");
-            tracing::info_span!("span", op = name, context = %formatted).in_scope(f)
+            tracing::info_span!("span", op = name, context = %formatted)
+                .in_scope(f)
         }
     }
 }
@@ -100,7 +101,8 @@ mod tests {
     #[test]
     fn in_span_with_context_runs_closure() {
         let logger = NoOpLogger;
-        let result = logger.in_span("test_span", &[("key", "value")], || "hello");
+        let result =
+            logger.in_span("test_span", &[("key", "value")], || "hello");
         assert_eq!(result, "hello");
     }
 }

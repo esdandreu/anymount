@@ -20,7 +20,10 @@ pub trait DisconnectRepository {
 }
 
 pub trait ServiceControl {
-    fn disconnect(&self, provider_name: &str) -> std::result::Result<(), String>;
+    fn disconnect(
+        &self,
+        provider_name: &str,
+    ) -> std::result::Result<(), String>;
 }
 
 pub trait DisconnectUseCase {
@@ -48,12 +51,12 @@ where
     C: ServiceControl,
 {
     fn disconnect_name(&self, provider_name: &str) -> Result<()> {
-        self.control
-            .disconnect(provider_name)
-            .map_err(|reason| Error::Disconnect {
+        self.control.disconnect(provider_name).map_err(|reason| {
+            Error::Disconnect {
                 provider_name: provider_name.to_owned(),
                 reason,
-            })
+            }
+        })
     }
 
     fn disconnect_all(&self) -> Result<()> {
@@ -76,7 +79,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{Application, DisconnectRepository, DisconnectUseCase, Result, ServiceControl};
+    use super::{
+        Application, DisconnectRepository, DisconnectUseCase, Result,
+        ServiceControl,
+    };
     use std::collections::HashMap;
 
     #[derive(Default)]
@@ -96,7 +102,10 @@ mod tests {
     }
 
     impl ServiceControl for TestControl {
-        fn disconnect(&self, provider_name: &str) -> std::result::Result<(), String> {
+        fn disconnect(
+            &self,
+            provider_name: &str,
+        ) -> std::result::Result<(), String> {
             match self.failures.get(provider_name) {
                 Some(reason) => Err(reason.clone()),
                 None => Ok(()),

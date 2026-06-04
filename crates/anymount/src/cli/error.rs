@@ -63,7 +63,9 @@ pub enum Error {
         source: std::io::Error,
     },
 
-    #[error("driver process {driver_name} exited before ready with status {status}")]
+    #[error(
+        "driver process {driver_name} exited before ready with status {status}"
+    )]
     DriverExitedBeforeReady { driver_name: String, status: String },
 
     #[error("driver process {driver_name} did not become ready")]

@@ -30,3 +30,7 @@ description = "Run the terminal user interface"
 depends = ["build"]
 run = "target/release/anymount-cli"
 run_windows = "target\\release\\anymount-cli.exe"
+
+[tasks.review-tui-tests]
+description = "Review terminal user interface snapshot test changes"
+run = "cargo insta review"

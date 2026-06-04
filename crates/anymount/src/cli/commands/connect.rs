@@ -1,8 +1,10 @@
 use crate::application::connect::{
-    Application as ConnectApplication, ConnectRepository, ConnectUseCase, Error as ConnectError,
-    ServiceControl, ServiceLauncher,
+    Application as ConnectApplication, ConnectRepository, ConnectUseCase,
+    Error as ConnectError, ServiceControl, ServiceLauncher,
 };
-use crate::cli::commands::config::{AddLikeArgs, resolve_temp_driver_spec_from_add_like_args};
+use crate::cli::commands::config::{
+    AddLikeArgs, resolve_temp_driver_spec_from_add_like_args,
+};
 use crate::cli::commands::connect_sync::{
     ConnectSyncTempSubcommand, single_external_subcommand_name,
 };
@@ -55,7 +57,12 @@ impl ConnectCommand {
         let repository = ConfigRepository::new(config_dir.clone());
         let control = ProviderServiceControl;
         let launcher = ProcessServiceLauncher::new(logger);
-        let app = ConnectApplication::new(config_dir.dir(), &repository, &control, &launcher);
+        let app = ConnectApplication::new(
+            config_dir.dir(),
+            &repository,
+            &control,
+            &launcher,
+        );
         self._execute(&app)
     }
 
@@ -69,9 +76,12 @@ impl ConnectCommand {
         } else {
             match &self.action {
                 None => Err(crate::cli::Error::MissingConnectTarget),
-                Some(ConnectSubcommand::Temp(_)) => Err(crate::cli::Error::Validation(
-                    "temp is only supported via connect execute()".to_owned(),
-                )),
+                Some(ConnectSubcommand::Temp(_)) => {
+                    Err(crate::cli::Error::Validation(
+                        "temp is only supported via connect execute()"
+                            .to_owned(),
+                    ))
+                }
                 Some(ConnectSubcommand::Named(tokens)) => {
                     let name = single_external_subcommand_name(
                         tokens,
@@ -152,10 +162,15 @@ impl<L: Logger> ProcessServiceLauncher<L> {
 }
 
 impl<L: Logger> ServiceLauncher for ProcessServiceLauncher<L> {
-    fn launch(&self, driver_name: &str, config_dir: &Path) -> std::result::Result<(), String> {
+    fn launch(
+        &self,
+        driver_name: &str,
+        config_dir: &Path,
+    ) -> std::result::Result<(), String> {
         let mut child = spawn_named_driver_process(driver_name, config_dir)
             .map_err(|error| error.to_string())?;
-        wait_until_ready(driver_name, &mut child, &self.logger).map_err(|error| error.to_string())
+        wait_until_ready(driver_name, &mut child, &self.logger)
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -176,8 +191,9 @@ fn spawn_named_driver_process(
     driver_name: &str,
     config_dir: &Path,
 ) -> crate::cli::Result<std::process::Child> {
-    let current_exe = std::env::current_exe()
-        .map_err(|source| crate::cli::Error::ResolveCurrentExecutable { source })?;
+    let current_exe = std::env::current_exe().map_err(|source| {
+        crate::cli::Error::ResolveCurrentExecutable { source }
+    })?;
     Command::new(current_exe)
         .arg("connect-sync")
         .arg("--config-dir")
@@ -194,8 +210,9 @@ fn spawn_temp_driver_process(
     spec: &DriverConfig,
     config_dir: &Path,
 ) -> crate::cli::Result<std::process::Child> {
-    let current_exe = std::env::current_exe()
-        .map_err(|source| crate::cli::Error::ResolveCurrentExecutable { source })?;
+    let current_exe = std::env::current_exe().map_err(|source| {
+        crate::cli::Error::ResolveCurrentExecutable { source }
+    })?;
     let mut command = Command::new(current_exe);
     command.arg("connect-sync");
     command.arg("--config-dir").arg(config_dir);
@@ -315,7 +332,9 @@ fn next_ready_action(
 mod tests {
     use super::*;
     use crate::application::connect::{ConnectUseCase, Error as ConnectError};
-    use crate::cli::commands::connect_sync::{ConnectSyncStorageSubcommand, LocalStorageArgs};
+    use crate::cli::commands::connect_sync::{
+        ConnectSyncStorageSubcommand, LocalStorageArgs,
+    };
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
@@ -331,7 +350,11 @@ mod tests {
             self.calls.lock().expect("calls lock").clone()
         }
 
-        fn with_name_error(mut self, provider_name: &str, reason: &str) -> Self {
+        fn with_name_error(
+            mut self,
+            provider_name: &str,
+            reason: &str,
+        ) -> Self {
             self.connect_name_errors
                 .insert(provider_name.to_owned(), reason.to_owned());
             self
@@ -344,7 +367,10 @@ mod tests {
     }
 
     impl ConnectUseCase for RecordingUseCase {
-        fn connect_name(&self, driver_name: &str) -> crate::application::connect::Result<()> {
+        fn connect_name(
+            &self,
+            driver_name: &str,
+        ) -> crate::application::connect::Result<()> {
             self.calls
                 .lock()
                 .expect("calls lock")
@@ -423,7 +449,10 @@ mod tests {
         };
 
         let err = cmd
-            ._execute(&RecordingUseCase::default().with_all_error("broken: spawn failed"))
+            ._execute(
+                &RecordingUseCase::default()
+                    .with_all_error("broken: spawn failed"),
+            )
             .expect_err("connect all should fail");
 
         assert!(matches!(err, crate::cli::Error::ConnectFailures { .. }));
@@ -438,7 +467,10 @@ mod tests {
         };
 
         let err = cmd
-            ._execute(&RecordingUseCase::default().with_name_error("demo", "spawn failed"))
+            ._execute(
+                &RecordingUseCase::default()
+                    .with_name_error("demo", "spawn failed"),
+            )
             .expect_err("connect should fail");
 
         assert!(matches!(err, crate::cli::Error::Validation(_)));
@@ -481,9 +513,11 @@ mod tests {
             all: false,
             action: Some(ConnectSubcommand::Temp(ConnectSyncTempSubcommand {
                 path: PathBuf::from("/mnt/demo"),
-                storage: ConnectSyncStorageSubcommand::Local(LocalStorageArgs {
-                    root: PathBuf::from("/data/demo"),
-                }),
+                storage: ConnectSyncStorageSubcommand::Local(
+                    LocalStorageArgs {
+                        root: PathBuf::from("/data/demo"),
+                    },
+                ),
             })),
             config_dir: None,
         };
@@ -496,8 +530,13 @@ mod tests {
 
     #[test]
     fn ready_check_reports_exited_process_before_ready() {
-        let outcome = next_ready_action("demo", false, Some("exit status 1".to_owned()), false)
-            .expect_err("exited child should fail");
+        let outcome = next_ready_action(
+            "demo",
+            false,
+            Some("exit status 1".to_owned()),
+            false,
+        )
+        .expect_err("exited child should fail");
 
         assert!(matches!(
             outcome,
@@ -507,8 +546,8 @@ mod tests {
 
     #[test]
     fn ready_check_reports_timeout_when_deadline_passes() {
-        let outcome =
-            next_ready_action("demo", false, None, true).expect_err("expired deadline should fail");
+        let outcome = next_ready_action("demo", false, None, true)
+            .expect_err("expired deadline should fail");
 
         assert!(matches!(
             outcome,

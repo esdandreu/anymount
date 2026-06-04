@@ -1,10 +1,13 @@
 //! OpenTelemetry OTLP export for named `provide --name` processes.
 
-use crate::domain::driver::{DriverConfig, OtlpSpec, OtlpTransport as DomainOtlpTransport};
+use crate::domain::driver::{
+    DriverConfig, OtlpSpec, OtlpTransport as DomainOtlpTransport,
+};
 use opentelemetry::Key;
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::{
-    LogExporter, Protocol, SpanExporter, WithExportConfig, WithHttpConfig, WithTonicConfig,
+    LogExporter, Protocol, SpanExporter, WithExportConfig, WithHttpConfig,
+    WithTonicConfig,
 };
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::logs::SdkLoggerProvider;
@@ -38,7 +41,9 @@ pub struct OtelHandles {
 impl OtelHandles {
     /// When `[telemetry.otlp]` has `enabled = true`, builds OTLP exporters and
     /// providers. Otherwise returns `Ok(None)`.
-    pub fn from_driver_spec(spec: &DriverConfig) -> Result<Option<Self>, OtlpInitError> {
+    pub fn from_driver_spec(
+        spec: &DriverConfig,
+    ) -> Result<Option<Self>, OtlpInitError> {
         let Some(otlp) = spec.telemetry.otlp.as_ref() else {
             return Ok(None);
         };
@@ -48,8 +53,12 @@ impl OtelHandles {
         Self::build_for_driver(&spec.name, otlp)
     }
 
-    fn build_for_driver(driver_name: &str, otlp: &OtlpSpec) -> Result<Option<Self>, OtlpInitError> {
-        let protocol = otlp.protocol.unwrap_or(DomainOtlpTransport::HttpProtobuf);
+    fn build_for_driver(
+        driver_name: &str,
+        otlp: &OtlpSpec,
+    ) -> Result<Option<Self>, OtlpInitError> {
+        let protocol =
+            otlp.protocol.unwrap_or(DomainOtlpTransport::HttpProtobuf);
 
         let resource = build_resource(driver_name, otlp)?;
 
@@ -86,7 +95,10 @@ impl OtelHandles {
     }
 }
 
-fn build_resource(driver_name: &str, otlp: &OtlpSpec) -> Result<Resource, OtlpInitError> {
+fn build_resource(
+    driver_name: &str,
+    otlp: &OtlpSpec,
+) -> Result<Resource, OtlpInitError> {
     let mut builder = Resource::builder()
         .with_service_name("anymount-driver")
         .with_attribute(KeyValue::new(
@@ -97,18 +109,24 @@ fn build_resource(driver_name: &str, otlp: &OtlpSpec) -> Result<Resource, OtlpIn
             Key::from_static_str("service.namespace"),
             "anymount",
         ))
-        .with_attribute(KeyValue::new(SERVICE_VERSION, env!("CARGO_PKG_VERSION")));
+        .with_attribute(KeyValue::new(
+            SERVICE_VERSION,
+            env!("CARGO_PKG_VERSION"),
+        ));
 
     if let Some(extra) = &otlp.resource_attributes {
         for (k, v) in extra {
-            builder = builder.with_attribute(KeyValue::new(Key::new(k.clone()), v.clone()));
+            builder = builder
+                .with_attribute(KeyValue::new(Key::new(k.clone()), v.clone()));
         }
     }
 
     Ok(builder.build())
 }
 
-fn metadata_from_headers(headers: &HashMap<String, String>) -> Result<MetadataMap, OtlpInitError> {
+fn metadata_from_headers(
+    headers: &HashMap<String, String>,
+) -> Result<MetadataMap, OtlpInitError> {
     let mut map = MetadataMap::new();
     for (k, v) in headers {
         let key = k
@@ -147,7 +165,8 @@ fn build_span_exporter(
                 builder = builder.with_endpoint(endpoint.clone());
             }
             if let Some(headers) = &otlp.headers {
-                builder = builder.with_metadata(metadata_from_headers(headers)?);
+                builder =
+                    builder.with_metadata(metadata_from_headers(headers)?);
             }
             Ok(builder.build()?)
         }
@@ -180,7 +199,8 @@ fn build_log_exporter(
                 builder = builder.with_endpoint(endpoint.clone());
             }
             if let Some(headers) = &otlp.headers {
-                builder = builder.with_metadata(metadata_from_headers(headers)?);
+                builder =
+                    builder.with_metadata(metadata_from_headers(headers)?);
             }
             Ok(builder.build()?)
         }
@@ -191,7 +211,8 @@ fn build_log_exporter(
 mod tests {
     use super::*;
     use crate::domain::driver::{
-        DriverConfig, OtlpSpec, OtlpTransport as DomainOtlpTransport, StorageConfig, TelemetrySpec,
+        DriverConfig, OtlpSpec, OtlpTransport as DomainOtlpTransport,
+        StorageConfig, TelemetrySpec,
     };
     use std::path::PathBuf;
 
@@ -228,7 +249,8 @@ mod tests {
             },
         };
 
-        let handles = OtelHandles::from_driver_spec(&spec).expect("telemetry build should work");
+        let handles = OtelHandles::from_driver_spec(&spec)
+            .expect("telemetry build should work");
         assert!(handles.is_some());
     }
 }

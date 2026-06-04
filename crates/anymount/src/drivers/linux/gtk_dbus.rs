@@ -26,18 +26,21 @@ pub fn describe_action(enabled: bool) -> (bool, String, Vec<OwnedValue>) {
     (enabled, String::new(), Vec::new())
 }
 
-pub fn build_start_reply() -> Vec<(u32, u32, Vec<HashMap<String, OwnedValue>>)> {
+pub fn build_start_reply() -> Vec<(u32, u32, Vec<HashMap<String, OwnedValue>>)>
+{
     let items: Vec<HashMap<String, OwnedValue>> = menu_items()
         .into_iter()
         .map(|(label, action)| {
             let mut attrs = HashMap::new();
             attrs.insert(
                 "label".to_string(),
-                OwnedValue::try_from(Value::from(label)).expect("label to OwnedValue"),
+                OwnedValue::try_from(Value::from(label))
+                    .expect("label to OwnedValue"),
             );
             attrs.insert(
                 "action".to_string(),
-                OwnedValue::try_from(Value::from(action)).expect("action to OwnedValue"),
+                OwnedValue::try_from(Value::from(action))
+                    .expect("action to OwnedValue"),
             );
             attrs
         })

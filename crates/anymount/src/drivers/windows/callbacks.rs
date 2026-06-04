@@ -1,6 +1,8 @@
 use super::Storage;
 use crate::Logger;
-use crate::drivers::windows::placeholders::{dehydrate_file, get_placeholder_info};
+use crate::drivers::windows::placeholders::{
+    dehydrate_file, get_placeholder_info,
+};
 use crate::service::control::messages::ServiceMessage;
 use crate::storages::{DirEntry, Error as StorageError, WriteAt};
 use cloud_filter::{
@@ -111,7 +113,8 @@ impl<S: Storage, L: Logger> SyncFilter for Callbacks<S, L> {
             self.emit_telemetry(format!("read_dir failed: {}", e));
             cloud_filter::error::CloudErrorKind::Unsuccessful
         })?;
-        let blob: Vec<u8> = request.path().into_os_string().into_encoded_bytes();
+        let blob: Vec<u8> =
+            request.path().into_os_string().into_encoded_bytes();
         let mut placeholders: Vec<PlaceholderFile> = iter
             .map(|entry| {
                 PlaceholderFile::new(entry.file_name())
@@ -130,16 +133,30 @@ impl<S: Storage, L: Logger> SyncFilter for Callbacks<S, L> {
             })
             .collect();
         if let Err(e) = ticket.pass_with_placeholder(&mut placeholders) {
-            self.emit_telemetry(format!("Failed to pass placeholders: {:?}", e));
+            self.emit_telemetry(format!(
+                "Failed to pass placeholders: {:?}",
+                e
+            ));
         }
         CResult::Ok(())
     }
 
-    fn cancel_fetch_data(&self, request: Request, _info: info::CancelFetchData) {
-        self.emit_telemetry(format!("cancel_fetch_data: path={:?}", request.path()));
+    fn cancel_fetch_data(
+        &self,
+        request: Request,
+        _info: info::CancelFetchData,
+    ) {
+        self.emit_telemetry(format!(
+            "cancel_fetch_data: path={:?}",
+            request.path()
+        ));
     }
 
-    fn cancel_fetch_placeholders(&self, request: Request, _info: info::CancelFetchPlaceholders) {
+    fn cancel_fetch_placeholders(
+        &self,
+        request: Request,
+        _info: info::CancelFetchPlaceholders,
+    ) {
         self.emit_telemetry(format!(
             "cancel_fetch_placeholders: path={:?}",
             request.path()
@@ -196,7 +213,12 @@ impl<S: Storage, L: Logger> SyncFilter for Callbacks<S, L> {
         self.emit_telemetry(format!("deleted: path={:?}", request.path()));
     }
 
-    fn rename(&self, request: Request, _ticket: ticket::Rename, info: info::Rename) -> CResult<()> {
+    fn rename(
+        &self,
+        request: Request,
+        _ticket: ticket::Rename,
+        info: info::Rename,
+    ) -> CResult<()> {
         self.emit_telemetry(format!(
             "rename: from={:?} to={:?}",
             request.path(),
@@ -225,7 +247,9 @@ impl<S: Storage, L: Logger> SyncFilter for Callbacks<S, L> {
                 }
             };
             self.emit_telemetry(format!("file_info: {:?}", file_info));
-            if file_info.pin_state == CF_PIN_STATE_UNPINNED && file_info.on_disk_size > 0 {
+            if file_info.pin_state == CF_PIN_STATE_UNPINNED
+                && file_info.on_disk_size > 0
+            {
                 if let Err(e) = dehydrate_file(&path) {
                     self.logger.warn(format!(
                         "dehydrate_file on state_changed failed, \
@@ -263,13 +287,14 @@ impl FetchDataWriter {
             && self.next_offset + CF_TRANSFER_CHUNK as u64 <= self.range_end
         {
             let offset = self.next_offset;
-            let chunk: Vec<u8> = self.buffer.drain(..CF_TRANSFER_CHUNK).collect();
-            CfWriteAt::write_at(&self.ticket, &chunk, offset).map_err(|error| {
-                StorageError::WriteAt {
+            let chunk: Vec<u8> =
+                self.buffer.drain(..CF_TRANSFER_CHUNK).collect();
+            CfWriteAt::write_at(&self.ticket, &chunk, offset).map_err(
+                |error| StorageError::WriteAt {
                     offset,
                     message: error.to_string(),
-                }
-            })?;
+                },
+            )?;
             self.next_offset += CF_TRANSFER_CHUNK as u64;
         }
         Ok(())
@@ -279,19 +304,23 @@ impl FetchDataWriter {
         if !self.buffer.is_empty() {
             let offset = self.range_end - self.buffer.len() as u64;
             let chunk = std::mem::take(&mut self.buffer);
-            CfWriteAt::write_at(&self.ticket, &chunk, offset).map_err(|error| {
-                StorageError::WriteAt {
+            CfWriteAt::write_at(&self.ticket, &chunk, offset).map_err(
+                |error| StorageError::WriteAt {
                     offset,
                     message: error.to_string(),
-                }
-            })?;
+                },
+            )?;
         }
         Ok(())
     }
 }
 
 impl WriteAt for FetchDataWriter {
-    fn write_at(&mut self, buf: &[u8], offset: u64) -> crate::storages::Result<()> {
+    fn write_at(
+        &mut self,
+        buf: &[u8],
+        offset: u64,
+    ) -> crate::storages::Result<()> {
         if buf.is_empty() {
             return Ok(());
         }

@@ -87,13 +87,18 @@ where
     }
 }
 
-pub(crate) fn apply_set(spec: &mut DriverConfig, key: &str, value: &str) -> Result<()> {
+pub(crate) fn apply_set(
+    spec: &mut DriverConfig,
+    key: &str,
+    value: &str,
+) -> Result<()> {
     match key {
         "path" => {
             spec.path = PathBuf::from(value);
         }
         "storage.root" => match &mut spec.storage {
-            StorageConfig::Local { root } | StorageConfig::OneDrive { root, .. } => {
+            StorageConfig::Local { root }
+            | StorageConfig::OneDrive { root, .. } => {
                 *root = PathBuf::from(value);
             }
         },
@@ -181,19 +186,18 @@ mod tests {
 
     impl ConfigRepository for TestRepository {
         fn list_names(&self) -> Result<Vec<String>> {
-            let mut names = self.specs.borrow().keys().cloned().collect::<Vec<_>>();
+            let mut names =
+                self.specs.borrow().keys().cloned().collect::<Vec<_>>();
             names.sort();
             Ok(names)
         }
 
         fn read_spec(&self, name: &str) -> Result<DriverConfig> {
-            self.specs
-                .borrow()
-                .get(name)
-                .cloned()
-                .ok_or_else(|| Error::DuplicateDriver {
+            self.specs.borrow().get(name).cloned().ok_or_else(|| {
+                Error::DuplicateDriver {
                     name: format!("missing:{name}"),
-                })
+                }
+            })
         }
 
         fn write_spec(&self, spec: &DriverConfig) -> Result<()> {
@@ -283,14 +287,19 @@ mod tests {
 
     #[test]
     fn set_updates_storage_endpoint() {
-        let app = test_config_app().with_existing(onedrive_driver_spec("alpha"));
+        let app =
+            test_config_app().with_existing(onedrive_driver_spec("alpha"));
         app.set("alpha", "storage.endpoint", "https://example.test/v1")
             .expect("set should work");
 
-        let spec = app.read("alpha").expect("read should work");
-        assert_eq!(
-            spec.onedrive_endpoint().as_deref(),
-            Some("https://example.test/v1")
-        );
+        let driver = app.read("alpha").expect("read should work");
+        match &driver.storage {
+            StorageConfig::OneDrive { endpoint, .. } => {
+                assert_eq!(endpoint, "https://example.test/v1");
+            }
+            StorageConfig::Local { .. } => {
+                panic!("expected OneDrive storage for driver 'alpha'");
+            }
+        }
     }
 }

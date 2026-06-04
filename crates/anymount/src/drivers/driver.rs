@@ -14,7 +14,11 @@ pub trait Session: Send + Sync + 'static {
 }
 
 pub trait Driver: Send + Sync + 'static {
-    fn connect<S>(storage: S, path: PathBuf, logger: impl Logger) -> Result<Box<dyn Session>>
+    fn connect<S>(
+        storage: S,
+        path: PathBuf,
+        logger: impl Logger,
+    ) -> Result<Box<dyn Session>>
     where
         S: crate::storages::Storage;
 }
@@ -63,16 +67,20 @@ pub fn connect_drivers(
     _service_tx: Option<Sender<ServiceMessage>>,
 ) -> Result<Drivers> {
     use super::linux::dbus::AccountExporter;
-    use super::linux::{LinuxDriver, export_on_dbus, mount_storage, new_runtime};
+    use super::linux::{
+        LinuxDriver, export_on_dbus, mount_storage, new_runtime,
+    };
     let rt = new_runtime()?;
     let mut accounts: Vec<(std::path::PathBuf, AccountExporter)> = Vec::new();
-    let mut sessions: Vec<(std::path::PathBuf, fuser::BackgroundSession)> = Vec::new();
+    let mut sessions: Vec<(std::path::PathBuf, fuser::BackgroundSession)> =
+        Vec::new();
     for spec in specs {
         let path = spec.path.clone();
         let storage = storages::new(spec.storage.clone())?;
         match &spec.storage {
             StorageConfig::Local { root: _ } => {
-                let (mount_path, session) = mount_storage(path, storage, logger.clone())?;
+                let (mount_path, session) =
+                    mount_storage(path, storage, logger.clone())?;
                 let name = mount_path
                     .file_name()
                     .and_then(|s| s.to_str())
@@ -91,7 +99,8 @@ pub fn connect_drivers(
                 sessions.push((mount_path, session));
             }
             StorageConfig::OneDrive { .. } => {
-                let (mount_path, session) = mount_storage(path, storage, logger.clone())?;
+                let (mount_path, session) =
+                    mount_storage(path, storage, logger.clone())?;
                 let name = mount_path
                     .file_name()
                     .and_then(|s| s.to_str())
@@ -114,7 +123,9 @@ pub fn connect_drivers(
     rt.block_on(export_on_dbus(&accounts, logger))?;
     let drivers: Vec<Box<dyn Session>> = sessions
         .into_iter()
-        .map(|(path, session)| Box::new(LinuxDriver::new(path, session)) as Box<dyn Session>)
+        .map(|(path, session)| {
+            Box::new(LinuxDriver::new(path, session)) as Box<dyn Session>
+        })
         .collect();
     Ok(drivers)
 }
@@ -149,13 +160,19 @@ pub fn connect_drivers(
                     Arc::new(NoCacheFsCache::new()),
                     logger.clone(),
                 );
-                let session = fuser::spawn_mount2(fs, &mount_path, &fuser::Config::default())
-                    .map_err(|source| {
-                        super::Error::Fuse(crate::drivers::fuse::error::Error::FuseMount {
+                let session = fuser::spawn_mount2(
+                    fs,
+                    &mount_path,
+                    &fuser::Config::default(),
+                )
+                .map_err(|source| {
+                    super::Error::Fuse(
+                        crate::drivers::fuse::error::Error::FuseMount {
                             path: mount_path.clone(),
                             source,
-                        })
-                    })?;
+                        },
+                    )
+                })?;
                 sessions.push((mount_path, session));
             }
             StorageConfig::OneDrive { .. } => {
@@ -164,20 +181,28 @@ pub fn connect_drivers(
                     Arc::new(NoCacheFsCache::new()),
                     logger.clone(),
                 );
-                let session = fuser::spawn_mount2(fs, &mount_path, &fuser::Config::default())
-                    .map_err(|source| {
-                        super::Error::Fuse(crate::drivers::fuse::error::Error::FuseMount {
+                let session = fuser::spawn_mount2(
+                    fs,
+                    &mount_path,
+                    &fuser::Config::default(),
+                )
+                .map_err(|source| {
+                    super::Error::Fuse(
+                        crate::drivers::fuse::error::Error::FuseMount {
                             path: mount_path.clone(),
                             source,
-                        })
-                    })?;
+                        },
+                    )
+                })?;
                 sessions.push((mount_path, session));
             }
         }
     }
     let drivers: Vec<Box<dyn Session>> = sessions
         .into_iter()
-        .map(|(path, session)| Box::new(FuseDriver::new(path, session)) as Box<dyn Session>)
+        .map(|(path, session)| {
+            Box::new(FuseDriver::new(path, session)) as Box<dyn Session>
+        })
         .collect();
     Ok(drivers)
 }

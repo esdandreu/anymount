@@ -166,12 +166,17 @@ impl AccountGtkActions {
             .collect())
     }
 
-    fn describe(&self, name: &str) -> fdo::Result<(bool, String, Vec<OwnedValue>)> {
+    fn describe(
+        &self,
+        name: &str,
+    ) -> fdo::Result<(bool, String, Vec<OwnedValue>)> {
         let enabled = gtk_dbus::action_names().contains(&name);
         Ok(gtk_dbus::describe_action(enabled))
     }
 
-    fn describe_all(&self) -> fdo::Result<HashMap<String, (bool, String, Vec<OwnedValue>)>> {
+    fn describe_all(
+        &self,
+    ) -> fdo::Result<HashMap<String, (bool, String, Vec<OwnedValue>)>> {
         let mut out = HashMap::new();
         for name in gtk_dbus::action_names() {
             out.insert((*name).to_string(), gtk_dbus::describe_action(true));
@@ -231,7 +236,9 @@ pub fn new_account_interfaces(
     )
 }
 
-pub async fn request_bus_name(connection: &zbus::Connection) -> zbus::Result<()> {
+pub async fn request_bus_name(
+    connection: &zbus::Connection,
+) -> zbus::Result<()> {
     connection.request_name(BUS_NAME).await?;
     Ok(())
 }

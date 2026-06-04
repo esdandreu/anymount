@@ -1,5 +1,5 @@
 use crate::application::types::DriverStatusRow;
-use crate::domain::driver::{DriverConfig, StorageConfig};
+use crate::domain::driver::DriverConfig;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -53,7 +53,7 @@ where
             .map(|entry| match entry {
                 StatusEntry::Loaded(spec) => Ok(DriverStatusRow {
                     ready: self.control.ready(&spec.name),
-                    storage: Some(storage_label(&spec.storage).to_owned()),
+                    storage: Some(spec.storage.label().to_owned()),
                     path: Some(spec.path),
                     name: spec.name,
                     error: None,
@@ -70,17 +70,11 @@ where
     }
 }
 
-fn storage_label(storage: &StorageConfig) -> &'static str {
-    match storage {
-        StorageConfig::Local { .. } => "local",
-        StorageConfig::OneDrive { .. } => "onedrive",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        Application, Result, ServiceControl, StatusEntry, StatusRepository, StatusUseCase,
+        Application, Result, ServiceControl, StatusEntry, StatusRepository,
+        StatusUseCase,
     };
     use crate::domain::driver::{DriverConfig, StorageConfig, TelemetrySpec};
     use std::collections::HashSet;
@@ -119,7 +113,9 @@ mod tests {
             self
         }
 
-        fn list(&self) -> Result<Vec<crate::application::types::DriverStatusRow>> {
+        fn list(
+            &self,
+        ) -> Result<Vec<crate::application::types::DriverStatusRow>> {
             self.application().list()
         }
 

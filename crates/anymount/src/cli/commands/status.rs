@@ -1,6 +1,6 @@
 use crate::application::status::{
-    Application as StatusApplication, Error as StatusError, ServiceControl, StatusEntry,
-    StatusRepository, StatusUseCase,
+    Application as StatusApplication, Error as StatusError, ServiceControl,
+    StatusEntry, StatusRepository, StatusUseCase,
 };
 use crate::application::types::DriverStatusRow;
 use crate::config::ConfigDir;
@@ -34,7 +34,8 @@ impl StatusCommand {
     ) -> crate::cli::Result<()> {
         let rows = use_case.list().map_err(map_status_error)?;
         if rows.is_empty() {
-            writeln!(out, "No configured providers.").map_err(write_cli_error)?;
+            writeln!(out, "No configured providers.")
+                .map_err(write_cli_error)?;
             return Ok(());
         }
 
@@ -44,9 +45,13 @@ impl StatusCommand {
         Ok(())
     }
 
-    fn write_one_entry<W: Write>(out: &mut W, row: DriverStatusRow) -> crate::cli::Result<()> {
+    fn write_one_entry<W: Write>(
+        out: &mut W,
+        row: DriverStatusRow,
+    ) -> crate::cli::Result<()> {
         if let Some(error) = row.error {
-            writeln!(out, "{}", format_status_error(&row.name, &error)).map_err(write_cli_error)?;
+            writeln!(out, "{}", format_status_error(&row.name, &error))
+                .map_err(write_cli_error)?;
             return Ok(());
         }
 
@@ -84,7 +89,9 @@ impl ConfigRepository {
 }
 
 impl StatusRepository for ConfigRepository {
-    fn list_entries(&self) -> crate::application::status::Result<Vec<StatusEntry>> {
+    fn list_entries(
+        &self,
+    ) -> crate::application::status::Result<Vec<StatusEntry>> {
         let entries = self
             .config_dir
             .each_driver()?
@@ -129,7 +136,12 @@ fn map_status_error(error: StatusError) -> crate::cli::Error {
     }
 }
 
-fn format_status_ok(name: &str, storage: &str, path: &str, running: bool) -> String {
+fn format_status_ok(
+    name: &str,
+    storage: &str,
+    path: &str,
+    running: bool,
+) -> String {
     let status = if running { "running" } else { "not running" };
     format!("- {name} ({storage}, {path}): {status}")
 }
@@ -139,7 +151,9 @@ fn format_status_error(name: &str, detail: &str) -> String {
 }
 
 fn write_cli_error(err: std::io::Error) -> crate::cli::Error {
-    crate::cli::Error::Validation(format!("failed to write status output: {err}"))
+    crate::cli::Error::Validation(format!(
+        "failed to write status output: {err}"
+    ))
 }
 
 #[cfg(test)]
@@ -153,7 +167,9 @@ mod tests {
     }
 
     impl StatusUseCase for StaticStatusUseCase {
-        fn list(&self) -> crate::application::status::Result<Vec<DriverStatusRow>> {
+        fn list(
+            &self,
+        ) -> crate::application::status::Result<Vec<DriverStatusRow>> {
             Ok(self.rows.clone())
         }
     }

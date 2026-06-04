@@ -53,13 +53,15 @@ mod tests {
     #[test]
     fn control_message_round_trips() {
         let encoded = ControlMessage::Ping.encode();
-        let decoded = ControlMessage::decode(&encoded).expect("decode should work");
+        let decoded =
+            ControlMessage::decode(&encoded).expect("decode should work");
         assert_eq!(decoded, ControlMessage::Ping);
     }
 
     #[test]
     fn decode_invalid_utf8_returns_decode_error() {
-        let err = ControlMessage::decode(&[0xff]).expect_err("decode should fail");
+        let err =
+            ControlMessage::decode(&[0xff]).expect_err("decode should fail");
         assert!(matches!(err, Error::DecodeUtf8(_)));
     }
 }

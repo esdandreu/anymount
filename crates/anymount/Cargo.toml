@@ -30,7 +30,7 @@ urlencoding = "2.1"
 clap = { version = "4.5", features = ["derive"] }
 inquire = "0.7"
 crossterm = "0.28"
-ratatui = "0.29"
+ratatui = "0.30"
 open = "5"
 ctrlc = "3.4"
 tracing = "0.1"
@@ -58,6 +58,7 @@ tracing-opentelemetry = { version = "0.32.1", default-features = false, features
 ] }
 opentelemetry-appender-tracing = "0.31.1"
 opentelemetry-semantic-conventions = "0.31.0"
+color-eyre = "0.6.5"
 
 # Linux-specific dependencies
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -88,6 +89,7 @@ windows = { version = "0.58", features = [
 ] }
 
 [dev-dependencies]
+insta = "1.47.2"
 tempfile = "3"
 
 [features]

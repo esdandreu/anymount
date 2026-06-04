@@ -18,9 +18,9 @@ fn service_state_root() -> PathBuf {
 
 fn validate_driver_name(driver_name: &str) -> Result<()> {
     if driver_name.is_empty()
-        || driver_name
-            .chars()
-            .any(|ch| !matches!(ch, 'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_'))
+        || driver_name.chars().any(
+            |ch| !matches!(ch, 'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_'),
+        )
     {
         return Err(Error::InvalidDriverName {
             name: driver_name.to_owned(),

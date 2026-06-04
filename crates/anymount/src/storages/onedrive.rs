@@ -81,7 +81,11 @@ pub trait BearerToken: Send + Sync + 'static {
 ///
 /// Returns an error string on network failure or when the response cannot be read.
 pub trait HttpGet: Send + Sync + 'static {
-    fn get(&self, url: &str, headers: &[(&str, &str)]) -> Result<(u16, Vec<u8>)>;
+    fn get(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<(u16, Vec<u8>)>;
 }
 
 /// Production HTTP GET implementation using ureq.
@@ -100,7 +104,11 @@ impl Default for UreqHttpGet {
 }
 
 impl HttpGet for UreqHttpGet {
-    fn get(&self, url: &str, headers: &[(&str, &str)]) -> Result<(u16, Vec<u8>)> {
+    fn get(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<(u16, Vec<u8>)> {
         let mut request = ureq::get(url);
         for (k, v) in headers {
             request = request.set(*k, *v);
@@ -112,17 +120,20 @@ impl HttpGet for UreqHttpGet {
         let status = response.status();
         let mut reader = response.into_reader();
         let mut body = Vec::new();
-        std::io::Read::read_to_end(&mut reader, &mut body).map_err(|source| Error::ReadBody {
-            url: url.to_owned(),
-            source,
-        })?;
+        std::io::Read::read_to_end(&mut reader, &mut body).map_err(
+            |source| Error::ReadBody {
+                url: url.to_owned(),
+                source,
+            },
+        )?;
         Ok((status, body))
     }
 }
 
 impl BearerToken for OneDriveTokenSource {
     fn access_token(&self) -> Result<String> {
-        OneDriveTokenSource::access_token(self).map_err(|source| Error::Token { source })
+        OneDriveTokenSource::access_token(self)
+            .map_err(|source| Error::Token { source })
     }
 }
 
@@ -154,7 +165,8 @@ impl OneDriveConfig {
         let has_refresh = self.refresh_token.is_some();
         if !has_access && !has_refresh {
             return Err(StorageError::OneDrive(Error::InvalidConfig {
-                message: "OneDrive requires access_token or refresh_token".into(),
+                message: "OneDrive requires access_token or refresh_token"
+                    .into(),
             }));
         }
         let buffer_secs = self
@@ -213,7 +225,8 @@ where
         if path.as_os_str().is_empty() {
             return "".to_string();
         }
-        let has_normal = path.components().any(|c| matches!(c, Component::Normal(_)));
+        let has_normal =
+            path.components().any(|c| matches!(c, Component::Normal(_)));
         if !has_normal {
             return "".to_string();
         }
@@ -274,7 +287,8 @@ where
     type Iter = std::vec::IntoIter<OneDriveDirEntry>;
 
     fn read_dir(&self, path: PathBuf) -> StorageResult<Self::Iter> {
-        let token = self.token.access_token().map_err(StorageError::OneDrive)?;
+        let token =
+            self.token.access_token().map_err(StorageError::OneDrive)?;
         let full_path = if path.as_os_str().is_empty() {
             self.root.clone()
         } else {
@@ -300,12 +314,13 @@ where
                 body: text,
             }));
         }
-        let parsed: GraphChildrenResponse = serde_json::from_slice(&body).map_err(|source| {
-            StorageError::OneDrive(Error::ListResponse {
-                url: url.clone(),
-                source,
-            })
-        })?;
+        let parsed: GraphChildrenResponse = serde_json::from_slice(&body)
+            .map_err(|source| {
+                StorageError::OneDrive(Error::ListResponse {
+                    url: url.clone(),
+                    source,
+                })
+            })?;
         let entries: Vec<OneDriveDirEntry> = parsed
             .value
             .into_iter()
@@ -334,11 +349,14 @@ where
         writer: &mut impl WriteAt,
         range: std::ops::Range<u64>,
     ) -> StorageResult<()> {
-        let token = self.token.access_token().map_err(StorageError::OneDrive)?;
+        let token =
+            self.token.access_token().map_err(StorageError::OneDrive)?;
         let full_path = self.root.join(path);
         let segment = Self::path_to_graph_segment(&full_path);
-        let url = format!("{}/me/drive/root:{}:/content", self.endpoint, segment);
-        let range_header = format!("bytes={}-{}", range.start, range.end.saturating_sub(1));
+        let url =
+            format!("{}/me/drive/root:{}:/content", self.endpoint, segment);
+        let range_header =
+            format!("bytes={}-{}", range.start, range.end.saturating_sub(1));
         let auth = format!("Bearer {}", token);
         let headers = [
             ("Authorization", auth.as_str()),
@@ -361,12 +379,12 @@ where
         let mut offset = 0;
         while remaining > 0 && offset < body.len() {
             let take = remaining.min((body.len() - offset) as u64) as usize;
-            writer
-                .write_at(&body[offset..offset + take], pos)
-                .map_err(|error| StorageError::WriteAt {
+            writer.write_at(&body[offset..offset + take], pos).map_err(
+                |error| StorageError::WriteAt {
                     offset: pos,
                     message: error.to_string(),
-                })?;
+                },
+            )?;
             pos += take as u64;
             remaining -= take as u64;
             offset += take;
@@ -387,7 +405,10 @@ mod tests {
 
     type DefaultStorage = OneDriveStorage<OneDriveTokenSource, UreqHttpGet>;
 
-    fn storage_with_response(status: u16, body: &[u8]) -> OneDriveStorage<StubToken, MockHttpGet> {
+    fn storage_with_response(
+        status: u16,
+        body: &[u8],
+    ) -> OneDriveStorage<StubToken, MockHttpGet> {
         OneDriveStorage::<StubToken, MockHttpGet> {
             root: PathBuf::from("/"),
             endpoint: "https://example.com".into(),
@@ -518,16 +539,26 @@ mod tests {
             DefaultStorage::path_to_graph_segment(&PathBuf::from("Docs")),
             "/Docs"
         );
-        assert!(DefaultStorage::path_to_graph_segment(&PathBuf::from("a/b")).contains("a"));
         assert!(
-            DefaultStorage::path_to_graph_segment(&PathBuf::from("Docs\\File.pdf"))
-                .contains("Docs")
+            DefaultStorage::path_to_graph_segment(&PathBuf::from("a/b"))
+                .contains("a")
         );
         assert!(
-            DefaultStorage::path_to_graph_segment(&PathBuf::from("La Desertica.pdf"))
-                .contains("%20")
+            DefaultStorage::path_to_graph_segment(&PathBuf::from(
+                "Docs\\File.pdf"
+            ))
+            .contains("Docs")
         );
-        assert!(DefaultStorage::path_to_graph_segment(&PathBuf::from("a/b/c")).contains("a"));
+        assert!(
+            DefaultStorage::path_to_graph_segment(&PathBuf::from(
+                "La Desertica.pdf"
+            ))
+            .contains("%20")
+        );
+        assert!(
+            DefaultStorage::path_to_graph_segment(&PathBuf::from("a/b/c"))
+                .contains("a")
+        );
     }
 
     #[test]
@@ -562,7 +593,11 @@ mod tests {
     }
 
     impl HttpGet for MockHttpGet {
-        fn get(&self, _url: &str, _headers: &[(&str, &str)]) -> Result<(u16, Vec<u8>)> {
+        fn get(
+            &self,
+            _url: &str,
+            _headers: &[(&str, &str)],
+        ) -> Result<(u16, Vec<u8>)> {
             Ok((self.status, self.body.clone()))
         }
     }
@@ -609,7 +644,10 @@ mod tests {
 
         assert!(matches!(
             err,
-            crate::storages::Error::OneDrive(Error::ListFailed { status: 500, .. })
+            crate::storages::Error::OneDrive(Error::ListFailed {
+                status: 500,
+                ..
+            })
         ));
     }
 

@@ -1,9 +1,11 @@
 use crate::application::provide::{
-    Application as ProvideApplication, DriverRuntimeHost, Error as ProvideError, ProvideRepository,
-    ProvideUseCase, TelemetryFactory,
+    Application as ProvideApplication, DriverRuntimeHost,
+    Error as ProvideError, ProvideRepository, ProvideUseCase, TelemetryFactory,
 };
 use crate::application::types::ProvideRequest;
-use crate::cli::commands::config::{AddLikeArgs, resolve_temp_driver_spec_from_add_like_args};
+use crate::cli::commands::config::{
+    AddLikeArgs, resolve_temp_driver_spec_from_add_like_args,
+};
 use crate::config::ConfigDir;
 use crate::domain::driver::{DriverConfig, StorageConfig};
 use crate::drivers::Session;
@@ -79,11 +81,13 @@ impl ConnectSyncCommand {
     {
         match &self.action {
             ConnectSyncSubcommand::Temp(args) => {
-                let spec = resolve_temp_driver_spec_from_add_like_args(&AddLikeArgs {
-                    name: None,
-                    path: Some(args.path.clone()),
-                    storage: Some(args.storage.clone()),
-                })?;
+                let spec = resolve_temp_driver_spec_from_add_like_args(
+                    &AddLikeArgs {
+                        name: None,
+                        path: Some(args.path.clone()),
+                        storage: Some(args.storage.clone()),
+                    },
+                )?;
                 let control_name = spec.name.clone();
                 use_case
                     .run_inline_with_control(spec, control_name)
@@ -170,7 +174,10 @@ impl ConfigRepository {
 }
 
 impl ProvideRepository for ConfigRepository {
-    fn read_spec(&self, name: &str) -> crate::application::provide::Result<DriverConfig> {
+    fn read_spec(
+        &self,
+        name: &str,
+    ) -> crate::application::provide::Result<DriverConfig> {
         self.config_dir.read_spec(name).map_err(Into::into)
     }
 }
@@ -182,8 +189,11 @@ impl TelemetryFactory for DefaultTelemetryFactory {
     fn build(
         &self,
         spec: &DriverConfig,
-    ) -> crate::application::provide::Result<Option<crate::telemetry::OtelHandles>> {
-        crate::telemetry::OtelHandles::from_driver_spec(spec).map_err(Into::into)
+    ) -> crate::application::provide::Result<
+        Option<crate::telemetry::OtelHandles>,
+    > {
+        crate::telemetry::OtelHandles::from_driver_spec(spec)
+            .map_err(Into::into)
     }
 }
 
@@ -211,12 +221,12 @@ impl<L: Logger + 'static> DriverRuntimeHost for RuntimeHost<L> {
 
         let result = (|| {
             let (tx, rx) = mpsc::channel();
-            install_ctrlc_handler(tx.clone(), &self.logger).map_err(|error| {
-                ProvideError::Host {
+            install_ctrlc_handler(tx.clone(), &self.logger).map_err(
+                |error| ProvideError::Host {
                     driver_name: driver_name.clone(),
                     reason: error.to_string(),
-                }
-            })?;
+                },
+            )?;
 
             let drivers: Vec<Box<dyn Session>> = crate::connect_drivers(
                 std::slice::from_ref(&request.spec),
@@ -237,12 +247,12 @@ impl<L: Logger + 'static> DriverRuntimeHost for RuntimeHost<L> {
             }
 
             if let Some(control_name) = request.control_name.as_deref() {
-                spawn_control_server(control_name, tx, &self.logger).map_err(|error| {
-                    ProvideError::Host {
+                spawn_control_server(control_name, tx, &self.logger).map_err(
+                    |error| ProvideError::Host {
                         driver_name: control_name.to_owned(),
                         reason: error.to_string(),
-                    }
-                })?;
+                    },
+                )?;
             }
 
             let mut runtime = ServiceRuntime::new(self.logger.clone(), rx);
@@ -348,14 +358,16 @@ fn spawn_control_server<L: Logger + 'static>(
     let logger = logger.clone();
     std::thread::spawn(move || {
         loop {
-            let stop = match listener.serve_one_exchange(&driver_name, |bytes| {
-                let reply = control_reply_for_request(bytes, &driver_name, &tx);
-                let stop = matches!(reply, ControlMessage::Ack);
-                (reply, stop)
-            }) {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
+            let stop =
+                match listener.serve_one_exchange(&driver_name, |bytes| {
+                    let reply =
+                        control_reply_for_request(bytes, &driver_name, &tx);
+                    let stop = matches!(reply, ControlMessage::Ack);
+                    (reply, stop)
+                }) {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
             if stop {
                 break;
             }
@@ -372,7 +384,8 @@ fn spawn_control_server<L: Logger>(
     _logger: &L,
 ) -> crate::cli::Result<()> {
     Err(crate::cli::Error::Validation(
-        "named driver control transport is not supported on this platform".to_owned(),
+        "named driver control transport is not supported on this platform"
+            .to_owned(),
     ))
 }
 
@@ -397,7 +410,10 @@ mod tests {
     }
 
     impl ProvideUseCase for std::cell::RefCell<RecordingUseCase> {
-        fn run_named(&self, name: &str) -> crate::application::provide::Result<()> {
+        fn run_named(
+            &self,
+            name: &str,
+        ) -> crate::application::provide::Result<()> {
             let mut state = self.borrow_mut();
             state.named_calls.push(name.to_owned());
             if let Some(reason) = &state.fail_named {
@@ -409,7 +425,10 @@ mod tests {
             Ok(())
         }
 
-        fn run_inline(&self, spec: DriverConfig) -> crate::application::provide::Result<()> {
+        fn run_inline(
+            &self,
+            spec: DriverConfig,
+        ) -> crate::application::provide::Result<()> {
             self.borrow_mut().inline_calls.push(spec.name);
             Ok(())
         }
@@ -435,7 +454,8 @@ mod tests {
 
         let err = command
             .run_with(&std::cell::RefCell::new(
-                RecordingUseCase::default().with_named_failure("startup failed"),
+                RecordingUseCase::default()
+                    .with_named_failure("startup failed"),
             ))
             .expect_err("startup should fail");
         assert!(matches!(err, crate::cli::Error::Validation(_)));
@@ -459,7 +479,10 @@ mod tests {
     fn named_external_rejects_multiple_tokens() {
         let command = ConnectSyncCommand {
             config_dir: None,
-            action: ConnectSyncSubcommand::Named(vec!["a".to_owned(), "b".to_owned()]),
+            action: ConnectSyncSubcommand::Named(vec![
+                "a".to_owned(),
+                "b".to_owned(),
+            ]),
         };
 
         let err = command
@@ -474,9 +497,11 @@ mod tests {
             config_dir: None,
             action: ConnectSyncSubcommand::Temp(ConnectSyncTempSubcommand {
                 path: PathBuf::from("/mnt/demo"),
-                storage: ConnectSyncStorageSubcommand::Local(LocalStorageArgs {
-                    root: PathBuf::from("/data/demo"),
-                }),
+                storage: ConnectSyncStorageSubcommand::Local(
+                    LocalStorageArgs {
+                        root: PathBuf::from("/data/demo"),
+                    },
+                ),
             }),
         };
 

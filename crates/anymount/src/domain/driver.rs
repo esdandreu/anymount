@@ -55,13 +55,6 @@ impl DriverConfig {
 
         self.storage.validate()
     }
-
-    pub fn onedrive_endpoint(&self) -> Option<&str> {
-        match &self.storage {
-            StorageConfig::OneDrive { endpoint, .. } => Some(endpoint.as_str()),
-            StorageConfig::Local { .. } => None,
-        }
-    }
 }
 
 /// Supported storage backends.

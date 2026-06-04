@@ -19,7 +19,11 @@ fn io_error(path: &Path, source: std::io::Error) -> Error {
     }
 }
 
-fn read_exact_at(file: &std::fs::File, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
+fn read_exact_at(
+    file: &std::fs::File,
+    buf: &mut [u8],
+    offset: u64,
+) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::FileExt;
@@ -91,7 +95,9 @@ impl Storage for LocalStorage {
     fn read_dir(&self, path: PathBuf) -> Result<Self::Iter> {
         let full_path = self.root.join(path);
         let mut entries = Vec::new();
-        for entry in std::fs::read_dir(&full_path).map_err(|source| io_error(&full_path, source))? {
+        for entry in std::fs::read_dir(&full_path)
+            .map_err(|source| io_error(&full_path, source))?
+        {
             let entry = entry.map_err(|source| io_error(&full_path, source))?;
             let meta = entry
                 .metadata()
@@ -114,8 +120,8 @@ impl Storage for LocalStorage {
         range: std::ops::Range<u64>,
     ) -> Result<()> {
         let full_path = self.root.join(path);
-        let file =
-            std::fs::File::open(&full_path).map_err(|source| io_error(&full_path, source))?;
+        let file = std::fs::File::open(&full_path)
+            .map_err(|source| io_error(&full_path, source))?;
         let len = (range.end - range.start) as usize;
         let chunk_size = self.chunk_size.min(len);
         let mut buf = vec![0u8; chunk_size];
@@ -165,7 +171,8 @@ mod tests {
 
     #[test]
     fn new_and_with_chunk_size() {
-        let storage = LocalStorage::new(PathBuf::from("/tmp")).with_chunk_size(4096);
+        let storage =
+            LocalStorage::new(PathBuf::from("/tmp")).with_chunk_size(4096);
         let _ = storage;
     }
 
@@ -184,12 +191,14 @@ mod tests {
         let entries: Vec<_> = iter.collect();
         assert!(entries.len() >= 2);
 
-        let file_entry = entries.iter().find(|e| e.file_name() == "f.txt").unwrap();
+        let file_entry =
+            entries.iter().find(|e| e.file_name() == "f.txt").unwrap();
         assert_eq!(file_entry.file_name(), "f.txt");
         assert!(!file_entry.is_dir());
         assert_eq!(file_entry.size(), content.len() as u64);
 
-        let dir_entry = entries.iter().find(|e| e.file_name() == "sub").unwrap();
+        let dir_entry =
+            entries.iter().find(|e| e.file_name() == "sub").unwrap();
         assert!(dir_entry.is_dir());
     }
 

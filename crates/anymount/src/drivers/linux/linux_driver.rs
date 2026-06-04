@@ -1,8 +1,8 @@
 //! Linux driver: FUSE mount + D-Bus org.freedesktop.CloudProviders.
 
 use super::dbus::{
-    AccountExporter, ActionMessage, PROVIDER_PATH, ProviderExporter, new_account_interfaces,
-    request_bus_name,
+    AccountExporter, ActionMessage, PROVIDER_PATH, ProviderExporter,
+    new_account_interfaces, request_bus_name,
 };
 use super::gtk_dbus::{ACTION_FREE_LOCAL_CACHE, ACTION_OPEN_FOLDER};
 use super::{Error, Result, StorageFilesystem};
@@ -79,17 +79,17 @@ pub fn mount_storage(
     logger.info(format!("Cache path: {}", cache_root.display()));
 
     let fs = StorageFilesystem::new(storage, cache_root, logger.clone())?;
-    let session = fuser::spawn_mount2(fs, &path, &fuser::Config::default()).map_err(|source| {
-        Error::FuseMount {
+    let session = fuser::spawn_mount2(fs, &path, &fuser::Config::default())
+        .map_err(|source| Error::FuseMount {
             path: path.clone(),
             source,
-        }
-    })?;
+        })?;
     Ok((path, session))
 }
 
 pub fn new_runtime() -> Result<tokio::runtime::Runtime> {
-    tokio::runtime::Runtime::new().map_err(|source| Error::RuntimeInit { source })
+    tokio::runtime::Runtime::new()
+        .map_err(|source| Error::RuntimeInit { source })
 }
 
 async fn run_actions<L: Logger>(
@@ -118,12 +118,13 @@ pub async fn export_on_dbus<L: Logger + Clone + 'static>(
     accounts: &[(PathBuf, AccountExporter)],
     logger: &L,
 ) -> Result<()> {
-    let connection = zbus::Connection::session()
-        .await
-        .map_err(|source| Error::Dbus {
-            operation: "open session bus",
-            source,
-        })?;
+    let connection =
+        zbus::Connection::session()
+            .await
+            .map_err(|source| Error::Dbus {
+                operation: "open session bus",
+                source,
+            })?;
     request_bus_name(&connection)
         .await
         .map_err(|source| Error::Dbus {
@@ -131,7 +132,8 @@ pub async fn export_on_dbus<L: Logger + Clone + 'static>(
             source,
         })?;
 
-    let (action_tx, action_rx) = tokio::sync::mpsc::unbounded_channel::<ActionMessage>();
+    let (action_tx, action_rx) =
+        tokio::sync::mpsc::unbounded_channel::<ActionMessage>();
     tokio::spawn(run_actions(action_rx, logger.clone()));
 
     connection

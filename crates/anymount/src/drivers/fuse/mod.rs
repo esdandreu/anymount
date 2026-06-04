@@ -5,8 +5,8 @@ pub mod error;
 use crate::storages::{DirEntry, Storage, WriteAt};
 pub use error::{Error, Result};
 use fuser::{
-    Errno, FileAttr, FileHandle, FileType, Generation, INodeNo, OpenFlags, ReplyAttr, ReplyData,
-    ReplyDirectory, ReplyEntry, Request,
+    Errno, FileAttr, FileHandle, FileType, Generation, INodeNo, OpenFlags,
+    ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request,
 };
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -15,7 +15,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
-pub use crate::drivers::fuse::error::{Error as FuseError, Result as FuseResult};
+pub use crate::drivers::fuse::error::{
+    Error as FuseError, Result as FuseResult,
+};
 
 pub mod driver;
 
@@ -91,10 +93,19 @@ impl Default for CachedDirCache {
 }
 
 pub trait CachePort: Send + Sync {
-    fn sync_metadata_placeholders(&self, dir_path: &Path, entries: &[CachedDirEntry])
-    -> Result<()>;
+    fn sync_metadata_placeholders(
+        &self,
+        dir_path: &Path,
+        entries: &[CachedDirEntry],
+    ) -> Result<()>;
     fn read_range(&self, path: &Path, start: u64, end: u64) -> Result<Vec<u8>>;
-    fn write_range(&self, path: &Path, start: u64, data: &[u8], size: u64) -> Result<()>;
+    fn write_range(
+        &self,
+        path: &Path,
+        start: u64,
+        data: &[u8],
+        size: u64,
+    ) -> Result<()>;
 }
 
 pub struct NoCacheFsCache;
@@ -128,7 +139,13 @@ impl CachePort for NoCacheFsCache {
         })
     }
 
-    fn write_range(&self, _path: &Path, _start: u64, _data: &[u8], _size: u64) -> Result<()> {
+    fn write_range(
+        &self,
+        _path: &Path,
+        _start: u64,
+        _data: &[u8],
+        _size: u64,
+    ) -> Result<()> {
         Ok(())
     }
 }
@@ -152,7 +169,11 @@ pub struct StorageFilesystem<S: Storage, L: Logger + 'static> {
 }
 
 impl<S: Storage, L: Logger + 'static> StorageFilesystem<S, L> {
-    pub fn new_with_cache(storage: S, cache: Arc<dyn CachePort>, logger: L) -> Self {
+    pub fn new_with_cache(
+        storage: S,
+        cache: Arc<dyn CachePort>,
+        logger: L,
+    ) -> Self {
         let storage = Arc::new(storage);
         let next_ino = AtomicU64::new(2);
         let ino_to_info = RwLock::new(HashMap::new());
@@ -183,7 +204,13 @@ impl<S: Storage, L: Logger + 'static> StorageFilesystem<S, L> {
         self.ino_to_info.read().get(&ino).cloned()
     }
 
-    fn get_or_create_ino(&self, path: PathBuf, is_dir: bool, size: u64, atime: SystemTime) -> u64 {
+    fn get_or_create_ino(
+        &self,
+        path: PathBuf,
+        is_dir: bool,
+        size: u64,
+        atime: SystemTime,
+    ) -> u64 {
         {
             let guard = self.path_to_ino.read();
             if let Some(&ino) = guard.get(&path) {
@@ -238,7 +265,10 @@ impl<S: Storage, L: Logger + 'static> StorageFilesystem<S, L> {
         offset.saturating_sub(DOT_DOT_ENTRY_OFFSET) as usize
     }
 
-    pub fn read_dir_entries(&self, path: PathBuf) -> Result<Vec<CachedDirEntry>> {
+    pub fn read_dir_entries(
+        &self,
+        path: PathBuf,
+    ) -> Result<Vec<CachedDirEntry>> {
         if let Some(entries) = self.dir_cache.get(&path) {
             return Ok(entries);
         }
@@ -258,8 +288,16 @@ impl<S: Storage, L: Logger + 'static> StorageFilesystem<S, L> {
     }
 }
 
-impl<S: Storage, L: Logger + 'static> fuser::Filesystem for StorageFilesystem<S, L> {
-    fn lookup(&self, _req: &Request, parent: INodeNo, name: &std::ffi::OsStr, reply: ReplyEntry) {
+impl<S: Storage, L: Logger + 'static> fuser::Filesystem
+    for StorageFilesystem<S, L>
+{
+    fn lookup(
+        &self,
+        _req: &Request,
+        parent: INodeNo,
+        name: &std::ffi::OsStr,
+        reply: ReplyEntry,
+    ) {
         let parent_info = match self.get_info(parent.0) {
             Some(i) => i,
             None => {
@@ -307,23 +345,31 @@ impl<S: Storage, L: Logger + 'static> fuser::Filesystem for StorageFilesystem<S,
                 return;
             }
         };
-        let entry = match entries.iter().find(|e| e.file_name == name_str.as_ref()) {
-            Some(e) => e,
-            None => {
-                reply.error(Errno::from_i32(libc::ENOENT));
-                return;
-            }
-        };
+        let entry =
+            match entries.iter().find(|e| e.file_name == name_str.as_ref()) {
+                Some(e) => e,
+                None => {
+                    reply.error(Errno::from_i32(libc::ENOENT));
+                    return;
+                }
+            };
         let is_dir = entry.is_dir;
         let size = entry.size;
         let atime = entry.accessed;
-        let ino = self.get_or_create_ino(child_path.clone(), is_dir, size, atime);
+        let ino =
+            self.get_or_create_ino(child_path.clone(), is_dir, size, atime);
         let info = self.get_info(ino).unwrap();
         let attr = self.attr_from_info(INodeNo(ino), &info);
         reply.entry(&TTL, &attr, FUSE_GENERATION);
     }
 
-    fn getattr(&self, _req: &Request, ino: INodeNo, _fh: Option<FileHandle>, reply: ReplyAttr) {
+    fn getattr(
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        _fh: Option<FileHandle>,
+        reply: ReplyAttr,
+    ) {
         match self.get_info(ino.0) {
             Some(info) => {
                 let attr = self.attr_from_info(ino, &info);
@@ -376,7 +422,11 @@ impl<S: Storage, L: Logger + 'static> fuser::Filesystem for StorageFilesystem<S,
             range_start: u64,
         }
         impl WriteAt for VecWriter {
-            fn write_at(&mut self, buf: &[u8], at: u64) -> crate::storages::Result<()> {
+            fn write_at(
+                &mut self,
+                buf: &[u8],
+                at: u64,
+            ) -> crate::storages::Result<()> {
                 let start = (at.saturating_sub(self.range_start)) as usize;
                 let end = start + buf.len();
                 if end > self.buf.len() {
@@ -398,9 +448,9 @@ impl<S: Storage, L: Logger + 'static> fuser::Filesystem for StorageFilesystem<S,
             reply.error(Errno::from_i32(libc::EIO));
             return;
         }
-        if let Err(err) = self
-            .cache
-            .write_range(&info.path, offset, &writer.buf, info.size)
+        if let Err(err) =
+            self.cache
+                .write_range(&info.path, offset, &writer.buf, info.size)
         {
             self.logger.warn(format!(
                 "failed to write data cache path={} error={}",
@@ -486,10 +536,19 @@ impl<S: Storage, L: Logger + 'static> fuser::Filesystem for StorageFilesystem<S,
             } else {
                 FileType::RegularFile
             };
-            let child_ino =
-                self.get_or_create_ino(child_path, entry.is_dir, entry.size, entry.accessed);
+            let child_ino = self.get_or_create_ino(
+                child_path,
+                entry.is_dir,
+                entry.size,
+                entry.accessed,
+            );
             let next_offset = Self::child_entry_offset(entry_index);
-            if reply.add(INodeNo(child_ino), next_offset, kind, &entry.file_name) {
+            if reply.add(
+                INodeNo(child_ino),
+                next_offset,
+                kind,
+                &entry.file_name,
+            ) {
                 reply.ok();
                 return;
             }
@@ -501,8 +560,9 @@ impl<S: Storage, L: Logger + 'static> fuser::Filesystem for StorageFilesystem<S,
 #[cfg(test)]
 mod tests {
     use super::{
-        CachePort, CachedDirCache, CachedDirEntry, DOT_DOT_ENTRY_OFFSET, DOT_ENTRY_OFFSET,
-        FIRST_CHILD_ENTRY_OFFSET, NoCacheFsCache, StorageFilesystem,
+        CachePort, CachedDirCache, CachedDirEntry, DOT_DOT_ENTRY_OFFSET,
+        DOT_ENTRY_OFFSET, FIRST_CHILD_ENTRY_OFFSET, NoCacheFsCache,
+        StorageFilesystem,
     };
     use crate::drivers::fuse::error::Error;
     use crate::storages::{Storage, WriteAt};
@@ -546,7 +606,10 @@ mod tests {
         type Entry = TestDirEntry;
         type Iter = std::vec::IntoIter<TestDirEntry>;
 
-        fn read_dir(&self, _path: PathBuf) -> crate::storages::Result<Self::Iter> {
+        fn read_dir(
+            &self,
+            _path: PathBuf,
+        ) -> crate::storages::Result<Self::Iter> {
             self.read_dir_calls.fetch_add(1, Ordering::SeqCst);
             Ok(vec![TestDirEntry {
                 file_name: "alpha.txt".to_string(),
@@ -575,7 +638,8 @@ mod tests {
     }
 
     impl MockCachePort {
-        fn new() -> (Self, Arc<AtomicUsize>, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+        fn new() -> (Self, Arc<AtomicUsize>, Arc<AtomicUsize>, Arc<AtomicUsize>)
+        {
             let sync_calls = Arc::new(AtomicUsize::new(0));
             let read_calls = Arc::new(AtomicUsize::new(0));
             let write_calls = Arc::new(AtomicUsize::new(0));

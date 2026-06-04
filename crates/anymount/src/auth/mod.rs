@@ -3,7 +3,8 @@ pub mod onedrive;
 pub mod token_response;
 
 use crate::application::auth::{
-    AuthFlow as ApplicationAuthFlow, Result as ApplicationAuthResult, StartedAuthSession,
+    AuthFlow as ApplicationAuthFlow, Result as ApplicationAuthResult,
+    StartedAuthSession,
 };
 
 pub use error::{Error, Result};
@@ -21,7 +22,8 @@ impl ApplicationAuthFlow for OneDriveAuthFlow {
         &self,
         client_id: Option<String>,
     ) -> ApplicationAuthResult<Box<dyn StartedAuthSession>> {
-        let authorizer = OneDriveAuthorizer::new(client_id).map_err(Error::from)?;
+        let authorizer =
+            OneDriveAuthorizer::new(client_id).map_err(Error::from)?;
         let started = authorizer.start_authorization().map_err(Error::from)?;
         Ok(Box::new(started))
     }

@@ -17,7 +17,11 @@ pub trait ControlTransport {
 
     fn bind(&self, driver_name: &str) -> Result<Self::Server>;
 
-    fn send(&self, driver_name: &str, message: ControlMessage) -> Result<ControlMessage>;
+    fn send(
+        &self,
+        driver_name: &str,
+        message: ControlMessage,
+    ) -> Result<ControlMessage>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -26,12 +30,18 @@ pub struct InMemoryControlTransport {
 }
 
 impl InMemoryControlTransport {
-    pub fn serve_once<F>(&self, server: InMemoryServer, handler: F) -> Result<()>
+    pub fn serve_once<F>(
+        &self,
+        server: InMemoryServer,
+        handler: F,
+    ) -> Result<()>
     where
         F: FnOnce(ControlMessage) -> ControlMessage,
     {
-        let mut responses = self.responses.lock().map_err(|_| Error::Poisoned)?;
-        responses.insert(server.driver_name, vec![handler(ControlMessage::Ping)]);
+        let mut responses =
+            self.responses.lock().map_err(|_| Error::Poisoned)?;
+        responses
+            .insert(server.driver_name, vec![handler(ControlMessage::Ping)]);
         Ok(())
     }
 }
@@ -50,13 +60,19 @@ impl ControlTransport for InMemoryControlTransport {
         })
     }
 
-    fn send(&self, driver_name: &str, _message: ControlMessage) -> Result<ControlMessage> {
-        let mut responses = self.responses.lock().map_err(|_| Error::Poisoned)?;
-        let queue = responses
-            .get_mut(driver_name)
-            .ok_or_else(|| Error::NotBound {
-                driver_name: driver_name.to_owned(),
-            })?;
+    fn send(
+        &self,
+        driver_name: &str,
+        _message: ControlMessage,
+    ) -> Result<ControlMessage> {
+        let mut responses =
+            self.responses.lock().map_err(|_| Error::Poisoned)?;
+        let queue =
+            responses
+                .get_mut(driver_name)
+                .ok_or_else(|| Error::NotBound {
+                    driver_name: driver_name.to_owned(),
+                })?;
         if queue.is_empty() {
             return Err(Error::NoQueuedResponse {
                 driver_name: driver_name.to_owned(),
@@ -78,7 +94,9 @@ mod tests {
         transport
             .serve_once(server, |message| match message {
                 ControlMessage::Ping => ControlMessage::Ready,
-                other => ControlMessage::Error(format!("unexpected: {other:?}")),
+                other => {
+                    ControlMessage::Error(format!("unexpected: {other:?}"))
+                }
             })
             .expect("serve should succeed");
 

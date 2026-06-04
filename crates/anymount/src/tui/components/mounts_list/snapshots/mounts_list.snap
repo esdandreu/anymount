@@ -1,0 +1,14 @@
+---
+source: crates/anymount/src/tui/components/mounts_list/mounts_list.rs
+expression: terminal.backend()
+---
+" ┌─────────────────────────────────────────────────────────────────────────────┐"
+" │ ●  Connected Mount      /mnt/connected                   local              │"
+"┌┴────────────────────────────────────────────────────────────────────────────┬┤"
+"│ ○  Disconnected Mount   /mnt/disconnected                local              ││"
+"└┬────────────────────────────────────────────────────────────────────────────┴┤"
+" │                                                                             │"
+" └─────────────────────────────────────────────────────────────────────────────┘"
+"       j↑ select ↓k             ⇐ disconnect connect ⇒             info ↵       "
+"                                                                                "
+"                                                                                "

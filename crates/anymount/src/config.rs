@@ -1,6 +1,6 @@
 use crate::domain::driver::{
-    DriverConfig, OtlpSpec as DomainOtlpSpec, OtlpTransport as DomainOtlpTransport, StorageConfig,
-    TelemetrySpec,
+    DriverConfig, OtlpSpec as DomainOtlpSpec,
+    OtlpTransport as DomainOtlpTransport, StorageConfig, TelemetrySpec,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -95,7 +95,9 @@ pub struct OtlpTelemetryConfig {
 }
 
 /// OTLP wire transport (only HTTP/protobuf is implemented today).
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default,
+)]
 pub enum OtlpTransport {
     #[default]
     #[serde(rename = "http/protobuf")]
@@ -243,7 +245,9 @@ impl ConfigDir {
                 if let Some(stem) = path.file_stem() {
                     names.push(
                         stem.to_str()
-                            .ok_or_else(|| Error::NonUtf8FileName { path: path.clone() })?
+                            .ok_or_else(|| Error::NonUtf8FileName {
+                                path: path.clone(),
+                            })?
                             .to_owned(),
                     );
                 }
@@ -257,7 +261,9 @@ impl ConfigDir {
     ///
     /// The outer [`Result`] fails only when the directory cannot be listed. Each
     /// item pairs the driver name with the result of reading its `.toml` file.
-    pub fn each_driver(&self) -> Result<impl Iterator<Item = (String, Result<DriverFileConfig>)>> {
+    pub fn each_driver(
+        &self,
+    ) -> Result<impl Iterator<Item = (String, Result<DriverFileConfig>)>> {
         let names = self.list()?;
         let this = self.clone();
         Ok(names.into_iter().map(move |name| {
@@ -269,11 +275,13 @@ impl ConfigDir {
     /// Read a single driver config by name.
     pub fn read(&self, name: &str) -> Result<DriverFileConfig> {
         let path = self.file_path(name);
-        let contents = fs::read_to_string(&path).map_err(|source| Error::Read {
-            path: path.clone(),
-            source,
-        })?;
-        toml::from_str(&contents).map_err(|source| Error::Parse { path, source })
+        let contents =
+            fs::read_to_string(&path).map_err(|source| Error::Read {
+                path: path.clone(),
+                source,
+            })?;
+        toml::from_str(&contents)
+            .map_err(|source| Error::Parse { path, source })
     }
 
     /// Write (create or overwrite) a driver config.
@@ -284,7 +292,8 @@ impl ConfigDir {
         })?;
         let path = self.file_path(name);
         let contents = toml::to_string_pretty(config)?;
-        fs::write(&path, contents).map_err(|source| Error::Write { path, source })
+        fs::write(&path, contents)
+            .map_err(|source| Error::Write { path, source })
     }
 
     /// Remove a driver config file.
@@ -468,9 +477,15 @@ mod tests {
         let entries: Vec<_> = cd.each_driver().expect("each_driver").collect();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].0, "alpha");
-        assert!(entries[0].1.as_ref().expect("alpha load").storage.label() == "onedrive");
+        assert!(
+            entries[0].1.as_ref().expect("alpha load").storage.label()
+                == "onedrive"
+        );
         assert_eq!(entries[1].0, "bravo");
-        assert!(entries[1].1.as_ref().expect("bravo load").storage.label() == "local");
+        assert!(
+            entries[1].1.as_ref().expect("bravo load").storage.label()
+                == "local"
+        );
     }
 
     #[test]
@@ -507,7 +522,8 @@ mod tests {
     #[test]
     fn read_invalid_toml_returns_parse_error() {
         let (_tmp, cd) = tmp_config_dir();
-        std::fs::write(cd.dir().join("broken.toml"), "path = [").expect("seed invalid toml");
+        std::fs::write(cd.dir().join("broken.toml"), "path = [")
+            .expect("seed invalid toml");
 
         let err = cd.read("broken").expect_err("read should fail");
         assert!(matches!(err, Error::Parse { .. }));

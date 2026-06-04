@@ -50,7 +50,11 @@ impl AuthCommand {
 
     /// Internal entry point for injection (e.g. tests). Not part of the public
     /// API.
-    pub(crate) fn _execute<U, O>(&self, use_case: &U, url_opener: &O) -> crate::cli::Result<()>
+    pub(crate) fn _execute<U, O>(
+        &self,
+        use_case: &U,
+        url_opener: &O,
+    ) -> crate::cli::Result<()>
     where
         U: AuthUseCase,
         O: UrlOpener,
@@ -93,7 +97,9 @@ fn print_tokens(tokens: &TokenResponse) {
     if let Some(ref r) = tokens.refresh_token {
         println!("refresh_token: {}", r);
     }
-    eprintln!("access_token is short-lived; use refresh_token for storage config.");
+    eprintln!(
+        "access_token is short-lived; use refresh_token for storage config."
+    );
 }
 
 fn map_auth_error(error: AuthApplicationError) -> crate::cli::Error {
@@ -106,8 +112,8 @@ fn map_auth_error(error: AuthApplicationError) -> crate::cli::Error {
 mod tests {
     use super::*;
     use crate::application::auth::{
-        AuthUseCase, Error as AuthApplicationError, Result as AuthApplicationResult,
-        StartedAuthSession,
+        AuthUseCase, Error as AuthApplicationError,
+        Result as AuthApplicationResult, StartedAuthSession,
     };
 
     struct MockSession;

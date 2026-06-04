@@ -31,11 +31,13 @@ impl TestFixture {
         fs::create_dir(&mount_path).expect("Failed to create mnt dir");
         fs::create_dir(&data_path).expect("Failed to create data dir");
 
-        fs::write(data_path.join("hello.txt"), "Hello, World!").expect("Failed to write hello.txt");
+        fs::write(data_path.join("hello.txt"), "Hello, World!")
+            .expect("Failed to write hello.txt");
 
         let subdir = data_path.join("subdir");
         fs::create_dir(&subdir).expect("Failed to create subdir");
-        fs::write(subdir.join("nested.txt"), "Nested content").expect("Failed to write nested.txt");
+        fs::write(subdir.join("nested.txt"), "Nested content")
+            .expect("Failed to write nested.txt");
 
         let binary_path = env!("CARGO_BIN_EXE_anymount-cli");
         let child = Command::new(binary_path)
@@ -231,8 +233,8 @@ fn local_provider_reads_file_content() {
         "File hello.txt should exist in mount"
     );
 
-    let content =
-        fs::read_to_string(fixture.mount_path.join("hello.txt")).expect("Failed to read hello.txt");
+    let content = fs::read_to_string(fixture.mount_path.join("hello.txt"))
+        .expect("Failed to read hello.txt");
     assert_eq!(content, "Hello, World!");
 }
 

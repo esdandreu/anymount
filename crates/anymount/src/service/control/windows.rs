@@ -6,15 +6,17 @@ use crate::service::{Error, Result};
 use std::fs;
 use std::io;
 use windows::Win32::Foundation::{
-    CloseHandle, GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
+    CloseHandle, GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE,
+    INVALID_HANDLE_VALUE,
 };
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_MODE, FlushFileBuffers, OPEN_EXISTING,
-    PIPE_ACCESS_DUPLEX, ReadFile, WriteFile,
+    CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_MODE, FlushFileBuffers,
+    OPEN_EXISTING, PIPE_ACCESS_DUPLEX, ReadFile, WriteFile,
 };
 use windows::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, NAMED_PIPE_MODE,
-    PIPE_READMODE_MESSAGE, PIPE_TYPE_MESSAGE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    PIPE_READMODE_MESSAGE, PIPE_TYPE_MESSAGE, PIPE_UNLIMITED_INSTANCES,
+    PIPE_WAIT,
 };
 use windows::core::HSTRING;
 
@@ -29,7 +31,11 @@ impl WindowsControl {
         })
     }
 
-    pub fn send(&self, provider_name: &str, message: ControlMessage) -> Result<ControlMessage> {
+    pub fn send(
+        &self,
+        provider_name: &str,
+        message: ControlMessage,
+    ) -> Result<ControlMessage> {
         let _ = ensure_pipe_state_path(provider_name)?;
         let name = pipe_hstring(provider_name)?;
         let handle = connect_client_pipe(&name, provider_name)?;
@@ -77,8 +83,9 @@ impl WindowsPipeListener {
     ) -> Result<bool> {
         let pipe = create_server_pipe(&self.pipe_name, provider_name)?;
         unsafe {
-            ConnectNamedPipe(pipe, None)
-                .map_err(|e| win_to_io_error("ConnectNamedPipe", provider_name, e))?;
+            ConnectNamedPipe(pipe, None).map_err(|e| {
+                win_to_io_error("ConnectNamedPipe", provider_name, e)
+            })?;
         }
         let request = read_message_pipe(pipe, provider_name)?;
         let (reply, stop) = handle_control(&request);
@@ -94,7 +101,8 @@ impl WindowsPipeListener {
 }
 
 fn create_server_pipe(name: &HSTRING, provider_name: &str) -> Result<HANDLE> {
-    let mode: NAMED_PIPE_MODE = PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT;
+    let mode: NAMED_PIPE_MODE =
+        PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT;
     let handle = unsafe {
         CreateNamedPipeW(
             name,
@@ -130,11 +138,17 @@ fn connect_client_pipe(name: &HSTRING, provider_name: &str) -> Result<HANDLE> {
             HANDLE(std::ptr::null_mut()),
         )
     }
-    .map_err(|e| win_to_io_error("CreateFileW pipe client", provider_name, e))?;
+    .map_err(|e| {
+        win_to_io_error("CreateFileW pipe client", provider_name, e)
+    })?;
     Ok(handle)
 }
 
-fn write_all_pipe(handle: HANDLE, provider_name: &str, data: &[u8]) -> Result<()> {
+fn write_all_pipe(
+    handle: HANDLE,
+    provider_name: &str,
+    data: &[u8],
+) -> Result<()> {
     let mut total = 0u32;
     while (total as usize) < data.len() {
         let mut written = 0u32;
@@ -151,7 +165,10 @@ fn write_all_pipe(handle: HANDLE, provider_name: &str, data: &[u8]) -> Result<()
             return Err(io_error(
                 "WriteFile",
                 provider_name,
-                io::Error::new(io::ErrorKind::WriteZero, "WriteFile wrote 0 bytes"),
+                io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "WriteFile wrote 0 bytes",
+                ),
             ));
         }
         total += written;
@@ -170,7 +187,11 @@ fn read_message_pipe(handle: HANDLE, provider_name: &str) -> Result<Vec<u8>> {
     Ok(buf)
 }
 
-fn io_error(operation: &'static str, provider_name: &str, source: io::Error) -> Error {
+fn io_error(
+    operation: &'static str,
+    provider_name: &str,
+    source: io::Error,
+) -> Error {
     Error::Io {
         operation,
         provider_name: provider_name.to_owned(),
@@ -178,7 +199,11 @@ fn io_error(operation: &'static str, provider_name: &str, source: io::Error) -> 
     }
 }
 
-fn win_to_io_error(operation: &'static str, provider_name: &str, e: windows::core::Error) -> Error {
+fn win_to_io_error(
+    operation: &'static str,
+    provider_name: &str,
+    e: windows::core::Error,
+) -> Error {
     io_error(operation, provider_name, io::Error::other(e.to_string()))
 }
 
@@ -200,8 +225,12 @@ mod tests {
                 let stop = listener
                     .serve_one_exchange("winpipe-test", |bytes| {
                         match ControlMessage::decode(bytes).expect("decode") {
-                            ControlMessage::Ping => (ControlMessage::Ready, false),
-                            ControlMessage::Shutdown => (ControlMessage::Ack, true),
+                            ControlMessage::Ping => {
+                                (ControlMessage::Ready, false)
+                            }
+                            ControlMessage::Shutdown => {
+                                (ControlMessage::Ack, true)
+                            }
                             other => panic!("unexpected {other:?}"),
                         }
                     })

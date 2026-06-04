@@ -1,6 +1,6 @@
 use crate::application::disconnect::{
-    Application as DisconnectApplication, DisconnectRepository, DisconnectUseCase,
-    Error as DisconnectError, ServiceControl,
+    Application as DisconnectApplication, DisconnectRepository,
+    DisconnectUseCase, Error as DisconnectError, ServiceControl,
 };
 use crate::config::ConfigDir;
 use clap::Args;
@@ -64,7 +64,9 @@ impl ConfigRepository {
 }
 
 impl DisconnectRepository for ConfigRepository {
-    fn list_names(&self) -> crate::application::disconnect::Result<Vec<String>> {
+    fn list_names(
+        &self,
+    ) -> crate::application::disconnect::Result<Vec<String>> {
         self.config_dir.list().map_err(Into::into)
     }
 }
@@ -73,7 +75,10 @@ impl DisconnectRepository for ConfigRepository {
 struct ProviderServiceControl;
 
 impl ServiceControl for ProviderServiceControl {
-    fn disconnect(&self, provider_name: &str) -> std::result::Result<(), String> {
+    fn disconnect(
+        &self,
+        provider_name: &str,
+    ) -> std::result::Result<(), String> {
         crate::cli::provider_control::try_disconnect_provider(provider_name)
     }
 }
@@ -96,7 +101,9 @@ fn map_disconnect_error(error: DisconnectError) -> crate::cli::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::disconnect::{DisconnectUseCase, Error as DisconnectError};
+    use crate::application::disconnect::{
+        DisconnectUseCase, Error as DisconnectError,
+    };
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
@@ -112,7 +119,11 @@ mod tests {
             self.calls.lock().expect("calls lock").clone()
         }
 
-        fn with_name_error(mut self, provider_name: &str, reason: &str) -> Self {
+        fn with_name_error(
+            mut self,
+            provider_name: &str,
+            reason: &str,
+        ) -> Self {
             self.disconnect_name_errors
                 .insert(provider_name.to_owned(), reason.to_owned());
             self
@@ -207,7 +218,9 @@ mod tests {
         };
 
         let err = cmd
-            ._execute(&RecordingUseCase::default().with_name_error("demo", "nope"))
+            ._execute(
+                &RecordingUseCase::default().with_name_error("demo", "nope"),
+            )
             .expect_err("disconnect should fail");
         assert!(matches!(err, crate::cli::Error::DisconnectFailures { .. }));
     }

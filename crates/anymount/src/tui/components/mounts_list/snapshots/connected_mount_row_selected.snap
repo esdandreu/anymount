@@ -1,0 +1,7 @@
+---
+source: crates/anymount/src/tui/components/mounts_list/mount_row.rs
+expression: terminal.backend()
+---
+" ┌─────────────────────────────────────────────────────────────────────────────┐"
+" │ ●  test                 /test                            test    [ ⇐ ][ ↵ ] │"
+" └─────────────────────────────────────────────────────────────────────────────┘"

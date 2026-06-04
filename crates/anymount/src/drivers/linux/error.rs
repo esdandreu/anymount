@@ -47,7 +47,9 @@ pub enum Error {
         source: zbus::Error,
     },
 
-    #[error("d-bus object registration failed for {object_path} during {operation}: {source}")]
+    #[error(
+        "d-bus object registration failed for {object_path} during {operation}: {source}"
+    )]
     DbusObject {
         operation: &'static str,
         object_path: String,

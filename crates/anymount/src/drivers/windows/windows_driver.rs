@@ -4,8 +4,8 @@ use crate::drivers::Session;
 use crate::service::control::messages::ServiceMessage;
 use crate::storages::Storage;
 use cloud_filter::root::{
-    Connection, HydrationType, PopulationType, SecurityId, Session as CloudSession, SyncRootId,
-    SyncRootIdBuilder, SyncRootInfo,
+    Connection, HydrationType, PopulationType, SecurityId,
+    Session as CloudSession, SyncRootId, SyncRootIdBuilder, SyncRootInfo,
 };
 use std::path::{PathBuf, absolute};
 use std::sync::mpsc::Sender;
@@ -35,11 +35,12 @@ where
         logger: L,
         service_tx: Option<Sender<ServiceMessage>>,
     ) -> Result<Box<dyn Session>> {
-        let security_id =
-            SecurityId::current_user().map_err(|source| Error::CloudFilterOperation {
+        let security_id = SecurityId::current_user().map_err(|source| {
+            Error::CloudFilterOperation {
                 operation: "resolve current user security id",
                 source,
-            })?;
+            }
+        })?;
         if !path.exists() {
             std::fs::create_dir(&path).map_err(|source| Error::Io {
                 operation: "create mount path",
@@ -63,12 +64,12 @@ where
             .user_security_id(security_id)
             .build();
 
-        let is_registered = id
-            .is_registered()
-            .map_err(|source| Error::CloudFilterOperation {
+        let is_registered = id.is_registered().map_err(|source| {
+            Error::CloudFilterOperation {
                 operation: "check sync root registration",
                 source,
-            })?;
+            }
+        })?;
         if !is_registered {
             let sync_root_info = SyncRootInfo::default()
                 .with_display_name(name)
@@ -82,11 +83,12 @@ where
                     source,
                 })?;
 
-            id.register(sync_root_info)
-                .map_err(|source| Error::CloudFilterOperation {
+            id.register(sync_root_info).map_err(|source| {
+                Error::CloudFilterOperation {
                     operation: "register sync root",
                     source,
-                })?;
+                }
+            })?;
             logger.info(format!("Sync root registered: {}", name));
         }
 
@@ -94,7 +96,12 @@ where
         let connection = session
             .connect(
                 &path,
-                super::Callbacks::new(path.clone(), storage, logger, service_tx),
+                super::Callbacks::new(
+                    path.clone(),
+                    storage,
+                    logger,
+                    service_tx,
+                ),
             )
             .map_err(|source| Error::CloudFilterOperation {
                 operation: "connect to sync root",

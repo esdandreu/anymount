@@ -23,7 +23,11 @@ pub trait ServiceControl {
 }
 
 pub trait ServiceLauncher {
-    fn launch(&self, driver_name: &str, config_dir: &Path) -> std::result::Result<(), String>;
+    fn launch(
+        &self,
+        driver_name: &str,
+        config_dir: &Path,
+    ) -> std::result::Result<(), String>;
 }
 
 pub trait ConnectUseCase {
@@ -39,7 +43,12 @@ pub struct Application<'a, R, C, L> {
 }
 
 impl<'a, R, C, L> Application<'a, R, C, L> {
-    pub fn new(config_dir: &'a Path, repository: &'a R, control: &'a C, launcher: &'a L) -> Self {
+    pub fn new(
+        config_dir: &'a Path,
+        repository: &'a R,
+        control: &'a C,
+        launcher: &'a L,
+    ) -> Self {
         Self {
             config_dir,
             repository,
@@ -55,7 +64,10 @@ where
     C: ServiceControl,
     L: ServiceLauncher,
 {
-    fn connect_one(&self, driver_name: &str) -> std::result::Result<(), String> {
+    fn connect_one(
+        &self,
+        driver_name: &str,
+    ) -> std::result::Result<(), String> {
         if self.control.ready(driver_name) {
             return Ok(());
         }
@@ -99,7 +111,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        Application, ConnectRepository, ConnectUseCase, Result, ServiceControl, ServiceLauncher,
+        Application, ConnectRepository, ConnectUseCase, Result, ServiceControl,
+        ServiceLauncher,
     };
     use std::collections::{HashMap, HashSet};
     use std::path::{Path, PathBuf};
@@ -132,7 +145,11 @@ mod tests {
     }
 
     impl ServiceLauncher for TestLauncher {
-        fn launch(&self, driver_name: &str, _config_dir: &Path) -> std::result::Result<(), String> {
+        fn launch(
+            &self,
+            driver_name: &str,
+            _config_dir: &Path,
+        ) -> std::result::Result<(), String> {
             match self.failures.get(driver_name) {
                 Some(reason) => Err(reason.clone()),
                 None => Ok(()),
@@ -165,7 +182,11 @@ mod tests {
             self
         }
 
-        fn with_launch_failure(mut self, driver_name: &str, reason: &str) -> Self {
+        fn with_launch_failure(
+            mut self,
+            driver_name: &str,
+            reason: &str,
+        ) -> Self {
             self.launcher
                 .failures
                 .insert(driver_name.to_owned(), reason.to_owned());
@@ -176,7 +197,10 @@ mod tests {
             self.application().connect_all()
         }
 
-        fn application(&self) -> Application<'_, TestRepository, TestControl, TestLauncher> {
+        fn application(
+            &self,
+        ) -> Application<'_, TestRepository, TestControl, TestLauncher>
+        {
             Application::new(
                 &self.config_dir,
                 &self.repository,

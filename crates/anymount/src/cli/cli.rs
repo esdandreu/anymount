@@ -45,7 +45,8 @@ impl Cli {
             Some(Commands::Disconnect(cmd)) => cmd.execute(),
             Some(Commands::ConnectSync(cmd)) => cmd.execute(),
             Some(Commands::Status(cmd)) => cmd.execute(),
-            None => tui::run().map_err(|error| super::Error::Validation(error.to_string())),
+            None => tui::run()
+                .map_err(|error| super::Error::Validation(error.to_string())),
         }
     }
 }
@@ -72,7 +73,8 @@ mod tests {
 
     #[test]
     fn parse_status_command() {
-        let cli = Cli::try_parse_from(["anymount", "status"]).expect("parse should succeed");
+        let cli = Cli::try_parse_from(["anymount", "status"])
+            .expect("parse should succeed");
         match cli.command.expect("command should exist") {
             Commands::Status(cmd) => assert!(cmd.config_dir.is_none()),
             other => panic!("unexpected command: {other:?}"),
@@ -81,7 +83,8 @@ mod tests {
 
     #[test]
     fn parse_disconnect_all_command() {
-        let cli = Cli::try_parse_from(["anymount", "disconnect", "--all"]).expect("parse");
+        let cli = Cli::try_parse_from(["anymount", "disconnect", "--all"])
+            .expect("parse");
         match cli.command.expect("command should exist") {
             Commands::Disconnect(cmd) => {
                 assert!(cmd.all);
@@ -93,12 +96,17 @@ mod tests {
 
     #[test]
     fn parse_connect_name_command() {
-        let cli = Cli::try_parse_from(["anymount", "connect", "demo"]).expect("parse");
+        let cli = Cli::try_parse_from(["anymount", "connect", "demo"])
+            .expect("parse");
         match cli.command.expect("command should exist") {
             Commands::Connect(cmd) => {
                 assert!(!cmd.all);
                 match &cmd.action {
-                    Some(crate::cli::commands::connect::ConnectSubcommand::Named(tokens)) => {
+                    Some(
+                        crate::cli::commands::connect::ConnectSubcommand::Named(
+                            tokens,
+                        ),
+                    ) => {
                         assert_eq!(tokens, &vec!["demo".to_owned()]);
                     }
                     other => panic!("unexpected connect action: {other:?}"),

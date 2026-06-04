@@ -29,7 +29,10 @@ pub trait ProviderControl {
 
     /// Idempotent shutdown: no error if the service is already stopped; returns `Err`
     /// only when the service answered `Ping` with `Ready` but did not `Ack` shutdown.
-    fn try_disconnect_provider(&self, provider_name: &str) -> std::result::Result<(), String> {
+    fn try_disconnect_provider(
+        &self,
+        provider_name: &str,
+    ) -> std::result::Result<(), String> {
         match self.send(provider_name, ControlMessage::Ping) {
             Err(_) => return Ok(()),
             Ok(ControlMessage::Ready) => {}
@@ -82,6 +85,8 @@ pub fn send_control_message(
     platform().send(provider_name, message)
 }
 
-pub fn try_disconnect_provider(provider_name: &str) -> std::result::Result<(), String> {
+pub fn try_disconnect_provider(
+    provider_name: &str,
+) -> std::result::Result<(), String> {
     platform().try_disconnect_provider(provider_name)
 }

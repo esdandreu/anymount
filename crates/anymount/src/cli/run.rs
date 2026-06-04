@@ -15,15 +15,17 @@ pub fn run() -> super::Result<()> {
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| format!("anymount={}", log_level).into());
 
-    let file_appender = tracing_appender::rolling::daily("logs", "anymount.log");
-    let (non_blocking, file_guard) = tracing_appender::non_blocking(file_appender);
+    let file_appender =
+        tracing_appender::rolling::daily("logs", "anymount.log");
+    let (non_blocking, file_guard) =
+        tracing_appender::non_blocking(file_appender);
 
     let stdout_layer = fmt::layer().with_writer(std::io::stderr);
     let file_layer = fmt::layer().with_writer(non_blocking).with_ansi(false);
 
     let result = if let Some(otel) = otel {
-        let trace_layer =
-            tracing_opentelemetry::layer().with_tracer(otel.tracer_provider().tracer("anymount"));
+        let trace_layer = tracing_opentelemetry::layer()
+            .with_tracer(otel.tracer_provider().tracer("anymount"));
         let log_layer = OpenTelemetryTracingBridge::new(otel.logger_provider());
 
         tracing_subscriber::registry()
@@ -51,7 +53,9 @@ pub fn run() -> super::Result<()> {
     result
 }
 
-fn provide_otel_handles(cli: &Cli) -> super::Result<Option<crate::telemetry::OtelHandles>> {
+fn provide_otel_handles(
+    cli: &Cli,
+) -> super::Result<Option<crate::telemetry::OtelHandles>> {
     use crate::cli::commands::connect_sync::{
         ConnectSyncSubcommand, single_external_subcommand_name,
     };
@@ -63,7 +67,10 @@ fn provide_otel_handles(cli: &Cli) -> super::Result<Option<crate::telemetry::Ote
     let name = match &command.action {
         ConnectSyncSubcommand::Temp(_) => return Ok(None),
         ConnectSyncSubcommand::Named(tokens) => {
-            single_external_subcommand_name(tokens, crate::cli::Error::MissingConnectSyncTarget)?
+            single_external_subcommand_name(
+                tokens,
+                crate::cli::Error::MissingConnectSyncTarget,
+            )?
         }
     };
 
@@ -73,5 +80,6 @@ fn provide_otel_handles(cli: &Cli) -> super::Result<Option<crate::telemetry::Ote
         .map(crate::ConfigDir::new)
         .unwrap_or_default();
     let spec = config_dir.read_spec(name)?;
-    crate::telemetry::OtelHandles::from_driver_spec(&spec).map_err(super::Error::from)
+    crate::telemetry::OtelHandles::from_driver_spec(&spec)
+        .map_err(super::Error::from)
 }

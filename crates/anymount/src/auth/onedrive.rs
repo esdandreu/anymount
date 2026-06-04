@@ -1,8 +1,9 @@
 use super::token_response::{TokenResponse, jwt_expires_at};
 pub use oauth2::StandardDeviceAuthorizationResponse;
 use oauth2::{
-    AuthUrl, ClientId, DeviceAuthorizationUrl, HttpClientError, RefreshToken, RequestTokenError,
-    Scope, TokenResponse as OAuth2TokenResponse, TokenUrl, basic::BasicClient,
+    AuthUrl, ClientId, DeviceAuthorizationUrl, HttpClientError, RefreshToken,
+    RequestTokenError, Scope, TokenResponse as OAuth2TokenResponse, TokenUrl,
+    basic::BasicClient,
 };
 use parking_lot::RwLock;
 use std::thread;
@@ -10,18 +11,25 @@ use std::time::{Duration, SystemTime};
 use thiserror::Error;
 use url::Url;
 
-const AUTH_URL: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
-const TOKEN_URL: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
-const DEVICE_AUTH_URL: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/devicecode";
+const AUTH_URL: &str =
+    "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
+const TOKEN_URL: &str =
+    "https://login.microsoftonline.com/common/oauth2/v2.0/token";
+const DEVICE_AUTH_URL: &str =
+    "https://login.microsoftonline.com/common/oauth2/v2.0/devicecode";
 const SCOPE_FILES: &str = "Files.ReadWrite";
 const SCOPE_OFFLINE: &str = "offline_access";
 
-const ANYMOUNT_AZURE_APP_CLIENT_ID: &str = "5970173e-1b75-4317-987d-6849236cc3df";
+const ANYMOUNT_AZURE_APP_CLIENT_ID: &str =
+    "5970173e-1b75-4317-987d-6849236cc3df";
 const DEFAULT_TOKEN_EXPIRY_BUFFER_SECS: u64 = 60;
 type HttpError = HttpClientError<ureq::Error>;
-type DeviceCodeRequestError = RequestTokenError<HttpError, oauth2::basic::BasicErrorResponse>;
-type DeviceTokenError = RequestTokenError<HttpError, oauth2::DeviceCodeErrorResponse>;
-type RefreshTokenRequestError = RequestTokenError<HttpError, oauth2::basic::BasicErrorResponse>;
+type DeviceCodeRequestError =
+    RequestTokenError<HttpError, oauth2::basic::BasicErrorResponse>;
+type DeviceTokenError =
+    RequestTokenError<HttpError, oauth2::DeviceCodeErrorResponse>;
+type RefreshTokenRequestError =
+    RequestTokenError<HttpError, oauth2::basic::BasicErrorResponse>;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -87,12 +95,20 @@ pub struct OneDriveAuthorizer {
 
 impl OneDriveAuthorizer {
     pub fn new(client_id: Option<String>) -> Result<Self> {
-        let client_id = client_id.unwrap_or_else(|| ANYMOUNT_AZURE_APP_CLIENT_ID.to_string());
-        let device_auth_url = DeviceAuthorizationUrl::new(DEVICE_AUTH_URL.to_string())
-            .map_err(Error::InvalidDeviceAuthorizationUrl)?;
+        let client_id = client_id
+            .unwrap_or_else(|| ANYMOUNT_AZURE_APP_CLIENT_ID.to_string());
+        let device_auth_url =
+            DeviceAuthorizationUrl::new(DEVICE_AUTH_URL.to_string())
+                .map_err(Error::InvalidDeviceAuthorizationUrl)?;
         let client = BasicClient::new(ClientId::new(client_id))
-            .set_auth_uri(AuthUrl::new(AUTH_URL.to_string()).map_err(Error::InvalidAuthUrl)?)
-            .set_token_uri(TokenUrl::new(TOKEN_URL.to_string()).map_err(Error::InvalidTokenUrl)?)
+            .set_auth_uri(
+                AuthUrl::new(AUTH_URL.to_string())
+                    .map_err(Error::InvalidAuthUrl)?,
+            )
+            .set_token_uri(
+                TokenUrl::new(TOKEN_URL.to_string())
+                    .map_err(Error::InvalidTokenUrl)?,
+            )
             .set_device_authorization_url(device_auth_url);
         Ok(Self {
             client,
@@ -132,7 +148,8 @@ impl OneDriveStartedAuthorization {
             .request(&self.authorizer.agent, thread::sleep, None)
             .map_err(|source| {
                 let message = source.to_string();
-                classify_wait_error(&message).unwrap_or(Error::TokenRequest { source })
+                classify_wait_error(&message)
+                    .unwrap_or(Error::TokenRequest { source })
             })?;
         Ok(TokenResponse::from(token_result))
     }
@@ -199,11 +216,15 @@ impl OneDriveTokenSource {
         client_id: Option<String>,
         token_expiry_buffer_secs: Option<u64>,
     ) -> Result<Self> {
-        let client_id = client_id.unwrap_or_else(|| ANYMOUNT_AZURE_APP_CLIENT_ID.to_string());
-        let client = BasicClient::new(ClientId::new(client_id))
-            .set_token_uri(TokenUrl::new(TOKEN_URL.to_string()).map_err(Error::InvalidTokenUrl)?);
+        let client_id = client_id
+            .unwrap_or_else(|| ANYMOUNT_AZURE_APP_CLIENT_ID.to_string());
+        let client = BasicClient::new(ClientId::new(client_id)).set_token_uri(
+            TokenUrl::new(TOKEN_URL.to_string())
+                .map_err(Error::InvalidTokenUrl)?,
+        );
         let expires_at = access_token.as_deref().and_then(jwt_expires_at);
-        let buffer = token_expiry_buffer_secs.unwrap_or(DEFAULT_TOKEN_EXPIRY_BUFFER_SECS);
+        let buffer = token_expiry_buffer_secs
+            .unwrap_or(DEFAULT_TOKEN_EXPIRY_BUFFER_SECS);
         Ok(Self {
             client,
             agent: ureq::Agent::new(),
@@ -247,10 +268,12 @@ impl OneDriveTokenSource {
             .exchange_refresh_token(&RefreshToken::new(refresh_token))
             .request(&self.agent)
             .map_err(|source| Error::RefreshTokenRequest { source })?;
-        let expires_in_secs = response.expires_in().map(|d| d.as_secs()).unwrap_or(0);
+        let expires_in_secs =
+            response.expires_in().map(|d| d.as_secs()).unwrap_or(0);
         let access_token = response.access_token().secret().to_string();
         token.access_token = Some(access_token.clone());
-        token.expires_at = Some(SystemTime::now() + Duration::from_secs(expires_in_secs));
+        token.expires_at =
+            Some(SystemTime::now() + Duration::from_secs(expires_in_secs));
         if let Some(rt) = response.refresh_token() {
             token.refresh_token = Some(rt.secret().to_string());
         }
@@ -261,7 +284,9 @@ impl OneDriveTokenSource {
 fn classify_wait_error(message: &str) -> Option<Error> {
     if message.contains("expired") || message.contains("expired_token") {
         Some(Error::DeviceCodeExpired)
-    } else if message.contains("declined") || message.contains("authorization_declined") {
+    } else if message.contains("declined")
+        || message.contains("authorization_declined")
+    {
         Some(Error::AuthorizationDeclined)
     } else {
         None
@@ -291,7 +316,8 @@ mod tests {
 
     #[test]
     fn token_source_new_with_refresh_token_only() {
-        let source = OneDriveTokenSource::new(Some("rt".into()), None, None, None);
+        let source =
+            OneDriveTokenSource::new(Some("rt".into()), None, None, None);
         assert!(source.is_ok());
     }
 
@@ -305,7 +331,8 @@ mod tests {
 
     #[test]
     fn token_source_new_with_client_id_default() {
-        let source = OneDriveTokenSource::new(Some("rt".into()), None, None, None);
+        let source =
+            OneDriveTokenSource::new(Some("rt".into()), None, None, None);
         assert!(source.is_ok());
     }
 
@@ -321,9 +348,10 @@ mod tests {
     }
 
     #[test]
-    fn access_token_without_refresh_token_returns_missing_refresh_token_error() {
-        let source =
-            OneDriveTokenSource::new(None, None, None, None).expect("constructor should succeed");
+    fn access_token_without_refresh_token_returns_missing_refresh_token_error()
+    {
+        let source = OneDriveTokenSource::new(None, None, None, None)
+            .expect("constructor should succeed");
 
         let err = source.access_token().expect_err("access token should fail");
         assert!(matches!(err, Error::MissingRefreshToken));

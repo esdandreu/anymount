@@ -4,13 +4,14 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::Path;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Storage::CloudFilters::{
-    CF_DEHYDRATE_FLAG_NONE, CF_IN_SYNC_STATE, CF_PIN_STATE, CF_PLACEHOLDER_INFO_STANDARD,
-    CF_PLACEHOLDER_STANDARD_INFO, CfDehydratePlaceholder, CfGetPlaceholderInfo,
+    CF_DEHYDRATE_FLAG_NONE, CF_IN_SYNC_STATE, CF_PIN_STATE,
+    CF_PLACEHOLDER_INFO_STANDARD, CF_PLACEHOLDER_STANDARD_INFO,
+    CfDehydratePlaceholder, CfGetPlaceholderInfo,
 };
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_FLAGS_AND_ATTRIBUTES, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES, OPEN_EXISTING,
+    FILE_FLAGS_AND_ATTRIBUTES, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES, OPEN_EXISTING,
 };
 use windows::core::PCWSTR;
 
@@ -30,7 +31,8 @@ pub fn open_file_handle(
         flags |= FILE_FLAG_BACKUP_SEMANTICS.0;
     }
     let share_mode = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
-    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let wide: Vec<u16> =
+        path.as_os_str().encode_wide().chain(Some(0)).collect();
     let handle = unsafe {
         CreateFileW(
             PCWSTR::from_raw(wide.as_ptr()),
@@ -79,9 +81,11 @@ pub fn get_placeholder_info(path: &Path) -> Result<PlaceholderState> {
         path: path.to_path_buf(),
         source,
     })?;
-    let info = unsafe { &*(buffer.as_ptr() as *const CF_PLACEHOLDER_STANDARD_INFO) };
+    let info =
+        unsafe { &*(buffer.as_ptr() as *const CF_PLACEHOLDER_STANDARD_INFO) };
     let identity_len = info.FileIdentityLength as usize;
-    let identity_start = std::mem::size_of::<CF_PLACEHOLDER_STANDARD_INFO>() - 1;
+    let identity_start =
+        std::mem::size_of::<CF_PLACEHOLDER_STANDARD_INFO>() - 1;
     let identity_end = (identity_start + identity_len).min(buffer.len());
     let identity_bytes = &buffer[identity_start..identity_end];
     let placeholder_id = String::from_utf8_lossy(identity_bytes)
@@ -129,7 +133,8 @@ mod tests {
     #[test]
     fn dehydrate_file_rejects_directory() {
         let dir = tempfile::tempdir().expect("tempdir should exist");
-        let err = dehydrate_file(dir.path()).expect_err("directory should fail");
+        let err =
+            dehydrate_file(dir.path()).expect_err("directory should fail");
 
         assert!(matches!(err, super::Error::CannotDehydrateDirectory { .. }));
     }

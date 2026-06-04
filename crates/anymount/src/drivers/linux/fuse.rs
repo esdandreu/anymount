@@ -23,10 +23,12 @@ pub struct SparseFsCache {
 
 impl SparseFsCache {
     pub fn new(cache_root: PathBuf) -> Result<Self> {
-        std::fs::create_dir_all(&cache_root).map_err(|source| Error::CacheIo {
-            operation: "create cache root",
-            path: cache_root.clone(),
-            source,
+        std::fs::create_dir_all(&cache_root).map_err(|source| {
+            Error::CacheIo {
+                operation: "create cache root",
+                path: cache_root.clone(),
+                source,
+            }
         })?;
         Ok(Self {
             cache_root,
@@ -49,10 +51,12 @@ impl SparseFsCache {
 
     fn ensure_sparse_file(path: &Path, size: u64) -> Result<()> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|source| Error::CacheIo {
-                operation: "create cache parent",
-                path: parent.to_path_buf(),
-                source,
+            std::fs::create_dir_all(parent).map_err(|source| {
+                Error::CacheIo {
+                    operation: "create cache parent",
+                    path: parent.to_path_buf(),
+                    source,
+                }
             })?;
         }
         let file = OpenOptions::new()
@@ -73,13 +77,20 @@ impl SparseFsCache {
         Ok(())
     }
 
-    fn ensure_placeholder(&self, relative_path: &Path, is_dir: bool, size: u64) -> Result<()> {
+    fn ensure_placeholder(
+        &self,
+        relative_path: &Path,
+        is_dir: bool,
+        size: u64,
+    ) -> Result<()> {
         let metadata_path = self.cache_path(relative_path);
         if is_dir {
-            std::fs::create_dir_all(&metadata_path).map_err(|source| Error::CacheIo {
-                operation: "create metadata directory",
-                path: metadata_path.clone(),
-                source,
+            std::fs::create_dir_all(&metadata_path).map_err(|source| {
+                Error::CacheIo {
+                    operation: "create metadata directory",
+                    path: metadata_path.clone(),
+                    source,
+                }
             })?;
         } else {
             Self::ensure_sparse_file(&metadata_path, size)?;
@@ -87,7 +98,10 @@ impl SparseFsCache {
         Ok(())
     }
 
-    fn cache_blocks_for_range(start: u64, end: u64) -> impl Iterator<Item = u64> {
+    fn cache_blocks_for_range(
+        start: u64,
+        end: u64,
+    ) -> impl Iterator<Item = u64> {
         let first = start / DATA_CACHE_BLOCK_SIZE;
         let last = (end.saturating_sub(1)) / DATA_CACHE_BLOCK_SIZE;
         first..=last
@@ -101,7 +115,8 @@ impl SparseFsCache {
         let Some(cached_blocks) = blocks.get(path) else {
             return false;
         };
-        Self::cache_blocks_for_range(start, end).all(|block| cached_blocks.contains(&block))
+        Self::cache_blocks_for_range(start, end)
+            .all(|block| cached_blocks.contains(&block))
     }
 
     fn mark_range_cached(&self, path: &Path, start: u64, end: u64) {
@@ -122,11 +137,12 @@ impl SparseFsCache {
         mut offset: u64,
     ) -> Result<()> {
         while !buf.is_empty() {
-            let read = file.read_at(buf, offset).map_err(|source| Error::CacheIo {
-                operation: "read cache file",
-                path: path.to_path_buf(),
-                source,
-            })?;
+            let read =
+                file.read_at(buf, offset).map_err(|source| Error::CacheIo {
+                    operation: "read cache file",
+                    path: path.to_path_buf(),
+                    source,
+                })?;
             if read == 0 {
                 return Err(Error::CacheUnexpectedEof {
                     path: path.to_path_buf(),
@@ -145,13 +161,13 @@ impl SparseFsCache {
         mut offset: u64,
     ) -> Result<()> {
         while !buf.is_empty() {
-            let written = file
-                .write_at(buf, offset)
-                .map_err(|source| Error::CacheIo {
+            let written = file.write_at(buf, offset).map_err(|source| {
+                Error::CacheIo {
                     operation: "write cache file",
                     path: path.to_path_buf(),
                     source,
-                })?;
+                }
+            })?;
             if written == 0 {
                 return Err(Error::CacheIo {
                     operation: "write cache file",
@@ -172,7 +188,9 @@ impl SparseFsCache {
 impl From<Error> for crate::drivers::fuse::Error {
     fn from(err: Error) -> Self {
         match err {
-            Error::Storage(source) => crate::drivers::fuse::Error::Storage(source),
+            Error::Storage(source) => {
+                crate::drivers::fuse::Error::Storage(source)
+            }
             Error::CacheIo {
                 operation,
                 path,
@@ -183,7 +201,11 @@ impl From<Error> for crate::drivers::fuse::Error {
                 source,
             },
             Error::CacheRangeNotCached { path, start, end } => {
-                crate::drivers::fuse::Error::CacheRangeNotCached { path, start, end }
+                crate::drivers::fuse::Error::CacheRangeNotCached {
+                    path,
+                    start,
+                    end,
+                }
             }
             Error::CacheUnexpectedEof { path } => {
                 crate::drivers::fuse::Error::CacheUnexpectedEof { path }
@@ -191,7 +213,10 @@ impl From<Error> for crate::drivers::fuse::Error {
             other => crate::drivers::fuse::Error::CacheIo {
                 operation: "linux driver error",
                 path: PathBuf::new(),
-                source: std::io::Error::new(std::io::ErrorKind::Other, other.to_string()),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    other.to_string(),
+                ),
             },
         }
     }
@@ -204,10 +229,12 @@ impl FuseCachePort for SparseFsCache {
         entries: &[CachedDirEntry],
     ) -> crate::drivers::fuse::Result<()> {
         let metadata_dir = self.cache_path(dir_path);
-        std::fs::create_dir_all(&metadata_dir).map_err(|source| Error::CacheIo {
-            operation: "create metadata cache directory",
-            path: metadata_dir.clone(),
-            source,
+        std::fs::create_dir_all(&metadata_dir).map_err(|source| {
+            Error::CacheIo {
+                operation: "create metadata cache directory",
+                path: metadata_dir.clone(),
+                source,
+            }
         })?;
         for entry in entries {
             let relative_path = if dir_path.as_os_str().is_empty() {
@@ -220,7 +247,12 @@ impl FuseCachePort for SparseFsCache {
         Ok(())
     }
 
-    fn read_range(&self, path: &Path, start: u64, end: u64) -> crate::drivers::fuse::Result<Vec<u8>> {
+    fn read_range(
+        &self,
+        path: &Path,
+        start: u64,
+        end: u64,
+    ) -> crate::drivers::fuse::Result<Vec<u8>> {
         if !self.is_range_cached(path, start, end) {
             return Err(crate::drivers::fuse::Error::CacheRangeNotCached {
                 path: path.to_path_buf(),
@@ -229,20 +261,25 @@ impl FuseCachePort for SparseFsCache {
             });
         }
         let data_path = self.cache_path(path);
-        let file = OpenOptions::new()
-            .read(true)
-            .open(&data_path)
-            .map_err(|source| Error::CacheIo {
+        let file = OpenOptions::new().read(true).open(&data_path).map_err(
+            |source| Error::CacheIo {
                 operation: "open data cache",
                 path: data_path.clone(),
                 source,
-            })?;
+            },
+        )?;
         let mut buf = vec![0u8; (end - start) as usize];
         Self::read_exact_at(&data_path, &file, &mut buf, start)?;
         Ok(buf)
     }
 
-    fn write_range(&self, path: &Path, start: u64, data: &[u8], size: u64) -> crate::drivers::fuse::Result<()> {
+    fn write_range(
+        &self,
+        path: &Path,
+        start: u64,
+        data: &[u8],
+        size: u64,
+    ) -> crate::drivers::fuse::Result<()> {
         let data_path = self.cache_path(path);
         Self::ensure_sparse_file(&data_path, size)?;
         let file = OpenOptions::new()
@@ -250,10 +287,10 @@ impl FuseCachePort for SparseFsCache {
             .write(true)
             .open(&data_path)
             .map_err(|source| Error::CacheIo {
-                operation: "open data cache",
-                path: data_path.clone(),
-                source,
-            })?;
+            operation: "open data cache",
+            path: data_path.clone(),
+            source,
+        })?;
         Self::write_all_at(&data_path, &file, data, start)?;
         self.mark_range_cached(path, start, start + data.len() as u64);
         Ok(())
@@ -314,7 +351,10 @@ mod tests {
         type Entry = TestDirEntry;
         type Iter = std::vec::IntoIter<TestDirEntry>;
 
-        fn read_dir(&self, _path: PathBuf) -> crate::storages::Result<Self::Iter> {
+        fn read_dir(
+            &self,
+            _path: PathBuf,
+        ) -> crate::storages::Result<Self::Iter> {
             self.read_dir_calls.fetch_add(1, Ordering::SeqCst);
             Ok(vec![TestDirEntry {
                 file_name: "alpha.txt".to_string(),
@@ -400,7 +440,12 @@ mod tests {
         };
         let cache_root = temp_cache_root();
         let logger = crate::NoOpLogger;
-        let fs = StorageFilesystem::new(storage, cache_root.path().to_path_buf(), logger).unwrap();
+        let fs = StorageFilesystem::new(
+            storage,
+            cache_root.path().to_path_buf(),
+            logger,
+        )
+        .unwrap();
         let path = PathBuf::new();
 
         let first = fs.read_dir_entries(path.clone()).unwrap();
@@ -421,7 +466,12 @@ mod tests {
         };
         let cache_root = temp_cache_root();
         let logger = crate::NoOpLogger;
-        let fs = StorageFilesystem::new(storage, cache_root.path().to_path_buf(), logger).unwrap();
+        let fs = StorageFilesystem::new(
+            storage,
+            cache_root.path().to_path_buf(),
+            logger,
+        )
+        .unwrap();
 
         let entries = fs.read_dir_entries(PathBuf::new()).unwrap();
         assert_eq!(entries.len(), 1);
@@ -440,7 +490,8 @@ mod tests {
             read_file_calls: Arc::clone(&read_file_calls),
         };
         let cache_root = temp_cache_root();
-        let cache = SparseFsCache::new(cache_root.path().to_path_buf()).unwrap();
+        let cache =
+            SparseFsCache::new(cache_root.path().to_path_buf()).unwrap();
 
         cache
             .write_range(Path::new("alpha.txt"), 0, b"hello", 5)

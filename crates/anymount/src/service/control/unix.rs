@@ -31,13 +31,18 @@ impl UnixControl {
         })
     }
 
-    pub fn send(&self, driver_name: &str, message: ControlMessage) -> Result<ControlMessage> {
+    pub fn send(
+        &self,
+        driver_name: &str,
+        message: ControlMessage,
+    ) -> Result<ControlMessage> {
         let path = driver_endpoint(driver_name)?;
-        let mut stream = UnixStream::connect(path).map_err(|source| Error::Io {
-            operation: "connect unix socket",
-            driver_name: driver_name.to_owned(),
-            source,
-        })?;
+        let mut stream =
+            UnixStream::connect(path).map_err(|source| Error::Io {
+                operation: "connect unix socket",
+                driver_name: driver_name.to_owned(),
+                source,
+            })?;
         stream
             .write_all(&message.encode())
             .map_err(|source| Error::Io {
@@ -72,10 +77,12 @@ mod tests {
     #[test]
     fn unix_control_send_round_trips_ping() {
         let control = UnixControl;
-        let listener = control.bind("unix-roundtrip").expect("bind should succeed");
+        let listener =
+            control.bind("unix-roundtrip").expect("bind should succeed");
 
         let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept should succeed");
+            let (mut stream, _) =
+                listener.accept().expect("accept should succeed");
             let mut bytes = Vec::new();
             stream.read_to_end(&mut bytes).expect("read should succeed");
             assert_eq!(
@@ -98,10 +105,12 @@ mod tests {
     #[test]
     fn unix_control_send_shutdown_receives_ack() {
         let control = UnixControl;
-        let listener = control.bind("unix-shutdown").expect("bind should succeed");
+        let listener =
+            control.bind("unix-shutdown").expect("bind should succeed");
 
         let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept should succeed");
+            let (mut stream, _) =
+                listener.accept().expect("accept should succeed");
             let mut bytes = Vec::new();
             stream.read_to_end(&mut bytes).expect("read should succeed");
             assert_eq!(

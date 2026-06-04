@@ -85,7 +85,11 @@ impl ConfigCommand {
         self._execute(&app, config_dir.dir())
     }
 
-    pub(crate) fn _execute<U>(&self, use_case: &U, config_dir: &Path) -> crate::cli::Result<()>
+    pub(crate) fn _execute<U>(
+        &self,
+        use_case: &U,
+        config_dir: &Path,
+    ) -> crate::cli::Result<()>
     where
         U: ConfigUseCase,
     {
@@ -122,11 +126,17 @@ impl ConfigRepository for ConfigRepositoryAdapter {
         self.config_dir.list().map_err(Into::into)
     }
 
-    fn read_spec(&self, name: &str) -> crate::application::config::Result<DriverConfig> {
+    fn read_spec(
+        &self,
+        name: &str,
+    ) -> crate::application::config::Result<DriverConfig> {
         self.config_dir.read_spec(name).map_err(Into::into)
     }
 
-    fn write_spec(&self, spec: &DriverConfig) -> crate::application::config::Result<()> {
+    fn write_spec(
+        &self,
+        spec: &DriverConfig,
+    ) -> crate::application::config::Result<()> {
         self.config_dir.write_spec(spec).map_err(Into::into)
     }
 
@@ -224,7 +234,9 @@ fn prompt_name() -> crate::cli::Result<String> {
         .with_help_message("This becomes <name>.toml in your config directory")
         .prompt()
         .map_err(|error| {
-            crate::cli::Error::Prompt(format!("failed to read provider name: {error}"))
+            crate::cli::Error::Prompt(format!(
+                "failed to read provider name: {error}"
+            ))
         })
 }
 
@@ -233,7 +245,9 @@ fn prompt_path() -> crate::cli::Result<PathBuf> {
         .with_help_message("The local path where the provider will be mounted")
         .prompt()
         .map_err(|error| {
-            crate::cli::Error::Prompt(format!("failed to read mount path: {error}"))
+            crate::cli::Error::Prompt(format!(
+                "failed to read mount path: {error}"
+            ))
         })?;
     Ok(PathBuf::from(input))
 }
@@ -258,7 +272,9 @@ fn prompt_storage() -> crate::cli::Result<ConnectSyncStorageSubcommand> {
     let selected = Select::new("Select provider type:", options)
         .prompt()
         .map_err(|error| {
-            crate::cli::Error::Prompt(format!("failed to select provider type: {error}"))
+            crate::cli::Error::Prompt(format!(
+                "failed to select provider type: {error}"
+            ))
         })?;
 
     match selected {
@@ -268,28 +284,38 @@ fn prompt_storage() -> crate::cli::Result<ConnectSyncStorageSubcommand> {
 }
 
 fn prompt_local_storage() -> crate::cli::Result<ConnectSyncStorageSubcommand> {
-    let root = Text::new("Root directory to expose:")
-        .prompt()
-        .map_err(|error| {
-            crate::cli::Error::Prompt(format!("failed to read root directory: {error}"))
-        })?;
+    let root =
+        Text::new("Root directory to expose:")
+            .prompt()
+            .map_err(|error| {
+                crate::cli::Error::Prompt(format!(
+                    "failed to read root directory: {error}"
+                ))
+            })?;
     Ok(ConnectSyncStorageSubcommand::Local(LocalStorageArgs {
         root: PathBuf::from(root),
     }))
 }
 
-fn prompt_onedrive_storage() -> crate::cli::Result<ConnectSyncStorageSubcommand> {
+fn prompt_onedrive_storage() -> crate::cli::Result<ConnectSyncStorageSubcommand>
+{
     let root = Text::new("OneDrive path to use as root:")
         .with_default("/")
         .prompt()
         .map_err(|error| {
-            crate::cli::Error::Prompt(format!("failed to read OneDrive root: {error}"))
+            crate::cli::Error::Prompt(format!(
+                "failed to read OneDrive root: {error}"
+            ))
         })?;
 
     let endpoint = Text::new("Graph API endpoint:")
         .with_default("https://graph.microsoft.com/v1.0")
         .prompt()
-        .map_err(|error| crate::cli::Error::Prompt(format!("failed to read endpoint: {error}")))?;
+        .map_err(|error| {
+            crate::cli::Error::Prompt(format!(
+                "failed to read endpoint: {error}"
+            ))
+        })?;
 
     let access_token = prompt_optional("Access token (optional):")?;
     let refresh_token = prompt_optional("Refresh token (optional):")?;
@@ -299,7 +325,9 @@ fn prompt_onedrive_storage() -> crate::cli::Result<ConnectSyncStorageSubcommand>
         .with_default("60")
         .prompt()
         .map_err(|error| {
-            crate::cli::Error::Prompt(format!("failed to read token expiry buffer: {error}"))
+            crate::cli::Error::Prompt(format!(
+                "failed to read token expiry buffer: {error}"
+            ))
         })?;
     let token_expiry_buffer_secs = parse_u64(token_expiry_buffer_secs)?;
 
@@ -316,9 +344,9 @@ fn prompt_onedrive_storage() -> crate::cli::Result<ConnectSyncStorageSubcommand>
 }
 
 fn prompt_optional(message: &str) -> crate::cli::Result<Option<String>> {
-    let input = Text::new(message)
-        .prompt()
-        .map_err(|error| crate::cli::Error::Prompt(format!("failed to read input: {error}")))?;
+    let input = Text::new(message).prompt().map_err(|error| {
+        crate::cli::Error::Prompt(format!("failed to read input: {error}"))
+    })?;
     if input.is_empty() {
         Ok(None)
     } else {
@@ -361,13 +389,18 @@ fn config_from_spec(spec: &DriverConfig) -> DriverFileConfig {
 }
 
 #[cfg(test)]
-fn apply_set(cfg: &mut DriverFileConfig, key: &str, value: &str) -> crate::cli::Result<()> {
+fn apply_set(
+    cfg: &mut DriverFileConfig,
+    key: &str,
+    value: &str,
+) -> crate::cli::Result<()> {
     match key {
         "path" => {
             cfg.path = PathBuf::from(value);
         }
         "storage.root" => match &mut cfg.storage {
-            StorageConfig::Local { root } | StorageConfig::OneDrive { root, .. } => {
+            StorageConfig::Local { root }
+            | StorageConfig::OneDrive { root, .. } => {
                 *root = PathBuf::from(value);
             }
         },
@@ -377,7 +410,8 @@ fn apply_set(cfg: &mut DriverFileConfig, key: &str, value: &str) -> crate::cli::
             }
             _ => {
                 return Err(crate::cli::Error::Validation(
-                    "'storage.endpoint' only applies to onedrive storage".to_owned(),
+                    "'storage.endpoint' only applies to onedrive storage"
+                        .to_owned(),
                 ));
             }
         },
@@ -387,7 +421,8 @@ fn apply_set(cfg: &mut DriverFileConfig, key: &str, value: &str) -> crate::cli::
             }
             _ => {
                 return Err(crate::cli::Error::Validation(
-                    "'storage.access_token' only applies to onedrive storage".to_owned(),
+                    "'storage.access_token' only applies to onedrive storage"
+                        .to_owned(),
                 ));
             }
         },
@@ -397,7 +432,8 @@ fn apply_set(cfg: &mut DriverFileConfig, key: &str, value: &str) -> crate::cli::
             }
             _ => {
                 return Err(crate::cli::Error::Validation(
-                    "'storage.refresh_token' only applies to onedrive storage".to_owned(),
+                    "'storage.refresh_token' only applies to onedrive storage"
+                        .to_owned(),
                 ));
             }
         },
@@ -407,7 +443,8 @@ fn apply_set(cfg: &mut DriverFileConfig, key: &str, value: &str) -> crate::cli::
             }
             _ => {
                 return Err(crate::cli::Error::Validation(
-                    "'storage.client_id' only applies to onedrive storage".to_owned(),
+                    "'storage.client_id' only applies to onedrive storage"
+                        .to_owned(),
                 ));
             }
         },
@@ -441,20 +478,28 @@ fn apply_set(cfg: &mut DriverFileConfig, key: &str, value: &str) -> crate::cli::
 
 fn map_config_error(error: ConfigApplicationError) -> crate::cli::Error {
     match error {
-        ConfigApplicationError::Config(source) => crate::cli::Error::Config(source),
-        ConfigApplicationError::DuplicateDriver { name } => crate::cli::Error::Validation(format!(
-            "driver '{name}' already exists, use 'set' to modify or 'remove' first"
-        )),
-        ConfigApplicationError::InvalidStorageKey { key } => {
-            crate::cli::Error::Validation(format!("'{key}' only applies to onedrive storage"))
+        ConfigApplicationError::Config(source) => {
+            crate::cli::Error::Config(source)
         }
-        ConfigApplicationError::UnknownKey { key } => crate::cli::Error::Validation(format!(
-            "unknown key '{key}'. Valid keys: path, \
+        ConfigApplicationError::DuplicateDriver { name } => {
+            crate::cli::Error::Validation(format!(
+                "driver '{name}' already exists, use 'set' to modify or 'remove' first"
+            ))
+        }
+        ConfigApplicationError::InvalidStorageKey { key } => {
+            crate::cli::Error::Validation(format!(
+                "'{key}' only applies to onedrive storage"
+            ))
+        }
+        ConfigApplicationError::UnknownKey { key } => {
+            crate::cli::Error::Validation(format!(
+                "unknown key '{key}'. Valid keys: path, \
                  storage.root, storage.endpoint, \
                  storage.access_token, \
                  storage.refresh_token, storage.client_id, \
                  storage.token_expiry_buffer_secs"
-        )),
+            ))
+        }
         ConfigApplicationError::ParseInteger { value, source } => {
             crate::cli::Error::ParseInteger { value, source }
         }
@@ -464,8 +509,12 @@ fn map_config_error(error: ConfigApplicationError) -> crate::cli::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::config::{ConfigUseCase, Result as ConfigApplicationResult};
-    use crate::cli::commands::connect_sync::{ConnectSyncStorageSubcommand, LocalStorageArgs};
+    use crate::application::config::{
+        ConfigUseCase, Result as ConfigApplicationResult,
+    };
+    use crate::cli::commands::connect_sync::{
+        ConnectSyncStorageSubcommand, LocalStorageArgs,
+    };
     use crate::domain::driver::{DriverConfig, StorageConfig, TelemetrySpec};
     use std::cell::RefCell;
 
@@ -514,10 +563,17 @@ mod tests {
             Ok(())
         }
 
-        fn set(&self, name: &str, key: &str, value: &str) -> ConfigApplicationResult<()> {
-            self.set_calls
-                .borrow_mut()
-                .push((name.to_owned(), key.to_owned(), value.to_owned()));
+        fn set(
+            &self,
+            name: &str,
+            key: &str,
+            value: &str,
+        ) -> ConfigApplicationResult<()> {
+            self.set_calls.borrow_mut().push((
+                name.to_owned(),
+                key.to_owned(),
+                value.to_owned(),
+            ));
             Ok(())
         }
     }
@@ -569,7 +625,8 @@ mod tests {
     #[test]
     fn apply_set_endpoint() {
         let mut cfg = onedrive_config();
-        apply_set(&mut cfg, "storage.endpoint", "https://other.api").expect("set failed");
+        apply_set(&mut cfg, "storage.endpoint", "https://other.api")
+            .expect("set failed");
         if let StorageConfig::OneDrive { endpoint, .. } = &cfg.storage {
             assert_eq!(endpoint, "https://other.api");
         } else {
@@ -586,7 +643,8 @@ mod tests {
     #[test]
     fn apply_set_token_expiry_buffer_secs() {
         let mut cfg = onedrive_config();
-        apply_set(&mut cfg, "storage.token_expiry_buffer_secs", "120").expect("set failed");
+        apply_set(&mut cfg, "storage.token_expiry_buffer_secs", "120")
+            .expect("set failed");
         if let StorageConfig::OneDrive {
             token_expiry_buffer_secs,
             ..
@@ -601,7 +659,14 @@ mod tests {
     #[test]
     fn apply_set_invalid_u64_fails() {
         let mut cfg = onedrive_config();
-        assert!(apply_set(&mut cfg, "storage.token_expiry_buffer_secs", "not_a_number").is_err());
+        assert!(
+            apply_set(
+                &mut cfg,
+                "storage.token_expiry_buffer_secs",
+                "not_a_number"
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -621,9 +686,11 @@ mod tests {
         let args = AddArgs {
             name: Some("dup".to_owned()),
             path: Some(PathBuf::from("/mnt/x")),
-            storage: Some(ConnectSyncStorageSubcommand::Local(LocalStorageArgs {
-                root: PathBuf::from("/x"),
-            })),
+            storage: Some(ConnectSyncStorageSubcommand::Local(
+                LocalStorageArgs {
+                    root: PathBuf::from("/x"),
+                },
+            )),
         };
         assert!(execute_add(&app, &args).is_err());
     }
@@ -635,9 +702,11 @@ mod tests {
             action: ConfigAction::Add(AddArgs {
                 name: Some("test".to_owned()),
                 path: Some(PathBuf::from("/mnt/test")),
-                storage: Some(ConnectSyncStorageSubcommand::Local(LocalStorageArgs {
-                    root: PathBuf::from("/test/root"),
-                })),
+                storage: Some(ConnectSyncStorageSubcommand::Local(
+                    LocalStorageArgs {
+                        root: PathBuf::from("/test/root"),
+                    },
+                )),
             }),
         };
         let use_case = RecordingUseCase::default();
@@ -660,9 +729,11 @@ mod tests {
         let args = AddArgs {
             name: Some("test".to_owned()),
             path: Some(PathBuf::from("/mnt/test")),
-            storage: Some(ConnectSyncStorageSubcommand::Local(LocalStorageArgs {
-                root: PathBuf::from("/test/root"),
-            })),
+            storage: Some(ConnectSyncStorageSubcommand::Local(
+                LocalStorageArgs {
+                    root: PathBuf::from("/test/root"),
+                },
+            )),
         };
         execute_add(&app, &args).expect("add failed");
 
@@ -729,11 +800,14 @@ mod tests {
         let args = AddLikeArgs {
             name: Some("my-provider".to_owned()),
             path: Some(PathBuf::from("/mnt/test")),
-            storage: Some(ConnectSyncStorageSubcommand::Local(LocalStorageArgs {
-                root: PathBuf::from("/data"),
-            })),
+            storage: Some(ConnectSyncStorageSubcommand::Local(
+                LocalStorageArgs {
+                    root: PathBuf::from("/data"),
+                },
+            )),
         };
-        let spec = resolve_driver_spec_from_add_like_args(&args).expect("resolve failed");
+        let spec = resolve_driver_spec_from_add_like_args(&args)
+            .expect("resolve failed");
         assert_eq!(spec.name, "my-provider");
         assert_eq!(spec.path, PathBuf::from("/mnt/test"));
     }
