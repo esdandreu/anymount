@@ -4,9 +4,8 @@ pub mod cli;
 pub mod config;
 pub mod domain;
 pub mod drivers;
-#[deprecated(note = "use module-specific errors instead")]
-pub mod error;
 pub mod logger;
+pub mod mount;
 pub mod service;
 pub mod storages;
 pub mod telemetry;

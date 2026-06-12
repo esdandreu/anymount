@@ -283,10 +283,10 @@ where
     T: BearerToken,
     F: HttpGet,
 {
-    type Entry = OneDriveDirEntry;
-    type Iter = std::vec::IntoIter<OneDriveDirEntry>;
-
-    fn read_dir(&self, path: PathBuf) -> StorageResult<Self::Iter> {
+    fn read_dir(
+        &self,
+        path: PathBuf,
+    ) -> StorageResult<Box<dyn Iterator<Item = Box<dyn DirEntry>>>> {
         let token =
             self.token.access_token().map_err(StorageError::OneDrive)?;
         let full_path = if path.as_os_str().is_empty() {
@@ -321,7 +321,7 @@ where
                     source,
                 })
             })?;
-        let entries: Vec<OneDriveDirEntry> = parsed
+        let entries: Vec<Box<dyn DirEntry>> = parsed
             .value
             .into_iter()
             .map(|item| {
@@ -332,21 +332,21 @@ where
                     .as_deref()
                     .map(parse_last_modified)
                     .unwrap_or(UNIX_EPOCH);
-                OneDriveDirEntry {
+                Box::new(OneDriveDirEntry {
                     file_name: item.name,
                     is_dir,
                     size,
                     accessed,
-                }
+                }) as Box<dyn DirEntry>
             })
             .collect();
-        Ok(entries.into_iter())
+        Ok(Box::new(entries.into_iter()))
     }
 
     fn read_file_at(
         &self,
         path: PathBuf,
-        writer: &mut impl WriteAt,
+        writer: &mut dyn WriteAt,
         range: std::ops::Range<u64>,
     ) -> StorageResult<()> {
         let token =

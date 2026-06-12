@@ -9,6 +9,9 @@ pub enum Error {
         source: std::io::Error,
     },
 
+    #[error("operation not supported")]
+    NotSupported { operation: &'static str },
+
     #[error("unexpected eof while reading {path}")]
     UnexpectedEof { path: PathBuf },
 

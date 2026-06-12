@@ -89,12 +89,12 @@ impl DirEntry for LocalDirEntry {
 }
 
 impl Storage for LocalStorage {
-    type Entry = LocalDirEntry;
-    type Iter = std::vec::IntoIter<LocalDirEntry>;
-
-    fn read_dir(&self, path: PathBuf) -> Result<Self::Iter> {
+    fn read_dir(
+        &self,
+        path: PathBuf,
+    ) -> Result<Box<dyn Iterator<Item = Box<dyn DirEntry>>>> {
         let full_path = self.root.join(path);
-        let mut entries = Vec::new();
+        let mut entries: Vec<Box<dyn DirEntry>> = Vec::new();
         for entry in std::fs::read_dir(&full_path)
             .map_err(|source| io_error(&full_path, source))?
         {
@@ -103,20 +103,20 @@ impl Storage for LocalStorage {
                 .metadata()
                 .map_err(|source| io_error(&entry.path(), source))?;
             let accessed = meta.accessed().unwrap_or(SystemTime::UNIX_EPOCH);
-            entries.push(LocalDirEntry {
+            entries.push(Box::new(LocalDirEntry {
                 file_name: entry.file_name().to_string_lossy().into_owned(),
                 is_dir: meta.is_dir(),
                 size: meta.len(),
                 accessed,
-            });
+            }));
         }
-        Ok(entries.into_iter())
+        Ok(Box::new(entries.into_iter()))
     }
 
     fn read_file_at(
         &self,
         path: PathBuf,
-        writer: &mut impl WriteAt,
+        writer: &mut dyn WriteAt,
         range: std::ops::Range<u64>,
     ) -> Result<()> {
         let full_path = self.root.join(path);
