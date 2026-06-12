@@ -4,8 +4,6 @@ use crate::domain::driver::StorageConfig;
 
 use super::event::{AppEvent, Event, EventHandler};
 
-use super::components::{MountItem, MountsList, MountsListState};
-
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     DefaultTerminal,
@@ -13,6 +11,8 @@ use ratatui::{
     layout::Rect,
     widgets::{StatefulWidget, Widget},
 };
+
+use super::widgets::{MountItem, MountsList, MountsListState};
 
 #[derive(Debug)]
 pub struct MountConfig {
@@ -142,11 +142,13 @@ impl App {
                 self.events.send(AppEvent::Quit)
             }
             // Up
-            KeyCode::Up => self.events.send(AppEvent::SelectPrevious),
-            KeyCode::Char('j') => self.events.send(AppEvent::SelectPrevious),
+            KeyCode::Up | KeyCode::Char('j') => {
+                self.events.send(AppEvent::SelectPrevious)
+            }
             // Down
-            KeyCode::Down => self.events.send(AppEvent::SelectNext),
-            KeyCode::Char('k') => self.events.send(AppEvent::SelectNext),
+            KeyCode::Down | KeyCode::Char('k') => {
+                self.events.send(AppEvent::SelectNext)
+            }
             // Connect/Disconnect
             KeyCode::Right => self.events.send(AppEvent::Connect),
             KeyCode::Left => self.events.send(AppEvent::Disconnect),

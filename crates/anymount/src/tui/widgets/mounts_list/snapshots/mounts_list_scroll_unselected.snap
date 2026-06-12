@@ -1,9 +1,9 @@
 ---
-source: crates/anymount/src/tui/components/mounts_list/mounts_list.rs
+source: crates/anymount/src/tui/widgets/mounts_list/mounts_list.rs
 expression: terminal.backend()
 ---
 " ┌────────────────────────────────────────────────────────────────────────────┐▲"
-" │ ●  First               /mnt/first                       local   [ ⇐ ][ ↵ ] │█"
+" │ ●  First               /mnt/first                       local              │█"
 "┌┴───────────────────────────────────────────────────────────────────────────┬┤█"
 "│ ○  Second              /mnt/second                      local              ││█"
 "├────────────────────────────────────────────────────────────────────────────┤│█"

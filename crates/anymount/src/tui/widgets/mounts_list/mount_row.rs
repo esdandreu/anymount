@@ -99,9 +99,9 @@ mod tests {
             index: 0,
             is_selected: false,
             item: &MountItem {
-                name: &"test".to_string(),
+                name: "test",
                 path: Path::new("/test"),
-                storage_type: &"test".to_string(),
+                storage_type: "test",
                 is_connected: true,
             },
         };
@@ -120,9 +120,9 @@ mod tests {
             index: 0,
             is_selected: false,
             item: &MountItem {
-                name: &"test".to_string(),
+                name: "test",
                 path: Path::new("/test"),
-                storage_type: &"test".to_string(),
+                storage_type: "test",
                 is_connected: false,
             },
         };
@@ -141,9 +141,9 @@ mod tests {
             index: 1,
             is_selected: false,
             item: &MountItem {
-                name: &"test".to_string(),
+                name: "test",
                 path: Path::new("/test"),
-                storage_type: &"test".to_string(),
+                storage_type: "test",
                 is_connected: false,
             },
         };
@@ -162,9 +162,9 @@ mod tests {
             index: 1,
             is_selected: true,
             item: &MountItem {
-                name: &"test".to_string(),
+                name: "test",
                 path: Path::new("/test"),
-                storage_type: &"test".to_string(),
+                storage_type: "test",
                 is_connected: true,
             },
         };
@@ -183,9 +183,9 @@ mod tests {
             index: 1,
             is_selected: true,
             item: &MountItem {
-                name: &"test".to_string(),
+                name: "test",
                 path: Path::new("/test"),
-                storage_type: &"test".to_string(),
+                storage_type: "test",
                 is_connected: false,
             },
         };

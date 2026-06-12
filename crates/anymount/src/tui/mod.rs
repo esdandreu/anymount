@@ -1,7 +1,7 @@
 pub mod app;
-mod components;
 mod event;
 mod run;
+mod widgets;
 
 pub use app::MountConfig;
 pub use run::run;

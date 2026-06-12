@@ -2,7 +2,13 @@
 
 [![codecov](https://codecov.io/gh/esdandreu/anymount/graph/badge.svg)](https://codecov.io/gh/esdandreu/anymount)
 
-Mount cloud storage as local filesystems using platform-native APIs.
+Mount cloud storage as local filesystems using platform-native APIs. Today,
+storage providers such offer both the storage service and the client software
+used to access it. Storage providers have no incentive to build client software
+that compresses on device in order to reduce transfer and storage costs. They
+are not motivated either to include first-class end-to-end encryption features.
+The software layer responsible for interacting with cloud storage should not be
+owned by the storage provider, it should be owned by us.
 
 ## Quick Start
 
