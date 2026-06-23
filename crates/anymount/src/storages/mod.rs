@@ -7,6 +7,3 @@ pub use error::{Error, Result};
 pub use local::{LocalDirEntry, LocalStorage};
 pub use onedrive::{OneDriveConfig, OneDriveDirEntry, OneDriveStorage};
 pub use storage::{DirEntry, Storage, StorageConfig, WriteAt};
-
-// TODO: Remove
-pub use crate::domain::driver::StorageConfig as Config;

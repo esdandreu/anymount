@@ -7,14 +7,6 @@ pub trait Mount {
     fn kind(&self) -> &'static str;
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum MountError {
-    #[error("driver runtime not supported on this platform")]
-    NotSupported,
-}
-
-pub type Result<T> = std::result::Result<T, MountError>;
-
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct MountConfig {
     // path: Path, ?
