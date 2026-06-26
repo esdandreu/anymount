@@ -6,8 +6,9 @@ use std::path::{Component, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
-use super::storage::{DirEntry, Storage, WriteAt};
-use super::{Error as StorageError, Result as StorageResult};
+use crate::domain::storage::{
+    ConnectError, DirEntry, ReadDirError, ReadFileAtError, Storage, WriteAt,
+};
 
 /// Default buffer (seconds) before token expiry to trigger refresh when not set in config.
 const DEFAULT_TOKEN_EXPIRY_BUFFER_SECS: u64 = 60;
@@ -60,6 +61,43 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+fn response_message(body: &[u8]) -> String {
+    String::from_utf8_lossy(body).into_owned()
+}
+
+fn read_dir_status_error(status: u16, body: &[u8]) -> ReadDirError {
+    let message = response_message(body);
+    match status {
+        401 | 403 => ReadDirError::PermissionDenied,
+        404 => ReadDirError::NotFound,
+        429 | 500..=599 => ReadDirError::Unavailable { message },
+        _ => ReadDirError::Unknown { message },
+    }
+}
+
+fn read_file_at_status_error(status: u16, body: &[u8]) -> ReadFileAtError {
+    let message = response_message(body);
+    match status {
+        401 | 403 => ReadFileAtError::PermissionDenied,
+        404 => ReadFileAtError::NotFound,
+        416 => ReadFileAtError::RangeNotSatisfiable,
+        429 | 500..=599 => ReadFileAtError::Unavailable { message },
+        _ => ReadFileAtError::Unknown { message },
+    }
+}
+
+fn read_dir_backend_error(error: Error) -> ReadDirError {
+    ReadDirError::Unknown {
+        message: error.to_string(),
+    }
+}
+
+fn read_file_at_backend_error(error: Error) -> ReadFileAtError {
+    ReadFileAtError::Unknown {
+        message: error.to_string(),
+    }
+}
 
 /// Provides a bearer token for HTTP requests.
 ///
@@ -160,31 +198,31 @@ impl OneDriveConfig {
     ///
     /// Returns `InvalidConfig` if neither token is set or access_token is
     /// expired without a refresh_token.
-    pub fn connect(self) -> StorageResult<OneDriveStorage> {
+    pub fn connect(self) -> std::result::Result<OneDriveStorage, ConnectError> {
         let has_access = self.access_token.is_some();
         let has_refresh = self.refresh_token.is_some();
         if !has_access && !has_refresh {
-            return Err(StorageError::OneDrive(Error::InvalidConfig {
+            return Err(ConnectError::CannotConnect {
                 message: "OneDrive requires access_token or refresh_token"
                     .into(),
-            }));
+            });
         }
         let buffer_secs = self
             .token_expiry_buffer_secs
             .unwrap_or(DEFAULT_TOKEN_EXPIRY_BUFFER_SECS);
         if has_access && !has_refresh {
             let token = self.access_token.as_deref().ok_or_else(|| {
-                StorageError::OneDrive(Error::InvalidConfig {
+                ConnectError::CannotConnect {
                     message: "access_token required".into(),
-                })
+                }
             })?;
             if let Some(exp) = jwt_expires_at(token) {
                 let now = SystemTime::now();
                 let buffer = Duration::from_secs(buffer_secs);
                 if exp <= now + buffer {
-                    return Err(StorageError::OneDrive(Error::InvalidConfig {
+                    return Err(ConnectError::CannotConnect {
                         message: "access_token is expired and no refresh_token provided".into(),
-                    }));
+                    });
                 }
             }
         }
@@ -195,7 +233,9 @@ impl OneDriveConfig {
             self.client_id.clone(),
             self.token_expiry_buffer_secs,
         )
-        .map_err(|source| StorageError::OneDrive(Error::Token { source }))?;
+        .map_err(|source| ConnectError::CannotConnect {
+            message: Error::Token { source }.to_string(),
+        })?;
         Ok(OneDriveStorage {
             root: self.root,
             endpoint,
@@ -286,9 +326,12 @@ where
     fn read_dir(
         &self,
         path: PathBuf,
-    ) -> StorageResult<Box<dyn Iterator<Item = Box<dyn DirEntry>>>> {
+    ) -> std::result::Result<
+        Box<dyn Iterator<Item = Box<dyn DirEntry>>>,
+        ReadDirError,
+    > {
         let token =
-            self.token.access_token().map_err(StorageError::OneDrive)?;
+            self.token.access_token().map_err(read_dir_backend_error)?;
         let full_path = if path.as_os_str().is_empty() {
             self.root.clone()
         } else {
@@ -305,21 +348,17 @@ where
         let (status, body) = self
             .fetch
             .get(&url, &headers)
-            .map_err(StorageError::OneDrive)?;
+            .map_err(read_dir_backend_error)?;
         if status != 200 {
-            let text = String::from_utf8_lossy(&body).into_owned();
-            return Err(StorageError::OneDrive(Error::ListFailed {
-                url,
-                status,
-                body: text,
-            }));
+            return Err(read_dir_status_error(status, &body));
         }
         let parsed: GraphChildrenResponse = serde_json::from_slice(&body)
-            .map_err(|source| {
-                StorageError::OneDrive(Error::ListResponse {
+            .map_err(|source| ReadDirError::InvalidResponse {
+                message: Error::ListResponse {
                     url: url.clone(),
                     source,
-                })
+                }
+                .to_string(),
             })?;
         let entries: Vec<Box<dyn DirEntry>> = parsed
             .value
@@ -348,9 +387,11 @@ where
         path: PathBuf,
         writer: &mut dyn WriteAt,
         range: std::ops::Range<u64>,
-    ) -> StorageResult<()> {
-        let token =
-            self.token.access_token().map_err(StorageError::OneDrive)?;
+    ) -> std::result::Result<(), ReadFileAtError> {
+        let token = self
+            .token
+            .access_token()
+            .map_err(read_file_at_backend_error)?;
         let full_path = self.root.join(path);
         let segment = Self::path_to_graph_segment(&full_path);
         let url =
@@ -365,26 +406,16 @@ where
         let (status, body) = self
             .fetch
             .get(&url, &headers)
-            .map_err(StorageError::OneDrive)?;
+            .map_err(read_file_at_backend_error)?;
         if status != 200 && status != 206 {
-            let text = String::from_utf8_lossy(&body).into_owned();
-            return Err(StorageError::OneDrive(Error::DownloadFailed {
-                url,
-                status,
-                body: text,
-            }));
+            return Err(read_file_at_status_error(status, &body));
         }
         let mut pos = range.start;
         let mut remaining = range.end - range.start;
         let mut offset = 0;
         while remaining > 0 && offset < body.len() {
             let take = remaining.min((body.len() - offset) as u64) as usize;
-            writer.write_at(&body[offset..offset + take], pos).map_err(
-                |error| StorageError::WriteAt {
-                    offset: pos,
-                    message: error.to_string(),
-                },
-            )?;
+            writer.write_at(&body[offset..offset + take], pos)?;
             pos += take as u64;
             remaining -= take as u64;
             offset += take;
@@ -402,6 +433,7 @@ pub(crate) fn parse_last_modified(s: &str) -> SystemTime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::storage::WriteAtError;
 
     type DefaultStorage = OneDriveStorage<OneDriveTokenSource, UreqHttpGet>;
 
@@ -452,10 +484,7 @@ mod tests {
         let Err(err) = result else {
             panic!("config should fail")
         };
-        assert!(matches!(
-            err,
-            crate::storages::Error::OneDrive(Error::InvalidConfig { .. })
-        ));
+        assert!(matches!(err, ConnectError::CannotConnect { .. }));
     }
 
     #[test]
@@ -616,7 +645,11 @@ mod tests {
     }
 
     impl WriteAt for RecordingWriter {
-        fn write_at(&mut self, buf: &[u8], offset: u64) -> StorageResult<()> {
+        fn write_at(
+            &mut self,
+            buf: &[u8],
+            offset: u64,
+        ) -> std::result::Result<(), WriteAtError> {
             self.writes.push((offset, buf.to_vec()));
             Ok(())
         }
@@ -642,13 +675,7 @@ mod tests {
             panic!("list should fail")
         };
 
-        assert!(matches!(
-            err,
-            crate::storages::Error::OneDrive(Error::ListFailed {
-                status: 500,
-                ..
-            })
-        ));
+        assert!(matches!(err, ReadDirError::Unavailable { .. }));
     }
 
     #[test]

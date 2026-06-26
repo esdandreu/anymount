@@ -1,10 +1,10 @@
 use super::Storage;
 use crate::Logger;
+use crate::domain::storage::{DirEntry, WriteAt, WriteAtError};
 use crate::drivers::windows::placeholders::{
     dehydrate_file, get_placeholder_info,
 };
 use crate::service::control::messages::ServiceMessage;
-use crate::storages::{DirEntry, Error as StorageError, WriteAt};
 use cloud_filter::{
     error::CResult,
     filter::{Request, SyncFilter, info, ticket},
@@ -282,7 +282,7 @@ impl FetchDataWriter {
         }
     }
 
-    fn flush_chunks(&mut self) -> crate::storages::Result<()> {
+    fn flush_chunks(&mut self) -> Result<(), WriteAtError> {
         while self.buffer.len() >= CF_TRANSFER_CHUNK
             && self.next_offset + CF_TRANSFER_CHUNK as u64 <= self.range_end
         {
@@ -290,7 +290,7 @@ impl FetchDataWriter {
             let chunk: Vec<u8> =
                 self.buffer.drain(..CF_TRANSFER_CHUNK).collect();
             CfWriteAt::write_at(&self.ticket, &chunk, offset).map_err(
-                |error| StorageError::WriteAt {
+                |error| WriteAtError::Failed {
                     offset,
                     message: error.to_string(),
                 },
@@ -300,12 +300,12 @@ impl FetchDataWriter {
         Ok(())
     }
 
-    fn flush_final(&mut self) -> crate::storages::Result<()> {
+    fn flush_final(&mut self) -> Result<(), WriteAtError> {
         if !self.buffer.is_empty() {
             let offset = self.range_end - self.buffer.len() as u64;
             let chunk = std::mem::take(&mut self.buffer);
             CfWriteAt::write_at(&self.ticket, &chunk, offset).map_err(
-                |error| StorageError::WriteAt {
+                |error| WriteAtError::Failed {
                     offset,
                     message: error.to_string(),
                 },
@@ -320,12 +320,12 @@ impl WriteAt for FetchDataWriter {
         &mut self,
         buf: &[u8],
         offset: u64,
-    ) -> crate::storages::Result<()> {
+    ) -> Result<(), WriteAtError> {
         if buf.is_empty() {
             return Ok(());
         }
         if self.next_offset != offset {
-            return Err(StorageError::WriteAt {
+            return Err(WriteAtError::Failed {
                 offset,
                 message: format!(
                     "fetch_data: non-contiguous write at {} (expected {})",

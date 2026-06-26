@@ -1,17 +1,68 @@
-//! Driver domain types.
-//!
-//! This module defines driver-facing concepts shared across adapters. The
-//! types here describe what a driver is and the invariants it must satisfy
-//! before adapter code can persist, mount, or host it.
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
+
+use crate::domain::StorageConfig;
+
+#[typetag::serde(tag = "type")]
+pub trait DriverConfig {
+    /// Registers a mount. If a mount was already registered, with the same
+    /// name and path the storage will be re-configured.
+    fn mount(
+        &self,
+        // TODO(GIA) Should this be a MountConfig trait?
+        name: &str,
+        path: Path,
+        storage: Box<dyn StorageConfig>,
+    ) -> Result<Box<dyn MountEntry>, MountError>;
+
+    fn kind(&self) -> &'static str {
+        std::any::type_name::<Self>()
+    }
+
+    /// Lists registered mounts.
+    fn list_mounts(
+        &self,
+    ) -> Result<Box<dyn Iterator<Item = Box<dyn MountEntry>>>, ListMountsError>;
+}
+
+pub trait MountEntry: Send + Sync {
+    fn name(&self) -> &str;
+
+    fn root(&self) -> Path;
+
+    fn is_connected(&self) -> bool;
+
+    fn connect(&self) -> ();
+
+    fn disconnect(&self) -> ();
+
+    fn unregister(&self) -> ();
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum MountError {
+    /// A path conflict. Typically the path is already mounted or not accessible
+    /// in some way.
+    #[error("failed to mount at {path}: {message}")]
+    CannotMountAtPath { path: PathBuf, message: String },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ListMountsError {
+    #[error("failed to list mounts: {message}")]
+    CannotListMounts { message: String },
+}
+
+// TODO
+fn get_default_driver() -> Option<Box<dyn DriverConfig>> {
+    None
+}
 
 /// Driver domain validation failures.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum Error {
+pub enum LegacyError {
     /// The driver mount path is empty.
     #[error("driver mount path is missing")]
     MissingMountPath,
@@ -27,30 +78,30 @@ pub enum Error {
 }
 
 /// Result type for driver domain validation.
-pub type Result<T> = std::result::Result<T, Error>;
+pub type LegacyResult<T> = std::result::Result<T, LegacyError>;
 
 /// A configured driver definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DriverConfig {
+pub struct LegacyDriverConfig {
     /// Stable driver name derived from config.
     pub name: String,
     /// Local mount path exposed by the driver.
     pub path: PathBuf,
     /// Storage backend configuration for this driver.
-    pub storage: StorageConfig,
+    pub storage: LegacyStorageConfig,
     /// Optional telemetry configuration for this driver.
     pub telemetry: TelemetrySpec,
 }
 
-impl DriverConfig {
+impl LegacyDriverConfig {
     /// Validates driver invariants.
     ///
     /// # Errors
     /// Returns an error when the mount path or storage configuration is
     /// incomplete.
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> LegacyResult<()> {
         if self.path.as_os_str().is_empty() {
-            return Err(Error::MissingMountPath);
+            return Err(LegacyError::MissingMountPath);
         }
 
         self.storage.validate()
@@ -60,7 +111,7 @@ impl DriverConfig {
 /// Supported storage backends.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum StorageConfig {
+pub enum LegacyStorageConfig {
     /// Local directory storage.
     Local {
         /// Root directory exposed by the driver.
@@ -87,7 +138,7 @@ pub enum StorageConfig {
     },
 }
 
-impl StorageConfig {
+impl LegacyStorageConfig {
     /// Short label for CLI and status output (`local`, `onedrive`, ...).
     pub fn label(&self) -> &'static str {
         match self {
@@ -101,11 +152,11 @@ impl StorageConfig {
     /// # Errors
     /// Returns an error when the storage config is missing a required path or
     /// token.
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> LegacyResult<()> {
         match self {
             Self::Local { root } => {
                 if root.as_os_str().is_empty() {
-                    return Err(Error::MissingLocalRoot);
+                    return Err(LegacyError::MissingLocalRoot);
                 }
             }
             Self::OneDrive {
@@ -115,11 +166,11 @@ impl StorageConfig {
                 ..
             } => {
                 if root.as_os_str().is_empty() {
-                    return Err(Error::MissingOneDriveRoot);
+                    return Err(LegacyError::MissingOneDriveRoot);
                 }
 
                 if access_token.is_none() && refresh_token.is_none() {
-                    return Err(Error::MissingOneDriveTokenMaterial);
+                    return Err(LegacyError::MissingOneDriveTokenMaterial);
                 }
             }
         }
@@ -174,14 +225,16 @@ pub enum OtlpTransport {
 
 #[cfg(test)]
 mod tests {
-    use super::{DriverConfig, Error, StorageConfig, TelemetrySpec};
+    use super::{
+        LegacyDriverConfig, LegacyError, LegacyStorageConfig, TelemetrySpec,
+    };
     use std::path::PathBuf;
 
-    fn local_driver_spec(name: &str) -> DriverConfig {
-        DriverConfig {
+    fn local_driver_spec(name: &str) -> LegacyDriverConfig {
+        LegacyDriverConfig {
             name: name.to_owned(),
             path: PathBuf::from(format!("/mnt/{name}")),
-            storage: StorageConfig::Local {
+            storage: LegacyStorageConfig::Local {
                 root: PathBuf::from(format!("/data/{name}")),
             },
             telemetry: TelemetrySpec::default(),
@@ -190,10 +243,10 @@ mod tests {
 
     #[test]
     fn onedrive_spec_requires_token_material() {
-        let spec = DriverConfig {
+        let spec = LegacyDriverConfig {
             name: "demo".to_owned(),
             path: PathBuf::from("/mnt/demo"),
-            storage: StorageConfig::OneDrive {
+            storage: LegacyStorageConfig::OneDrive {
                 root: PathBuf::from("/"),
                 endpoint: "https://graph.microsoft.com/v1.0".to_owned(),
                 access_token: None,
@@ -205,7 +258,7 @@ mod tests {
         };
 
         let err = spec.validate().expect_err("spec should be invalid");
-        assert!(matches!(err, Error::MissingOneDriveTokenMaterial));
+        assert!(matches!(err, LegacyError::MissingOneDriveTokenMaterial));
     }
 
     #[test]

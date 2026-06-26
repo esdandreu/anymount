@@ -1,10 +1,9 @@
 #![allow(unused_imports)]
 use super::Result;
-use crate::Logger;
-use crate::domain::driver::{DriverConfig, StorageConfig};
-use crate::service::control::messages::ServiceMessage;
+use crate::domain::driver::{LegacyDriverConfig, LegacyStorageConfig};
 use crate::storages;
-use std::path::PathBuf;
+use crate::{Logger, Storage};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
 
@@ -13,44 +12,62 @@ pub trait Session: Send + Sync + 'static {
     fn kind(&self) -> &'static str;
 }
 
-pub trait Driver: Send + Sync + 'static {
-    fn connect<S>(
-        storage: S,
-        path: PathBuf,
-        logger: impl Logger,
-    ) -> Result<Box<dyn Session>>
-    where
-        S: crate::storages::Storage;
-}
-
+// ! This is weird ! Why not Sessions?
 pub type Drivers = Vec<Box<dyn Session>>;
+
+// Work in Progress.
+pub trait Driver {
+    /// List all the mount points that are currently reserved by this driver.
+    fn list_mounts(&self) -> Result<Vec<PathBuf>>; // TODO review result type
+
+    /// Mount a given path. As a result, the path will be reserved.
+    fn mount(&self, path: Path) -> Result<()>;
+
+    /// Connect a given mount point to a storage. As a result, the mount will be
+    /// usable.
+    fn connect(&self, path: Path, storage: Box<dyn Storage>) -> Result<()>;
+
+    /// Check if a given mount point is connected to a storage.
+    // TODO can it return the storage config to compare whether the connection
+    // has a stale storage configuration?
+    fn is_connected(&self, path: Path) -> Result<bool>;
+
+    /// Disconnect a given mount point from its storage. As a result, the mount
+    /// will be unusable, but the path will still be reserved.
+    fn disconnect(&self, path: Path) -> Result<()>;
+
+    /// Unmount a given path. As a result, the path will be freed and any
+    /// associated resources will be released. By default, any locally cached
+    /// files in that mount will be cleaned up but that behaviour is
+    /// configurable.
+    fn unmount(&self, path: Path) -> Result<()>;
+}
 
 #[cfg(target_os = "windows")]
 pub fn connect_drivers(
-    specs: &[DriverConfig],
+    specs: &[LegacyDriverConfig],
     logger: &(impl Logger + 'static),
-    service_tx: Option<Sender<ServiceMessage>>,
 ) -> Result<Drivers> {
     use super::windows::{WindowsSession, cleanup_registry};
     let mut drivers: Vec<Box<dyn Session>> = Vec::new();
     for spec in specs {
         let storage = storages::new(spec.storage.clone())?;
         match &spec.storage {
-            StorageConfig::Local { root: _ } => {
+            LegacyStorageConfig::Local { root: _ } => {
                 let driver = WindowsSession::connect(
                     spec.path.clone(),
                     storage,
                     logger.clone(),
-                    service_tx.clone(),
+                    None,
                 )?;
                 drivers.push(driver);
             }
-            StorageConfig::OneDrive { .. } => {
+            LegacyStorageConfig::OneDrive { .. } => {
                 let driver = WindowsSession::connect(
                     spec.path.clone(),
                     storage,
                     logger.clone(),
-                    service_tx.clone(),
+                    None,
                 )?;
                 drivers.push(driver);
             }
@@ -62,9 +79,8 @@ pub fn connect_drivers(
 
 #[cfg(target_os = "linux")]
 pub fn connect_drivers(
-    specs: &[DriverConfig],
+    specs: &[LegacyDriverConfig],
     logger: &(impl Logger + 'static),
-    _service_tx: Option<Sender<ServiceMessage>>,
 ) -> Result<Drivers> {
     use super::linux::dbus::AccountExporter;
     use super::linux::{
@@ -78,7 +94,7 @@ pub fn connect_drivers(
         let path = spec.path.clone();
         let storage = storages::new(spec.storage.clone())?;
         match &spec.storage {
-            StorageConfig::Local { root: _ } => {
+            LegacyStorageConfig::Local { root: _ } => {
                 let (mount_path, session) =
                     mount_storage(path, storage, logger.clone())?;
                 let name = mount_path
@@ -98,7 +114,7 @@ pub fn connect_drivers(
                 ));
                 sessions.push((mount_path, session));
             }
-            StorageConfig::OneDrive { .. } => {
+            LegacyStorageConfig::OneDrive { .. } => {
                 let (mount_path, session) =
                     mount_storage(path, storage, logger.clone())?;
                 let name = mount_path
@@ -132,18 +148,16 @@ pub fn connect_drivers(
 
 #[cfg(all(target_os = "macos", not(feature = "fuse")))]
 pub fn connect_drivers(
-    _specs: &[DriverConfig],
+    _specs: &[LegacyDriverConfig],
     _logger: &(impl Logger + 'static),
-    _service_tx: Option<Sender<ServiceMessage>>,
 ) -> Result<Drivers> {
     Err(crate::drivers::Error::NotSupported)
 }
 
 #[cfg(all(target_os = "macos", feature = "fuse"))]
 pub fn connect_drivers(
-    specs: &[DriverConfig],
+    specs: &[LegacyDriverConfig],
     logger: &(impl Logger + 'static),
-    _service_tx: Option<Sender<ServiceMessage>>,
 ) -> Result<Drivers> {
     use crate::drivers::fuse::{FuseDriver, NoCacheFsCache, StorageFilesystem};
     let mut sessions: Vec<(PathBuf, fuser::BackgroundSession)> = Vec::new();
@@ -154,7 +168,7 @@ pub fn connect_drivers(
         let mount_path = spec.path.canonicalize()?;
         let storage = storages::new(spec.storage.clone())?;
         match &spec.storage {
-            StorageConfig::Local { root: _ } => {
+            LegacyStorageConfig::Local { root: _ } => {
                 let fs = StorageFilesystem::new_with_cache(
                     storage,
                     Arc::new(NoCacheFsCache::new()),
@@ -175,7 +189,7 @@ pub fn connect_drivers(
                 })?;
                 sessions.push((mount_path, session));
             }
-            StorageConfig::OneDrive { .. } => {
+            LegacyStorageConfig::OneDrive { .. } => {
                 let fs = StorageFilesystem::new_with_cache(
                     storage,
                     Arc::new(NoCacheFsCache::new()),
@@ -211,15 +225,17 @@ pub fn connect_drivers(
 mod tests {
     use super::*;
     use crate::NoOpLogger;
-    use crate::domain::driver::{DriverConfig, StorageConfig, TelemetrySpec};
+    use crate::domain::driver::{
+        LegacyDriverConfig, LegacyStorageConfig, TelemetrySpec,
+    };
 
     #[test]
     fn storage_label_comes_from_domain_storage_spec() {
-        let local = StorageConfig::Local {
+        let local = LegacyStorageConfig::Local {
             root: PathBuf::from("/data"),
         };
         assert_eq!(local.label(), "local");
-        let onedrive = StorageConfig::OneDrive {
+        let onedrive = LegacyStorageConfig::OneDrive {
             root: PathBuf::from("/"),
             endpoint: "https://graph.microsoft.com/v1.0".to_owned(),
             access_token: None,
@@ -230,11 +246,11 @@ mod tests {
         assert_eq!(onedrive.label(), "onedrive");
     }
 
-    fn local_driver_spec(name: &str) -> DriverConfig {
-        DriverConfig {
+    fn local_driver_spec(name: &str) -> LegacyDriverConfig {
+        LegacyDriverConfig {
             name: name.to_owned(),
             path: PathBuf::from(format!("/mnt/{name}")),
-            storage: StorageConfig::Local {
+            storage: LegacyStorageConfig::Local {
                 root: PathBuf::from(format!("/data/{name}")),
             },
             telemetry: TelemetrySpec::default(),
@@ -244,7 +260,10 @@ mod tests {
     #[test]
     fn connect_drivers_accepts_resolved_specs() {
         let spec = local_driver_spec("demo");
-        let result = connect_drivers(&[spec], &NoOpLogger::default(), None);
-        assert!(!matches!(result, Err(crate::drivers::Error::Storage(_))));
+        let result = connect_drivers(&[spec], &NoOpLogger::default());
+        assert!(matches!(
+            result,
+            Ok(_) | Err(crate::drivers::Error::NotSupported)
+        ));
     }
 }

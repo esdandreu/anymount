@@ -1,8 +1,12 @@
-use crate::application::auth::{
-    Application as AuthApplication, AuthUseCase, Error as AuthApplicationError,
-};
 use crate::auth::{OneDriveAuthFlow, TokenResponse};
 use clap::Subcommand;
+
+/// Top-level auth command; holds the provider subcommand.
+#[derive(clap::Args, Debug, Clone)]
+pub struct AuthCommand {
+    #[command(subcommand)]
+    pub subcommand: AuthSubcommand,
+}
 
 /// Auth subcommand: which provider to obtain a token for.
 #[derive(Subcommand, Debug, Clone)]
@@ -18,21 +22,6 @@ pub struct AuthOneDrive {
     /// Override the default Azure app client ID.
     #[arg(long)]
     pub client_id: Option<String>,
-}
-
-impl AuthSubcommand {
-    fn client_id(&self) -> Option<String> {
-        match self {
-            AuthSubcommand::OneDrive(args) => args.client_id.clone(),
-        }
-    }
-}
-
-/// Top-level auth command; holds the provider subcommand.
-#[derive(clap::Args, Debug, Clone)]
-pub struct AuthCommand {
-    #[command(subcommand)]
-    pub subcommand: AuthSubcommand,
 }
 
 impl AuthCommand {
@@ -59,16 +48,15 @@ impl AuthCommand {
         U: AuthUseCase,
         O: UrlOpener,
     {
-        let started = use_case
-            .start_onedrive_auth(self.subcommand.client_id())
-            .map_err(map_auth_error)?;
+        let started =
+            use_case.start_onedrive_auth(self.subcommand.client_id())?;
         print_instructions(&started.message());
         if url_opener.open(&started.verification_uri()).is_err() {
             eprintln!("(Could not open browser; open the URL above manually.)");
         }
         eprintln!();
         eprintln!("Waiting for you to sign in...");
-        let tokens = started.finish().map_err(map_auth_error)?;
+        let tokens = started.finish()?;
         print_tokens(&tokens);
         Ok(())
     }
@@ -100,12 +88,6 @@ fn print_tokens(tokens: &TokenResponse) {
     eprintln!(
         "access_token is short-lived; use refresh_token for storage config."
     );
-}
-
-fn map_auth_error(error: AuthApplicationError) -> crate::cli::Error {
-    match error {
-        AuthApplicationError::Auth(source) => crate::cli::Error::Auth(source),
-    }
 }
 
 #[cfg(test)]

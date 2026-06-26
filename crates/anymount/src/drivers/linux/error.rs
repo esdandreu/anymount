@@ -2,9 +2,6 @@ use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error(transparent)]
-    Storage(#[from] crate::storages::Error),
-
     #[error("cache io failed during {operation} for {path}: {source}")]
     CacheIo {
         operation: &'static str,

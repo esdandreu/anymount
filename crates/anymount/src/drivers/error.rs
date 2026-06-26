@@ -1,8 +1,5 @@
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error(transparent)]
-    Storage(#[from] crate::storages::Error),
-
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 

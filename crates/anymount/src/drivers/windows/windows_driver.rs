@@ -1,8 +1,8 @@
 use super::{Error, Result};
 use crate::Logger;
+use crate::domain::storage::Storage;
 use crate::drivers::Session;
 use crate::service::control::messages::ServiceMessage;
-use crate::storages::Storage;
 use cloud_filter::root::{
     Connection, HydrationType, PopulationType, SecurityId,
     Session as CloudSession, SyncRootId, SyncRootIdBuilder, SyncRootInfo,
@@ -24,6 +24,7 @@ where
     connection: Option<Connection<super::Callbacks<S, L>>>,
 }
 
+// Implements Driver!
 impl<S, L> WindowsSession<S, L>
 where
     S: Storage,

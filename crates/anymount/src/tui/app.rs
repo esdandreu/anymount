@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::domain::driver::StorageConfig;
+use crate::domain::driver::LegacyStorageConfig;
 
 use super::event::{AppEvent, Event, EventHandler};
 
@@ -20,7 +20,7 @@ pub struct MountConfig {
     /// Local mount path.
     pub path: PathBuf,
     /// Storage backend configuration.
-    pub storage: StorageConfig,
+    pub storage: LegacyStorageConfig,
     /// Whether the mount is currently connected.
     pub is_connected: bool,
 }
@@ -48,7 +48,7 @@ impl Default for App {
                 MountConfig {
                     name: "Hello first".to_string(),
                     path: PathBuf::from("/tmp/mnt"),
-                    storage: StorageConfig::Local {
+                    storage: LegacyStorageConfig::Local {
                         root: PathBuf::from("/users/desktop"),
                     },
                     is_connected: false,
@@ -56,7 +56,7 @@ impl Default for App {
                 MountConfig {
                     name: "Hello second".to_string(),
                     path: PathBuf::from("/tmp/mnt"),
-                    storage: StorageConfig::Local {
+                    storage: LegacyStorageConfig::Local {
                         root: PathBuf::from("/users/desktop"),
                     },
                     is_connected: true,
@@ -64,7 +64,7 @@ impl Default for App {
                 MountConfig {
                     name: "Hello second".to_string(),
                     path: PathBuf::from("/tmp/mnt"),
-                    storage: StorageConfig::Local {
+                    storage: LegacyStorageConfig::Local {
                         root: PathBuf::from("/users/desktop"),
                     },
                     is_connected: true,
@@ -72,7 +72,7 @@ impl Default for App {
                 MountConfig {
                     name: "Hello second".to_string(),
                     path: PathBuf::from("/tmp/mnt"),
-                    storage: StorageConfig::Local {
+                    storage: LegacyStorageConfig::Local {
                         root: PathBuf::from("/users/desktop"),
                     },
                     is_connected: true,
@@ -204,7 +204,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        App, EventHandler, MountConfig, MountsListState, StorageConfig,
+        App, EventHandler, MountConfig, MountsListState, LegacyStorageConfig,
     };
     use ratatui::{Terminal, backend::TestBackend};
 
@@ -217,7 +217,7 @@ mod tests {
                 MountConfig {
                     name: "Hello first".to_string(),
                     path: PathBuf::from("/tmp/mnt"),
-                    storage: StorageConfig::Local {
+                    storage: LegacyStorageConfig::Local {
                         root: PathBuf::from("/users/desktop"),
                     },
                     is_connected: false,
@@ -225,7 +225,7 @@ mod tests {
                 MountConfig {
                     name: "Hello second".to_string(),
                     path: PathBuf::from("/tmp/mnt"),
-                    storage: StorageConfig::Local {
+                    storage: LegacyStorageConfig::Local {
                         root: PathBuf::from("/users/desktop"),
                     },
                     is_connected: true,
@@ -233,7 +233,7 @@ mod tests {
                 MountConfig {
                     name: "Third".to_string(),
                     path: PathBuf::from("/tmp/mnt"),
-                    storage: StorageConfig::Local {
+                    storage: LegacyStorageConfig::Local {
                         root: PathBuf::from("/users/desktop"),
                     },
                     is_connected: true,
@@ -241,7 +241,7 @@ mod tests {
                 MountConfig {
                     name: "Hello first".to_string(),
                     path: PathBuf::from("/tmp/mnt"),
-                    storage: StorageConfig::Local {
+                    storage: LegacyStorageConfig::Local {
                         root: PathBuf::from("/users/desktop"),
                     },
                     is_connected: false,
@@ -249,7 +249,7 @@ mod tests {
                 MountConfig {
                     name: "Hello first".to_string(),
                     path: PathBuf::from("/tmp/mnt"),
-                    storage: StorageConfig::Local {
+                    storage: LegacyStorageConfig::Local {
                         root: PathBuf::from("/users/desktop"),
                     },
                     is_connected: false,
