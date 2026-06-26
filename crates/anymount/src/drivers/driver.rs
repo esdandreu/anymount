@@ -1,10 +1,9 @@
 #![allow(unused_imports)]
 use super::Result;
-use crate::Logger;
 use crate::domain::driver::{DriverConfig, StorageConfig};
-use crate::service::control::messages::ServiceMessage;
 use crate::storages;
-use std::path::PathBuf;
+use crate::{Logger, Storage};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
 
@@ -13,23 +12,41 @@ pub trait Session: Send + Sync + 'static {
     fn kind(&self) -> &'static str;
 }
 
-pub trait Driver: Send + Sync + 'static {
-    fn connect<S>(
-        storage: S,
-        path: PathBuf,
-        logger: impl Logger,
-    ) -> Result<Box<dyn Session>>
-    where
-        S: crate::storages::Storage;
-}
-
+// ! This is weird ! Why not Sessions?
 pub type Drivers = Vec<Box<dyn Session>>;
+
+// Work in Progress.
+pub trait Driver {
+    /// List all the mount points that are currently reserved by this driver.
+    fn list_mounts(&self) -> Result<Vec<PathBuf>>; // TODO review result type
+
+    /// Mount a given path. As a result, the path will be reserved.
+    fn mount(&self, path: Path) -> Result<()>;
+
+    /// Connect a given mount point to a storage. As a result, the mount will be
+    /// usable.
+    fn connect(&self, path: Path, storage: Box<dyn Storage>) -> Result<()>;
+
+    /// Check if a given mount point is connected to a storage.
+    // TODO can it return the storage config to compare whether the connection
+    // has a stale storage configuration?
+    fn is_connected(&self, path: Path) -> Result<bool>;
+
+    /// Disconnect a given mount point from its storage. As a result, the mount
+    /// will be unusable, but the path will still be reserved.
+    fn disconnect(&self, path: Path) -> Result<()>;
+
+    /// Unmount a given path. As a result, the path will be freed and any
+    /// associated resources will be released. By default, any locally cached
+    /// files in that mount will be cleaned up but that behaviour is
+    /// configurable.
+    fn unmount(&self, path: Path) -> Result<()>;
+}
 
 #[cfg(target_os = "windows")]
 pub fn connect_drivers(
     specs: &[DriverConfig],
     logger: &(impl Logger + 'static),
-    service_tx: Option<Sender<ServiceMessage>>,
 ) -> Result<Drivers> {
     use super::windows::{WindowsSession, cleanup_registry};
     let mut drivers: Vec<Box<dyn Session>> = Vec::new();
@@ -41,7 +58,7 @@ pub fn connect_drivers(
                     spec.path.clone(),
                     storage,
                     logger.clone(),
-                    service_tx.clone(),
+                    None,
                 )?;
                 drivers.push(driver);
             }
@@ -50,7 +67,7 @@ pub fn connect_drivers(
                     spec.path.clone(),
                     storage,
                     logger.clone(),
-                    service_tx.clone(),
+                    None,
                 )?;
                 drivers.push(driver);
             }
@@ -64,7 +81,6 @@ pub fn connect_drivers(
 pub fn connect_drivers(
     specs: &[DriverConfig],
     logger: &(impl Logger + 'static),
-    _service_tx: Option<Sender<ServiceMessage>>,
 ) -> Result<Drivers> {
     use super::linux::dbus::AccountExporter;
     use super::linux::{
@@ -134,7 +150,6 @@ pub fn connect_drivers(
 pub fn connect_drivers(
     _specs: &[DriverConfig],
     _logger: &(impl Logger + 'static),
-    _service_tx: Option<Sender<ServiceMessage>>,
 ) -> Result<Drivers> {
     Err(crate::drivers::Error::NotSupported)
 }
@@ -143,7 +158,6 @@ pub fn connect_drivers(
 pub fn connect_drivers(
     specs: &[DriverConfig],
     logger: &(impl Logger + 'static),
-    _service_tx: Option<Sender<ServiceMessage>>,
 ) -> Result<Drivers> {
     use crate::drivers::fuse::{FuseDriver, NoCacheFsCache, StorageFilesystem};
     let mut sessions: Vec<(PathBuf, fuser::BackgroundSession)> = Vec::new();
@@ -244,7 +258,10 @@ mod tests {
     #[test]
     fn connect_drivers_accepts_resolved_specs() {
         let spec = local_driver_spec("demo");
-        let result = connect_drivers(&[spec], &NoOpLogger::default(), None);
-        assert!(!matches!(result, Err(crate::drivers::Error::Storage(_))));
+        let result = connect_drivers(&[spec], &NoOpLogger::default());
+        assert!(matches!(
+            result,
+            Ok(_) | Err(crate::drivers::Error::NotSupported)
+        ));
     }
 }

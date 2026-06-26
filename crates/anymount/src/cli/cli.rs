@@ -1,9 +1,6 @@
-use crate::cli::commands::auth::AuthCommand;
-use crate::cli::commands::config::ConfigCommand;
+use std::path::PathBuf;
+
 use crate::cli::commands::connect::ConnectCommand;
-use crate::cli::commands::connect_sync::ConnectSyncCommand;
-use crate::cli::commands::disconnect::DisconnectCommand;
-use crate::cli::commands::status::StatusCommand;
 use crate::tui;
 use clap::{Parser, Subcommand};
 
@@ -13,129 +10,49 @@ use clap::{Parser, Subcommand};
 #[command(version)]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Option<Commands>,
+    pub command: Option<Command>,
 
     /// Enable verbose logging
     #[arg(short, long, global = true)]
     pub verbose: bool,
+
+    /// Config directory override
+    #[arg(short, long, global = true)]
+    pub config_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Subcommand)]
-pub enum Commands {
-    /// Obtain tokens for storage configuration (e.g. OneDrive).
-    Auth(AuthCommand),
-    /// Manage provider configuration files.
-    Config(ConfigCommand),
-    /// Connect to a storage provider
+pub enum Command {
+    /// Connect a mount
     Connect(ConnectCommand),
-    /// Stop a running provider service (idempotent).
-    Disconnect(DisconnectCommand),
-    /// Run one configured driver as a long-lived process.
-    ConnectSync(ConnectSyncCommand),
-    /// Show configured providers and service readiness.
-    Status(StatusCommand),
 }
 
 impl Cli {
-    pub fn run(self) -> super::Result<()> {
+    pub fn run(self) -> color_eyre::Result<()> {
         match self.command {
-            Some(Commands::Auth(cmd)) => cmd.execute(),
-            Some(Commands::Config(cmd)) => cmd.execute(),
-            Some(Commands::Connect(cmd)) => cmd.execute(),
-            Some(Commands::Disconnect(cmd)) => cmd.execute(),
-            Some(Commands::ConnectSync(cmd)) => cmd.execute(),
-            Some(Commands::Status(cmd)) => cmd.execute(),
-            None => tui::run()
-                .map_err(|error| super::Error::Validation(error.to_string())),
+            Some(Command::Connect(cmd)) => cmd.execute().map_err(Into::into),
+            None => tui::run(),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::commands::connect::ConnectSubcommand;
     use super::*;
 
     #[test]
     fn parse_connect_sync_name_command() {
-        let cli = Cli::try_parse_from(["anymount", "connect-sync", "demo"])
+        let cli = Cli::try_parse_from(["anymount", "connect", "demo"])
             .expect("parse should succeed");
 
         match cli.command.expect("command should exist") {
-            Commands::ConnectSync(cmd) => match &cmd.action {
-                crate::cli::commands::connect_sync::ConnectSyncSubcommand::Named(tokens) => {
+            Command::Connect(cmd) => match &cmd.action {
+                Some(ConnectSubcommand::Named(tokens)) => {
                     assert_eq!(tokens, &vec!["demo".to_owned()]);
                 }
                 other => panic!("unexpected connect-sync action: {other:?}"),
             },
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_status_command() {
-        let cli = Cli::try_parse_from(["anymount", "status"])
-            .expect("parse should succeed");
-        match cli.command.expect("command should exist") {
-            Commands::Status(cmd) => assert!(cmd.config_dir.is_none()),
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_disconnect_all_command() {
-        let cli = Cli::try_parse_from(["anymount", "disconnect", "--all"])
-            .expect("parse");
-        match cli.command.expect("command should exist") {
-            Commands::Disconnect(cmd) => {
-                assert!(cmd.all);
-                assert!(cmd.name.is_none());
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_connect_name_command() {
-        let cli = Cli::try_parse_from(["anymount", "connect", "demo"])
-            .expect("parse");
-        match cli.command.expect("command should exist") {
-            Commands::Connect(cmd) => {
-                assert!(!cmd.all);
-                match &cmd.action {
-                    Some(
-                        crate::cli::commands::connect::ConnectSubcommand::Named(
-                            tokens,
-                        ),
-                    ) => {
-                        assert_eq!(tokens, &vec!["demo".to_owned()]);
-                    }
-                    other => panic!("unexpected connect action: {other:?}"),
-                }
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_connect_sync_inline_command() {
-        let cli = Cli::try_parse_from([
-            "anymount",
-            "connect-sync",
-            "temp",
-            "/tmp/demo",
-            "local",
-            "/data/demo",
-        ])
-        .expect("parse should succeed");
-
-        match cli.command.expect("command should exist") {
-            Commands::ConnectSync(cmd) => match &cmd.action {
-                crate::cli::commands::connect_sync::ConnectSyncSubcommand::Temp(args) => {
-                    assert_eq!(args.path, std::path::Path::new("/tmp/demo"));
-                }
-                other => panic!("unexpected connect-sync action: {other:?}"),
-            },
-            other => panic!("unexpected command: {other:?}"),
         }
     }
 }

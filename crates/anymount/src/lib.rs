@@ -1,17 +1,18 @@
-pub mod application;
+pub mod anymount;
 pub mod auth;
 pub mod cli;
-pub mod config;
+pub mod config_dir;
 pub mod domain;
 pub mod drivers;
 pub mod logger;
-pub mod mount;
-pub mod service;
 pub mod storages;
-pub mod telemetry;
+#[cfg(test)]
+pub mod test_utils;
 pub mod tui;
 
-pub use config::{Config, ConfigDir, DriverFileConfig, TelemetryFileConfig};
+pub use anymount::Anymount;
+pub use cli::Cli;
+pub use config_dir::ConfigDir;
+pub use domain::{Config, ConfigRepository, Storage};
 pub use drivers::{Session, connect_drivers};
 pub use logger::{Logger, NoOpLogger, TracingLogger};
-pub use storages::Storage;

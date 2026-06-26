@@ -4,9 +4,9 @@
 
 use super::{Error, Result};
 use crate::Logger;
+use crate::domain::storage::Storage;
 pub use crate::drivers::fuse::StorageFilesystem;
 use crate::drivers::fuse::{CachePort as FuseCachePort, CachedDirEntry};
-use crate::storages::Storage;
 use std::collections::{BTreeSet, HashMap};
 use std::fs::OpenOptions;
 use std::os::unix::fs::FileExt;
@@ -307,8 +307,11 @@ impl<S: Storage, L: Logger + 'static> StorageFilesystem<S, L> {
 #[cfg(test)]
 mod tests {
     use super::SparseFsCache;
+    use crate::domain::storage::{
+        DirEntry, ReadDirError, ReadFileAtError, Storage, WriteAt,
+    };
     use crate::drivers::fuse::{CachePort, CachedDirEntry, StorageFilesystem};
-    use crate::storages::{LocalStorage, Storage, WriteAt};
+    use crate::storages::LocalStorage;
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -324,7 +327,7 @@ mod tests {
         accessed: SystemTime,
     }
 
-    impl crate::storages::DirEntry for TestDirEntry {
+    impl DirEntry for TestDirEntry {
         fn file_name(&self) -> String {
             self.file_name.clone()
         }
@@ -348,29 +351,29 @@ mod tests {
     }
 
     impl Storage for CountingStorage {
-        type Entry = TestDirEntry;
-        type Iter = std::vec::IntoIter<TestDirEntry>;
-
         fn read_dir(
             &self,
             _path: PathBuf,
-        ) -> crate::storages::Result<Self::Iter> {
+        ) -> std::result::Result<
+            Box<dyn Iterator<Item = Box<dyn DirEntry>>>,
+            ReadDirError,
+        > {
             self.read_dir_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(vec![TestDirEntry {
+            let entry: Box<dyn DirEntry> = Box::new(TestDirEntry {
                 file_name: "alpha.txt".to_string(),
                 is_dir: false,
                 size: 5,
                 accessed: SystemTime::UNIX_EPOCH,
-            }]
-            .into_iter())
+            });
+            Ok(Box::new(std::iter::once(entry)))
         }
 
         fn read_file_at(
             &self,
             _path: PathBuf,
-            _writer: &mut impl WriteAt,
+            _writer: &mut dyn WriteAt,
             _range: std::ops::Range<u64>,
-        ) -> crate::storages::Result<()> {
+        ) -> std::result::Result<(), ReadFileAtError> {
             self.read_file_calls.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
