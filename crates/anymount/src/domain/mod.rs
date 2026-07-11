@@ -1,8 +1,9 @@
 pub mod config;
-pub mod config_repository;
 pub mod driver;
+pub mod mount;
 pub mod storage;
 
-pub use config::Config;
-pub use config_repository::ConfigRepository;
-pub use storage::{ConnectError, Storage, StorageConfig};
+pub use config::{Config, ConfigRepository};
+pub use driver::{Driver, DriverConfig};
+pub use mount::Mount;
+pub use storage::{ConnectStorageError, Storage, StorageConfig};

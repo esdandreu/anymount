@@ -2,7 +2,7 @@ use std::{ops::Range, path::PathBuf, time::SystemTime};
 
 #[typetag::serde(tag = "type")]
 pub trait StorageConfig {
-    fn connect(&self) -> Result<Box<dyn Storage>, ConnectError>;
+    fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError>;
 
     fn kind(&self) -> &'static str {
         std::any::type_name::<Self>()
@@ -10,9 +10,9 @@ pub trait StorageConfig {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum ConnectError {
-    #[error("failed to connect: {message}")]
-    CannotConnect { message: String },
+pub enum ConnectStorageError {
+    #[error("failed to connect {kind} storage: {message}")]
+    CannotConnect { kind: &'static str, message: String },
 }
 
 pub trait Storage {
@@ -153,7 +153,7 @@ mod test {
 
     #[typetag::serde(name = "test")]
     impl StorageConfig for TestStorageConfig {
-        fn connect(&self) -> Result<Box<dyn Storage>, ConnectError> {
+        fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError> {
             Ok(Box::new(TestStorageConnection {}))
         }
     }

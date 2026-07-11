@@ -1,4 +1,4 @@
-use crate::domain::{ConnectError, Storage, StorageConfig};
+use crate::domain::{ConnectStorageError, Storage, StorageConfig};
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct CannotConnectStorageConfig {
@@ -7,8 +7,9 @@ struct CannotConnectStorageConfig {
 
 #[typetag::serde(name = "cannot-connect")]
 impl StorageConfig for CannotConnectStorageConfig {
-    fn connect(&self) -> Result<Box<dyn Storage>, ConnectError> {
-        Err(ConnectError::CannotConnect {
+    fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError> {
+        Err(ConnectStorageError::CannotConnect {
+            kind: self.kind(),
             message: self.error_message.clone(),
         })
     }

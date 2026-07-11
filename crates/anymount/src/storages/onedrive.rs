@@ -7,7 +7,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 use crate::domain::storage::{
-    ConnectError, DirEntry, ReadDirError, ReadFileAtError, Storage, WriteAt,
+    ConnectStorageError, DirEntry, ReadDirError, ReadFileAtError, Storage,
+    WriteAt,
 };
 
 /// Default buffer (seconds) before token expiry to trigger refresh when not set in config.
@@ -198,11 +199,13 @@ impl OneDriveConfig {
     ///
     /// Returns `InvalidConfig` if neither token is set or access_token is
     /// expired without a refresh_token.
-    pub fn connect(self) -> std::result::Result<OneDriveStorage, ConnectError> {
+    pub fn connect(
+        self,
+    ) -> std::result::Result<OneDriveStorage, ConnectStorageError> {
         let has_access = self.access_token.is_some();
         let has_refresh = self.refresh_token.is_some();
         if !has_access && !has_refresh {
-            return Err(ConnectError::CannotConnect {
+            return Err(ConnectStorageError::CannotConnect {
                 message: "OneDrive requires access_token or refresh_token"
                     .into(),
             });
@@ -212,7 +215,7 @@ impl OneDriveConfig {
             .unwrap_or(DEFAULT_TOKEN_EXPIRY_BUFFER_SECS);
         if has_access && !has_refresh {
             let token = self.access_token.as_deref().ok_or_else(|| {
-                ConnectError::CannotConnect {
+                ConnectStorageError::CannotConnect {
                     message: "access_token required".into(),
                 }
             })?;
@@ -220,7 +223,7 @@ impl OneDriveConfig {
                 let now = SystemTime::now();
                 let buffer = Duration::from_secs(buffer_secs);
                 if exp <= now + buffer {
-                    return Err(ConnectError::CannotConnect {
+                    return Err(ConnectStorageError::CannotConnect {
                         message: "access_token is expired and no refresh_token provided".into(),
                     });
                 }
@@ -233,7 +236,8 @@ impl OneDriveConfig {
             self.client_id.clone(),
             self.token_expiry_buffer_secs,
         )
-        .map_err(|source| ConnectError::CannotConnect {
+        .map_err(|source| ConnectStorageError::CannotConnect {
+            kind: "onedrive".into(),
             message: Error::Token { source }.to_string(),
         })?;
         Ok(OneDriveStorage {
@@ -484,7 +488,7 @@ mod tests {
         let Err(err) = result else {
             panic!("config should fail")
         };
-        assert!(matches!(err, ConnectError::CannotConnect { .. }));
+        assert!(matches!(err, ConnectStorageError::CannotConnect { .. }));
     }
 
     #[test]

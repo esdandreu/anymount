@@ -1,21 +1,28 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use thiserror::Error;
 
-use crate::domain::StorageConfig;
+use super::{Mount, Storage};
 
 #[typetag::serde(tag = "type")]
-pub trait DriverConfig {
+pub trait DriverConfig: Send + Sync {
+    fn init(&self) -> Box<dyn Driver>;
+
+    fn kind(&self) -> &'static str {
+        std::any::type_name::<Self>()
+    }
+}
+
+pub trait Driver: Send + Sync {
     /// Registers a mount. If a mount was already registered, with the same
     /// name and path the storage will be re-configured.
     fn mount(
         &self,
-        // TODO(GIA) Should this be a MountConfig trait?
-        name: &str,
-        path: Path,
-        storage: Box<dyn StorageConfig>,
-    ) -> Result<Box<dyn MountEntry>, MountError>;
+        name: String,
+        path: PathBuf,
+        storage: Box<dyn Storage>,
+    ) -> Result<Box<dyn Mount>, MountError>;
 
     fn kind(&self) -> &'static str {
         std::any::type_name::<Self>()
@@ -24,21 +31,7 @@ pub trait DriverConfig {
     /// Lists registered mounts.
     fn list_mounts(
         &self,
-    ) -> Result<Box<dyn Iterator<Item = Box<dyn MountEntry>>>, ListMountsError>;
-}
-
-pub trait MountEntry: Send + Sync {
-    fn name(&self) -> &str;
-
-    fn root(&self) -> Path;
-
-    fn is_connected(&self) -> bool;
-
-    fn connect(&self) -> ();
-
-    fn disconnect(&self) -> ();
-
-    fn unregister(&self) -> ();
+    ) -> Result<Box<dyn Iterator<Item = Box<dyn Mount>>>, ListMountsError>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -53,11 +46,6 @@ pub enum MountError {
 pub enum ListMountsError {
     #[error("failed to list mounts: {message}")]
     CannotListMounts { message: String },
-}
-
-// TODO
-fn get_default_driver() -> Option<Box<dyn DriverConfig>> {
-    None
 }
 
 /// Driver domain validation failures.
@@ -76,6 +64,13 @@ pub enum LegacyError {
     #[error("OneDrive token material is missing")]
     MissingOneDriveTokenMaterial,
 }
+
+pub struct DefaultDriver {
+    pub priority: i32,
+    pub driver: &'static dyn Driver,
+}
+
+inventory::collect!(DefaultDriver);
 
 /// Result type for driver domain validation.
 pub type LegacyResult<T> = std::result::Result<T, LegacyError>;

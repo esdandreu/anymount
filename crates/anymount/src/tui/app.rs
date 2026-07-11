@@ -204,7 +204,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        App, EventHandler, MountConfig, MountsListState, LegacyStorageConfig,
+        App, EventHandler, LegacyStorageConfig, MountConfig, MountsListState,
     };
     use ratatui::{Terminal, backend::TestBackend};
 
