@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 
 use super::ConfigDir;
-use crate::domain::{Config, ConfigRepository, Driver, Mount};
+use crate::domain::{Config, ConfigRepository, Driver, DriverConfig, Mount};
 
 pub struct Anymount<C = ConfigDir>
 where
@@ -49,11 +49,9 @@ impl Default for Anymount<ConfigDir> {
 fn mount(config: Config) -> Result<Box<dyn Mount>, MountError> {
     let storage = config.storage.connect()?;
 
-    // TODO a bit confusing.
-    let configured_driver = config.driver.map(|driver| driver.init());
-    let driver = configured_driver.as_deref().map_or_else(
+    let driver = config.driver.map_or_else(
         || get_default_driver().ok_or(MountError::NoDefaultDriver),
-        Ok,
+        |driver| Ok(driver.init()),
     )?;
 
     Ok(driver.mount(config.name, config.path, storage)?)
@@ -71,17 +69,20 @@ pub enum MountError {
     CannotMount(#[from] super::domain::driver::MountError),
 }
 
-/// Memoized default driver for get_default_driver.
-static DEFAULT_DRIVER: OnceLock<Option<&'static dyn Driver>> = OnceLock::new();
+/// Memoized default driver configuration for get_default_driver.
+static DEFAULT_DRIVER_CONFIG: OnceLock<Option<&'static dyn DriverConfig>> =
+    OnceLock::new();
 
-/// Returns the default driver if there is any.
-pub fn get_default_driver() -> Option<&'static dyn Driver> {
-    *DEFAULT_DRIVER.get_or_init(|| {
-        inventory::iter::<super::domain::driver::DefaultDriver>
-            .into_iter()
-            .max_by_key(|entry| entry.priority)
-            .map(|entry| entry.driver)
-    })
+/// Creates the default driver if there is any.
+pub fn get_default_driver() -> Option<Box<dyn Driver>> {
+    DEFAULT_DRIVER_CONFIG
+        .get_or_init(|| {
+            inventory::iter::<super::domain::driver::DefaultDriverConfig>
+                .into_iter()
+                .max_by_key(|entry| entry.priority)
+                .map(|entry| entry.config)
+        })
+        .map(|config| config.init())
 }
 
 // TODO: Tests with mocked ConfigRepository and Driver

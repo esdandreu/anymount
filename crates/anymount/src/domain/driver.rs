@@ -65,12 +65,17 @@ pub enum LegacyError {
     MissingOneDriveTokenMaterial,
 }
 
-pub struct DefaultDriver {
+/// Driver config with a priority value to determine which is the default driver
+/// configuration. The driver configuration with the highest priority will be
+/// used by default when the mount does not specify any driver. Users of this
+/// library can override the default driver by submitting a their own drivers
+/// with a higher priority.
+pub struct DefaultDriverConfig {
     pub priority: i32,
-    pub driver: &'static dyn Driver,
+    pub config: &'static dyn DriverConfig,
 }
 
-inventory::collect!(DefaultDriver);
+inventory::collect!(DefaultDriverConfig);
 
 /// Result type for driver domain validation.
 pub type LegacyResult<T> = std::result::Result<T, LegacyError>;
