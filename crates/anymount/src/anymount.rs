@@ -49,10 +49,12 @@ impl Default for Anymount<ConfigDir> {
 fn mount(config: Config) -> Result<Box<dyn Mount>, MountError> {
     let storage = config.storage.connect()?;
 
-    let driver = match config.driver {
-        Some(driver) => driver.init(),
-        None => get_default_driver().ok_or(MountError::NoDefaultDriver)?,
-    };
+    // TODO a bit confusing.
+    let configured_driver = config.driver.map(|driver| driver.init());
+    let driver = configured_driver.as_deref().map_or_else(
+        || get_default_driver().ok_or(MountError::NoDefaultDriver),
+        Ok,
+    )?;
 
     Ok(driver.mount(config.name, config.path, storage)?)
 }

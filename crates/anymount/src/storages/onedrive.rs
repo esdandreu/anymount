@@ -63,6 +63,27 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+#[derive(Debug, Error)]
+enum ConnectError {
+    #[error("{message}")]
+    InvalidConfig { message: &'static str },
+
+    #[error("token access failed")]
+    Token {
+        #[source]
+        source: crate::auth::onedrive::Error,
+    },
+}
+
+impl From<ConnectError> for ConnectStorageError {
+    fn from(error: ConnectError) -> Self {
+        Self::CannotConnect {
+            kind: "onedrive",
+            message: error.to_string(),
+        }
+    }
+}
+
 fn response_message(body: &[u8]) -> String {
     String::from_utf8_lossy(body).into_owned()
 }
@@ -205,27 +226,31 @@ impl OneDriveConfig {
         let has_access = self.access_token.is_some();
         let has_refresh = self.refresh_token.is_some();
         if !has_access && !has_refresh {
-            return Err(ConnectStorageError::CannotConnect {
-                message: "OneDrive requires access_token or refresh_token"
-                    .into(),
-            });
+            return Err(ConnectError::InvalidConfig {
+                message: "OneDrive requires access_token or refresh_token",
+            }
+            .into());
         }
         let buffer_secs = self
             .token_expiry_buffer_secs
             .unwrap_or(DEFAULT_TOKEN_EXPIRY_BUFFER_SECS);
         if has_access && !has_refresh {
-            let token = self.access_token.as_deref().ok_or_else(|| {
-                ConnectStorageError::CannotConnect {
-                    message: "access_token required".into(),
-                }
-            })?;
+            let token = self.access_token.as_deref().ok_or_else(
+                || -> ConnectStorageError {
+                    ConnectError::InvalidConfig {
+                        message: "access_token required",
+                    }
+                    .into()
+                },
+            )?;
             if let Some(exp) = jwt_expires_at(token) {
                 let now = SystemTime::now();
                 let buffer = Duration::from_secs(buffer_secs);
                 if exp <= now + buffer {
-                    return Err(ConnectStorageError::CannotConnect {
-                        message: "access_token is expired and no refresh_token provided".into(),
-                    });
+                    return Err(ConnectError::InvalidConfig {
+                        message: "access_token is expired and no refresh_token provided",
+                    }
+                    .into());
                 }
             }
         }
@@ -236,9 +261,8 @@ impl OneDriveConfig {
             self.client_id.clone(),
             self.token_expiry_buffer_secs,
         )
-        .map_err(|source| ConnectStorageError::CannotConnect {
-            kind: "onedrive".into(),
-            message: Error::Token { source }.to_string(),
+        .map_err(|source| -> ConnectStorageError {
+            ConnectError::Token { source }.into()
         })?;
         Ok(OneDriveStorage {
             root: self.root,
@@ -488,7 +512,13 @@ mod tests {
         let Err(err) = result else {
             panic!("config should fail")
         };
-        assert!(matches!(err, ConnectStorageError::CannotConnect { .. }));
+        assert!(matches!(
+            err,
+            ConnectStorageError::CannotConnect {
+                kind: "onedrive",
+                ..
+            }
+        ));
     }
 
     #[test]

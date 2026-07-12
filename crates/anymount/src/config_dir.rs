@@ -177,7 +177,7 @@ error_message = "toml test"
         assert_eq!(config.name, "demo");
         match config.storage.connect() {
             Ok(_) => panic!("should not connect"),
-            Err(ConnectStorageError::CannotConnect { message }) => {
+            Err(ConnectStorageError::CannotConnect { message, .. }) => {
                 assert_eq!(message, "toml test");
             }
         }
@@ -204,7 +204,7 @@ error_message = "toml test"
         assert_eq!(config.name, "demo");
         match config.storage.connect() {
             Ok(_) => panic!("should not connect"),
-            Err(ConnectStorageError::CannotConnect { message }) => {
+            Err(ConnectStorageError::CannotConnect { message, .. }) => {
                 assert_eq!(message, "json test");
             }
         }
@@ -230,7 +230,7 @@ storage:
         assert_eq!(config.name, "demo");
         match config.storage.connect() {
             Ok(_) => panic!("should not connect"),
-            Err(ConnectStorageError::CannotConnect { message }) => {
+            Err(ConnectStorageError::CannotConnect { message, .. }) => {
                 assert_eq!(message, "yaml test");
             }
         }
