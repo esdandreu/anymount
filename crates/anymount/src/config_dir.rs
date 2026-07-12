@@ -154,7 +154,6 @@ impl ConfigFormat {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::storage::ConnectStorageError;
     use tempfile::TempDir;
     use tracing_test::traced_test;
 
@@ -177,8 +176,8 @@ error_message = "toml test"
         assert_eq!(config.name, "demo");
         match config.storage.connect() {
             Ok(_) => panic!("should not connect"),
-            Err(ConnectStorageError::CannotConnect { message, .. }) => {
-                assert_eq!(message, "toml test");
+            Err(error) => {
+                assert_eq!(error.message, "toml test");
             }
         }
     }
@@ -204,8 +203,8 @@ error_message = "toml test"
         assert_eq!(config.name, "demo");
         match config.storage.connect() {
             Ok(_) => panic!("should not connect"),
-            Err(ConnectStorageError::CannotConnect { message, .. }) => {
-                assert_eq!(message, "json test");
+            Err(error) => {
+                assert_eq!(error.message, "json test");
             }
         }
     }
@@ -230,8 +229,8 @@ storage:
         assert_eq!(config.name, "demo");
         match config.storage.connect() {
             Ok(_) => panic!("should not connect"),
-            Err(ConnectStorageError::CannotConnect { message, .. }) => {
-                assert_eq!(message, "yaml test");
+            Err(error) => {
+                assert_eq!(error.message, "yaml test");
             }
         }
     }

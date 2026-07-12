@@ -10,12 +10,13 @@ pub trait StorageConfig {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum ConnectStorageError {
-    #[error("failed to connect {kind} storage: {message}")]
-    CannotConnect { kind: &'static str, message: String },
+#[error("failed to connect {kind} storage: {message}")]
+pub struct ConnectStorageError {
+    pub kind: &'static str,
+    pub message: String,
 }
 
-pub trait Storage {
+pub trait Storage: Send + Sync {
     fn read_dir(
         &self,
         _path: PathBuf,
@@ -30,6 +31,27 @@ pub trait Storage {
         _range: Range<u64>,
     ) -> Result<(), ReadFileAtError> {
         Err(ReadFileAtError::NotSupported)
+    }
+}
+
+impl<T> Storage for Box<T>
+where
+    T: Storage + ?Sized,
+{
+    fn read_dir(
+        &self,
+        path: PathBuf,
+    ) -> Result<Box<dyn Iterator<Item = Box<dyn DirEntry>>>, ReadDirError> {
+        (**self).read_dir(path)
+    }
+
+    fn read_file_at(
+        &self,
+        path: PathBuf,
+        writer: &mut dyn WriteAt,
+        range: Range<u64>,
+    ) -> Result<(), ReadFileAtError> {
+        (**self).read_file_at(path, writer, range)
     }
 }
 

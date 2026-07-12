@@ -2,9 +2,7 @@
 
 use crate::Logger;
 pub mod error;
-use crate::storages::{
-    DirEntry, ReadDirError, ReadFileAtError, Storage, WriteAt, WriteAtError,
-};
+use crate::domain::storage::{Storage, WriteAt, WriteAtError};
 pub use error::{Error, Result};
 use fuser::{
     Errno, FileAttr, FileHandle, FileType, Generation, INodeNo, OpenFlags,
@@ -24,7 +22,7 @@ pub use crate::drivers::fuse::error::{
 pub mod driver;
 
 #[cfg(feature = "fuse")]
-pub use driver::FuseDriver;
+pub use driver::{FuseDriver, FuseDriverConfig, FuseMount};
 
 pub const ROOT_INO: u64 = 1;
 pub const TTL: Duration = Duration::from_secs(1);
@@ -290,7 +288,7 @@ impl<S: Storage, L: Logger + 'static> StorageFilesystem<S, L> {
     }
 }
 
-impl<S: Storage, L: Logger + 'static> fuser::Filesystem
+impl<S: Storage + 'static, L: Logger + 'static> fuser::Filesystem
     for StorageFilesystem<S, L>
 {
     fn lookup(
@@ -566,12 +564,14 @@ mod tests {
         DOT_ENTRY_OFFSET, FIRST_CHILD_ENTRY_OFFSET, NoCacheFsCache,
         StorageFilesystem,
     };
-    use crate::domain::storage::{DirEntry, Storage, WriteAt};
+    use crate::domain::storage::{
+        DirEntry, ReadDirError, ReadFileAtError, Storage, WriteAt,
+    };
     use crate::drivers::fuse::error::Error;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::{Duration, Instant, SystemTime};
+    use std::time::{Duration, SystemTime};
 
     #[derive(Clone)]
     struct TestDirEntry {

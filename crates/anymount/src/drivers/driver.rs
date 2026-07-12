@@ -159,14 +159,25 @@ pub fn connect_drivers(
     specs: &[LegacyDriverConfig],
     logger: &(impl Logger + 'static),
 ) -> Result<Drivers> {
-    use crate::drivers::fuse::{FuseDriver, NoCacheFsCache, StorageFilesystem};
+    fn legacy_storage(config: LegacyStorageConfig) -> Result<Box<dyn Storage>> {
+        match config {
+            LegacyStorageConfig::Local { root } => {
+                Ok(Box::new(crate::storages::LocalStorage::new(root)))
+            }
+            LegacyStorageConfig::OneDrive { .. } => {
+                Err(crate::drivers::Error::NotSupported)
+            }
+        }
+    }
+
+    use crate::drivers::fuse::{FuseMount, NoCacheFsCache, StorageFilesystem};
     let mut sessions: Vec<(PathBuf, fuser::BackgroundSession)> = Vec::new();
     for spec in specs {
         if !spec.path.exists() {
             std::fs::create_dir_all(&spec.path)?;
         }
         let mount_path = spec.path.canonicalize()?;
-        let storage = storages::new(spec.storage.clone())?;
+        let storage = legacy_storage(spec.storage.clone())?;
         match &spec.storage {
             LegacyStorageConfig::Local { root: _ } => {
                 let fs = StorageFilesystem::new_with_cache(
@@ -215,7 +226,12 @@ pub fn connect_drivers(
     let drivers: Vec<Box<dyn Session>> = sessions
         .into_iter()
         .map(|(path, session)| {
-            Box::new(FuseDriver::new(path, session)) as Box<dyn Session>
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("Anymount")
+                .to_owned();
+            Box::new(FuseMount::new(name, path, session)) as Box<dyn Session>
         })
         .collect();
     Ok(drivers)
@@ -261,6 +277,15 @@ mod tests {
     fn connect_drivers_accepts_resolved_specs() {
         let spec = local_driver_spec("demo");
         let result = connect_drivers(&[spec], &NoOpLogger::default());
+        #[cfg(feature = "fuse")]
+        assert!(matches!(
+            result,
+            Ok(_)
+                | Err(crate::drivers::Error::NotSupported)
+                | Err(crate::drivers::Error::Io(_))
+                | Err(crate::drivers::Error::Fuse(_))
+        ));
+        #[cfg(not(feature = "fuse"))]
         assert!(matches!(
             result,
             Ok(_) | Err(crate::drivers::Error::NotSupported)

@@ -77,7 +77,7 @@ enum ConnectError {
 
 impl From<ConnectError> for ConnectStorageError {
     fn from(error: ConnectError) -> Self {
-        Self::CannotConnect {
+        Self {
             kind: "onedrive",
             message: error.to_string(),
         }
@@ -512,13 +512,7 @@ mod tests {
         let Err(err) = result else {
             panic!("config should fail")
         };
-        assert!(matches!(
-            err,
-            ConnectStorageError::CannotConnect {
-                kind: "onedrive",
-                ..
-            }
-        ));
+        assert_eq!(err.kind, "onedrive");
     }
 
     #[test]
