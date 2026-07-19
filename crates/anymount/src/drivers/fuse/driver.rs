@@ -20,7 +20,7 @@ pub struct FuseDriverConfig;
 #[typetag::serde(name = "fuse")]
 impl DriverConfig for FuseDriverConfig {
     fn init(&self) -> Box<dyn Driver> {
-        Box::new(FuseDriver::default())
+        Box::new(FuseDriver)
     }
 }
 

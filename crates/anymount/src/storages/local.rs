@@ -168,60 +168,71 @@ mod tests {
 
     #[test]
     fn read_dir_returns_entries() {
-        let dir = TempDir::new().unwrap();
+        let dir =
+            TempDir::new().expect("temporary directory should be created");
         let path = dir.path();
         let file_path = path.join("f.txt");
         let content = b"hello world";
-        std::fs::write(&file_path, content).unwrap();
+        std::fs::write(&file_path, content)
+            .expect("test file should be written");
         let subdir = path.join("sub");
-        std::fs::create_dir(&subdir).unwrap();
+        std::fs::create_dir(&subdir)
+            .expect("test subdirectory should be created");
 
         let storage = LocalStorage::new(path.to_path_buf());
-        let iter = storage.read_dir(PathBuf::new()).unwrap();
+        let iter = storage
+            .read_dir(PathBuf::new())
+            .expect("test directory should be readable");
         let entries: Vec<_> = iter.collect();
         assert!(entries.len() >= 2);
 
-        let file_entry =
-            entries.iter().find(|e| e.file_name() == "f.txt").unwrap();
+        let file_entry = entries
+            .iter()
+            .find(|e| e.file_name() == "f.txt")
+            .expect("test file entry should exist");
         assert_eq!(file_entry.file_name(), "f.txt");
         assert!(!file_entry.is_dir());
         assert_eq!(file_entry.size(), content.len() as u64);
 
-        let dir_entry =
-            entries.iter().find(|e| e.file_name() == "sub").unwrap();
+        let dir_entry = entries
+            .iter()
+            .find(|e| e.file_name() == "sub")
+            .expect("test directory entry should exist");
         assert!(dir_entry.is_dir());
     }
 
     #[test]
     fn read_file_at_writes_exact_range() {
-        let dir = TempDir::new().unwrap();
+        let dir =
+            TempDir::new().expect("temporary directory should be created");
         let path = dir.path();
         let body: Vec<u8> = (0..5000).map(|i| (i % 256) as u8).collect();
         let file_path = path.join("f");
-        std::fs::write(&file_path, &body).unwrap();
+        std::fs::write(&file_path, &body).expect("test file should be written");
 
         let storage = LocalStorage::new(path.to_path_buf());
         let mut writer = RecordingWriter::new();
         storage
             .read_file_at(PathBuf::from("f"), &mut writer, 0..5000)
-            .unwrap();
+            .expect("test range should be readable");
         assert_eq!(writer.total_bytes(), 5000);
         assert_eq!(writer.flat_bytes(), body);
     }
 
     #[test]
     fn read_file_at_caps_at_range() {
-        let dir = TempDir::new().unwrap();
+        let dir =
+            TempDir::new().expect("temporary directory should be created");
         let path = dir.path();
         let body: Vec<u8> = (0..10_000).map(|i| (i % 256) as u8).collect();
         let file_path = path.join("f");
-        std::fs::write(&file_path, &body).unwrap();
+        std::fs::write(&file_path, &body).expect("test file should be written");
 
         let storage = LocalStorage::new(path.to_path_buf());
         let mut writer = RecordingWriter::new();
         storage
             .read_file_at(PathBuf::from("f"), &mut writer, 0..5000)
-            .unwrap();
+            .expect("test range should be readable");
         assert_eq!(writer.total_bytes(), 5000);
     }
 }

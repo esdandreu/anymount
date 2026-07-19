@@ -2,7 +2,7 @@ use crate::auth::onedrive::OneDriveTokenSource;
 use crate::auth::token_response::jwt_expires_at;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use std::path::{Component, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
@@ -29,7 +29,7 @@ pub enum Error {
     Request {
         url: String,
         #[source]
-        source: ureq::Error,
+        source: Box<ureq::Error>,
     },
 
     #[error("response body read failed for {url}: {source}")]
@@ -171,11 +171,11 @@ impl HttpGet for UreqHttpGet {
     ) -> Result<(u16, Vec<u8>)> {
         let mut request = ureq::get(url);
         for (k, v) in headers {
-            request = request.set(*k, *v);
+            request = request.set(k, v);
         }
         let response = request.call().map_err(|source| Error::Request {
             url: url.to_owned(),
-            source,
+            source: Box::new(source),
         })?;
         let status = response.status();
         let mut reader = response.into_reader();
@@ -289,7 +289,7 @@ where
     T: BearerToken,
     F: HttpGet,
 {
-    fn path_to_graph_segment(path: &PathBuf) -> String {
+    fn path_to_graph_segment(path: &Path) -> String {
         if path.as_os_str().is_empty() {
             return "".to_string();
         }
@@ -687,7 +687,9 @@ mod tests {
     fn read_dir_returns_entry_from_mock() {
         let list_json = br#"{"value":[{"name":"f.txt","size":100,"lastModifiedDateTime":"2024-01-01T00:00:00Z"}]}"#;
         let storage = storage_with_response(200, list_json);
-        let iter = storage.read_dir(PathBuf::new()).unwrap();
+        let iter = storage
+            .read_dir(PathBuf::new())
+            .expect("mock directory listing should succeed");
         let entries: Vec<_> = iter.collect();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].file_name(), "f.txt");
@@ -721,7 +723,7 @@ mod tests {
         let mut writer = RecordingWriter::new();
         storage
             .read_file_at(PathBuf::from("f"), &mut writer, 0..5000)
-            .unwrap();
+            .expect("mock range read should succeed");
         assert_eq!(writer.total_bytes(), 5000);
         let flat: Vec<u8> = writer
             .writes
@@ -743,7 +745,7 @@ mod tests {
         let mut writer = RecordingWriter::new();
         storage
             .read_file_at(PathBuf::from("f"), &mut writer, 0..5000)
-            .unwrap();
+            .expect("mock range read should succeed");
         assert_eq!(writer.total_bytes(), 5000);
     }
 }

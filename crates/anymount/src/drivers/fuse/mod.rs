@@ -234,7 +234,7 @@ impl<S: Storage> StorageFilesystem<S> {
         FileAttr {
             ino,
             size: info.size,
-            blocks: (info.size + 511) / 512,
+            blocks: info.size.div_ceil(512),
             atime: info.atime,
             mtime: info.atime,
             ctime: info.atime,
@@ -305,7 +305,11 @@ impl<S: Storage + 'static> fuser::Filesystem for StorageFilesystem<S> {
         }
         if name_str == ".." {
             let (ino, info) = if parent.0 == ROOT_INO {
-                (ROOT_INO, self.get_info(ROOT_INO).unwrap())
+                let Some(info) = self.get_info(ROOT_INO) else {
+                    reply.error(Errno::from_i32(libc::EIO));
+                    return;
+                };
+                (ROOT_INO, info)
             } else {
                 let grandparent = parent_info
                     .path
@@ -317,7 +321,10 @@ impl<S: Storage + 'static> fuser::Filesystem for StorageFilesystem<S> {
                     .read()
                     .get(&grandparent)
                     .unwrap_or(&ROOT_INO);
-                let info = self.get_info(ino).unwrap();
+                let Some(info) = self.get_info(ino) else {
+                    reply.error(Errno::from_i32(libc::ENOENT));
+                    return;
+                };
                 (ino, info)
             };
             let attr = self.attr_from_info(INodeNo(ino), &info);
@@ -349,7 +356,10 @@ impl<S: Storage + 'static> fuser::Filesystem for StorageFilesystem<S> {
         let atime = entry.accessed;
         let ino =
             self.get_or_create_ino(child_path.clone(), is_dir, size, atime);
-        let info = self.get_info(ino).unwrap();
+        let Some(info) = self.get_info(ino) else {
+            reply.error(Errno::from_i32(libc::EIO));
+            return;
+        };
         let attr = self.attr_from_info(INodeNo(ino), &info);
         reply.entry(&TTL, &attr, FUSE_GENERATION);
     }
@@ -483,11 +493,11 @@ impl<S: Storage + 'static> fuser::Filesystem for StorageFilesystem<S> {
                 return;
             }
         };
-        if offset == 0 {
-            if reply.add(ino, DOT_ENTRY_OFFSET, FileType::Directory, ".") {
-                reply.ok();
-                return;
-            }
+        if offset == 0
+            && reply.add(ino, DOT_ENTRY_OFFSET, FileType::Directory, ".")
+        {
+            reply.ok();
+            return;
         }
         if offset <= DOT_ENTRY_OFFSET {
             let parent_ino = if info.path.as_os_str().is_empty() {
@@ -703,7 +713,7 @@ mod tests {
         let cache = NoCacheFsCache::new();
         let result = cache.read_range(Path::new("test.txt"), 0, 10);
         assert!(result.is_err());
-        let err = result.unwrap_err();
+        let err = result.expect_err("uncached range should fail");
         assert!(matches!(err, Error::CacheRangeNotCached { .. }));
     }
 
@@ -727,7 +737,7 @@ mod tests {
         cache.insert(path.clone(), entries.clone());
         let result = cache.get(&path);
         assert!(result.is_some());
-        assert_eq!(result.unwrap().len(), 1);
+        assert_eq!(result.expect("cached entries should exist").len(), 1);
     }
 
     #[test]
@@ -830,7 +840,7 @@ mod tests {
         let fs = StorageFilesystem::new_with_cache(storage, cache);
         let root_info = fs.get_info(1);
         assert!(root_info.is_some());
-        assert!(root_info.unwrap().is_dir);
+        assert!(root_info.expect("root inode should exist").is_dir);
     }
 
     #[test]
@@ -846,8 +856,12 @@ mod tests {
         let fs = StorageFilesystem::new_with_cache(storage, cache);
         let path = PathBuf::new();
 
-        let first = fs.read_dir_entries(path.clone()).unwrap();
-        let second = fs.read_dir_entries(path).unwrap();
+        let first = fs
+            .read_dir_entries(path.clone())
+            .expect("first directory read should succeed");
+        let second = fs
+            .read_dir_entries(path)
+            .expect("cached directory read should succeed");
 
         assert_eq!(first.len(), 1);
         assert_eq!(second.len(), 1);
@@ -867,7 +881,9 @@ mod tests {
         let cache = Arc::new(mock_cache);
         let fs = StorageFilesystem::new_with_cache(storage, cache);
 
-        let entries = fs.read_dir_entries(PathBuf::new()).unwrap();
+        let entries = fs
+            .read_dir_entries(PathBuf::new())
+            .expect("directory read should succeed");
 
         assert_eq!(entries.len(), 1);
         assert_eq!(sync_calls.load(Ordering::SeqCst), 1);

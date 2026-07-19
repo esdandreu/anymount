@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use crate::ConfigDir;
 use crate::cli::commands::connect::ConnectCommand;
 use crate::tui;
 use clap::{Parser, Subcommand};
@@ -30,8 +31,11 @@ pub enum Command {
 impl Cli {
     pub fn run(self) -> color_eyre::Result<()> {
         match self.command {
-            Some(Command::Connect(cmd)) => cmd.execute().map_err(Into::into),
-            None => tui::run(),
+            Some(Command::Connect(cmd)) => cmd.execute(),
+            None => tui::run(
+                self.config_dir
+                    .map_or_else(ConfigDir::default, ConfigDir::new),
+            ),
         }
     }
 }

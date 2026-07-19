@@ -157,7 +157,9 @@ mod tests {
                 client_id: Some("test-client".into()),
             }),
         };
-        let err = cmd._execute(&FailingUseCase, &NoOpUrlOpener).unwrap_err();
+        let err = cmd
+            ._execute(&FailingUseCase, &NoOpUrlOpener)
+            .expect_err("failing use case should return an error");
         assert!(matches!(err, crate::cli::Error::Auth(_)));
     }
 

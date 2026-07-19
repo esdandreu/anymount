@@ -78,9 +78,9 @@ fn read_config(path: &Path) -> Result<Config, ReadConfigError> {
     let name = path
         .file_stem()
         .and_then(|file_stem| file_stem.to_str())
-        .ok_or_else(|| ReadConfigError::NotAConfigFile)?
+        .ok_or(ReadConfigError::NotAConfigFile)?
         .to_owned();
-    let content = read_config_file(&path)?;
+    let content = read_config_file(path)?;
     Ok(Config {
         name,
         path: content.path,
@@ -93,9 +93,9 @@ fn read_config_file(path: &Path) -> Result<ConfigFileContent, ReadConfigError> {
     if !path.is_file() {
         return Err(ReadConfigError::NotAConfigFile);
     }
-    let format = ConfigFormat::from_path(&path)
-        .ok_or_else(|| ReadConfigError::NotAConfigFile)?;
-    let contents = std::fs::read_to_string(&path)
+    let format =
+        ConfigFormat::from_path(path).ok_or(ReadConfigError::NotAConfigFile)?;
+    let contents = std::fs::read_to_string(path)
         .map_err(|source| ReadConfigError::CannotReadFile { source })?;
     let content = format
         .deserialize(&contents)
@@ -161,7 +161,7 @@ mod tests {
     fn reads_toml_config_file() {
         let dir = TempDir::new().expect("create temp dir");
         std::fs::write(
-            &dir.path().join("demo.toml"),
+            dir.path().join("demo.toml"),
             r#"
 path = "/mnt/test"
 [storage]
@@ -186,7 +186,7 @@ error_message = "toml test"
     fn reads_json_config_file() {
         let dir = TempDir::new().expect("create temp dir");
         std::fs::write(
-            &dir.path().join("demo.json"),
+            dir.path().join("demo.json"),
             r#"{
         "path": "/mnt/test",
         "storage": {
@@ -213,7 +213,7 @@ error_message = "toml test"
     fn reads_yaml_config_file() {
         let dir = TempDir::new().expect("create temp dir");
         std::fs::write(
-            &dir.path().join("demo.yaml"),
+            dir.path().join("demo.yaml"),
             r#"
 path: /mnt/test
 storage:
@@ -251,7 +251,7 @@ storage:
         let dir = TempDir::new().expect("create temp dir");
         let path = dir.path().join("demo.toml");
         std::fs::write(
-            &dir.path().join("demo.toml"),
+            dir.path().join("demo.toml"),
             r#"
 path = "/mnt/test"
 [storage]
@@ -274,7 +274,7 @@ key = "value"
     #[traced_test]
     fn warns_config_errors() {
         let dir = TempDir::new().expect("create temp dir");
-        std::fs::write(&dir.path().join("demo.toml"), r#"not toml"#)
+        std::fs::write(dir.path().join("demo.toml"), r#"not toml"#)
             .expect("write toml config");
         let config = ConfigDir::new(dir.path().to_path_buf());
         let mounts = config.list().collect::<Vec<_>>();

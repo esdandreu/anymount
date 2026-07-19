@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::domain::driver::LegacyStorageConfig;
+use crate::domain::{Config, ConfigRepository, StorageConfig};
 
 use super::event::{AppEvent, Event, EventHandler};
 
@@ -14,19 +14,17 @@ use ratatui::{
 
 use super::widgets::{MountItem, MountsList, MountsListState};
 
-#[derive(Debug)]
 pub struct MountConfig {
     pub name: String,
     /// Local mount path.
     pub path: PathBuf,
     /// Storage backend configuration.
-    pub storage: LegacyStorageConfig,
+    pub storage: Box<dyn StorageConfig>,
     /// Whether the mount is currently connected.
     pub is_connected: bool,
 }
 
 /// Application.
-#[derive(Debug)]
 pub struct App {
     /// Is the application running?
     pub running: bool,
@@ -44,40 +42,7 @@ impl Default for App {
         Self {
             running: true,
             events: EventHandler::new(),
-            mounts: vec![
-                MountConfig {
-                    name: "Hello first".to_string(),
-                    path: PathBuf::from("/tmp/mnt"),
-                    storage: LegacyStorageConfig::Local {
-                        root: PathBuf::from("/users/desktop"),
-                    },
-                    is_connected: false,
-                },
-                MountConfig {
-                    name: "Hello second".to_string(),
-                    path: PathBuf::from("/tmp/mnt"),
-                    storage: LegacyStorageConfig::Local {
-                        root: PathBuf::from("/users/desktop"),
-                    },
-                    is_connected: true,
-                },
-                MountConfig {
-                    name: "Hello second".to_string(),
-                    path: PathBuf::from("/tmp/mnt"),
-                    storage: LegacyStorageConfig::Local {
-                        root: PathBuf::from("/users/desktop"),
-                    },
-                    is_connected: true,
-                },
-                MountConfig {
-                    name: "Hello second".to_string(),
-                    path: PathBuf::from("/tmp/mnt"),
-                    storage: LegacyStorageConfig::Local {
-                        root: PathBuf::from("/users/desktop"),
-                    },
-                    is_connected: true,
-                },
-            ],
+            mounts: Vec::new(),
             mounts_list: MountsListState::default(),
         }
     }
@@ -85,8 +50,11 @@ impl Default for App {
 
 impl App {
     /// Constructs a new instance of [`App`].
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(config_repository: impl ConfigRepository) -> Self {
+        Self {
+            mounts: config_repository.list().map(MountConfig::from).collect(),
+            ..Self::default()
+        }
     }
 
     /// Run the application's main loop.
@@ -188,7 +156,7 @@ impl Widget for &mut App {
             .map(|m| MountItem {
                 name: &m.name,
                 path: m.path.as_path(),
-                storage_type: m.storage.label(),
+                storage_type: m.storage.kind(),
                 is_connected: m.is_connected,
             })
             .collect::<Vec<_>>();
@@ -199,68 +167,92 @@ impl Widget for &mut App {
     }
 }
 
+impl From<Config> for MountConfig {
+    fn from(config: Config) -> Self {
+        Self {
+            name: config.name,
+            path: config.path,
+            storage: config.storage,
+            is_connected: false,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
-    use super::{
-        App, EventHandler, LegacyStorageConfig, MountConfig, MountsListState,
+    use super::App;
+    use crate::domain::{
+        Config, ConfigRepository, ConnectStorageError, Storage, StorageConfig,
     };
     use ratatui::{Terminal, backend::TestBackend};
 
+    #[derive(serde::Serialize, serde::Deserialize)]
+    struct TestStorageConfig;
+
+    #[typetag::serde(name = "tui-test")]
+    impl StorageConfig for TestStorageConfig {
+        fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError> {
+            unreachable!("rendering must not connect storage")
+        }
+
+        fn kind(&self) -> &'static str {
+            "local"
+        }
+    }
+
+    struct TestConfigRepository {
+        names: Vec<&'static str>,
+    }
+
+    impl ConfigRepository for TestConfigRepository {
+        type Iter<'a> = std::vec::IntoIter<Config>;
+
+        fn list(&self) -> Self::Iter<'_> {
+            self.names
+                .iter()
+                .map(|name| Config {
+                    name: (*name).to_owned(),
+                    path: PathBuf::from("/tmp/mnt"),
+                    storage: Box::new(TestStorageConfig),
+                    driver: None,
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+        }
+    }
+
+    #[test]
+    fn loads_mounts_from_config_repository() {
+        let app = App::new(TestConfigRepository {
+            names: vec!["First", "Second"],
+        });
+
+        assert_eq!(app.mounts.len(), 2);
+        assert_eq!(app.mounts[0].name, "First");
+        assert_eq!(app.mounts[0].storage.kind(), "local");
+        assert!(!app.mounts[0].is_connected);
+    }
+
     #[test]
     fn test_mounts_list() {
-        let mut app = App {
-            running: true,
-            events: EventHandler::new(),
-            mounts: vec![
-                MountConfig {
-                    name: "Hello first".to_string(),
-                    path: PathBuf::from("/tmp/mnt"),
-                    storage: LegacyStorageConfig::Local {
-                        root: PathBuf::from("/users/desktop"),
-                    },
-                    is_connected: false,
-                },
-                MountConfig {
-                    name: "Hello second".to_string(),
-                    path: PathBuf::from("/tmp/mnt"),
-                    storage: LegacyStorageConfig::Local {
-                        root: PathBuf::from("/users/desktop"),
-                    },
-                    is_connected: true,
-                },
-                MountConfig {
-                    name: "Third".to_string(),
-                    path: PathBuf::from("/tmp/mnt"),
-                    storage: LegacyStorageConfig::Local {
-                        root: PathBuf::from("/users/desktop"),
-                    },
-                    is_connected: true,
-                },
-                MountConfig {
-                    name: "Hello first".to_string(),
-                    path: PathBuf::from("/tmp/mnt"),
-                    storage: LegacyStorageConfig::Local {
-                        root: PathBuf::from("/users/desktop"),
-                    },
-                    is_connected: false,
-                },
-                MountConfig {
-                    name: "Hello first".to_string(),
-                    path: PathBuf::from("/tmp/mnt"),
-                    storage: LegacyStorageConfig::Local {
-                        root: PathBuf::from("/users/desktop"),
-                    },
-                    is_connected: false,
-                },
+        let mut app = App::new(TestConfigRepository {
+            names: vec![
+                "Hello first",
+                "Hello second",
+                "Third",
+                "Hello first",
+                "Hello first",
             ],
-            mounts_list: MountsListState::default(),
-        };
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        });
+        app.mounts[1].is_connected = true;
+        app.mounts[2].is_connected = true;
+        let mut terminal = Terminal::new(TestBackend::new(80, 20))
+            .expect("test terminal should be created");
         terminal
             .draw(|frame| frame.render_widget(&mut app, frame.area()))
-            .unwrap();
+            .expect("application should render");
         insta::with_settings!({ prepend_module_to_snapshot => false }, {
             insta::assert_snapshot!(terminal.backend());
         });

@@ -248,10 +248,8 @@ impl OneDriveTokenSource {
                 .expires_at
                 .map(|exp| exp > now + buffer)
                 .unwrap_or(false);
-            if valid {
-                if let Some(ref at) = token.access_token {
-                    return Ok(at.clone());
-                }
+            if valid && let Some(ref at) = token.access_token {
+                return Ok(at.clone());
             }
         }
         self.refresh_access_token()

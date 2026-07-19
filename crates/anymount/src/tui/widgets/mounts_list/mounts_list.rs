@@ -178,7 +178,7 @@ impl MountsList<'_> {
             buf,
             state,
         );
-        return rows_area;
+        rows_area
     }
 
     fn render_footer(&self, area: Rect, buf: &mut Buffer) {
@@ -268,10 +268,11 @@ mod tests {
         ];
         let app = MountsList { mounts: &mounts };
         let mut state = MountsListState::default();
-        let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(80, 10))
+            .expect("test terminal should be created");
         terminal
             .draw(|f| f.render_stateful_widget(&app, f.area(), &mut state))
-            .unwrap();
+            .expect("mount list should render");
         insta::with_settings!({ prepend_module_to_snapshot => false }, {
             insta::assert_snapshot!(terminal.backend());
         });
@@ -311,10 +312,11 @@ mod tests {
         let mounts = scrollable_mounts();
         let app = MountsList { mounts: &mounts };
         let mut state = MountsListState::default();
-        let mut terminal = Terminal::new(TestBackend::new(80, 11)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(80, 11))
+            .expect("test terminal should be created");
         terminal
             .draw(|f| f.render_stateful_widget(&app, f.area(), &mut state))
-            .unwrap();
+            .expect("mount list should render");
         insta::with_settings!({ prepend_module_to_snapshot => false }, {
             insta::assert_snapshot!(terminal.backend());
         });
@@ -325,12 +327,13 @@ mod tests {
         let mounts = scrollable_mounts();
         let app = MountsList { mounts: &mounts };
         let mut state = MountsListState::default();
-        let mut terminal = Terminal::new(TestBackend::new(80, 11)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(80, 11))
+            .expect("test terminal should be created");
         // Select the first item.
         state.select_next(mounts.len());
         terminal
             .draw(|f| f.render_stateful_widget(&app, f.area(), &mut state))
-            .unwrap();
+            .expect("mount list should render");
         insta::with_settings!({ prepend_module_to_snapshot => false }, {
             insta::assert_snapshot!(terminal.backend());
         });
@@ -341,12 +344,13 @@ mod tests {
         let mounts = scrollable_mounts();
         let app = MountsList { mounts: &mounts };
         let mut state = MountsListState::default();
-        let mut terminal = Terminal::new(TestBackend::new(80, 11)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(80, 11))
+            .expect("test terminal should be created");
         // Select the last item.
         state.select_previous(mounts.len());
         terminal
             .draw(|f| f.render_stateful_widget(&app, f.area(), &mut state))
-            .unwrap();
+            .expect("mount list should render");
         insta::with_settings!({ prepend_module_to_snapshot => false }, {
             insta::assert_snapshot!(terminal.backend());
         });
@@ -357,19 +361,20 @@ mod tests {
         let mounts = scrollable_mounts();
         let app = MountsList { mounts: &mounts };
         let mut state = MountsListState::default();
-        let mut terminal = Terminal::new(TestBackend::new(80, 11)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(80, 11))
+            .expect("test terminal should be created");
         // Select the last item.
         state.select_previous(mounts.len());
         terminal
             .draw(|f| f.render_stateful_widget(&app, f.area(), &mut state))
-            .unwrap();
+            .expect("mount list should render");
         assert_eq!(state.offset, 1);
         // Resize and re-draw, the number of visible items should decrease and
         // the offset should be updated accordingly.
         terminal.backend_mut().resize(80, 8);
         terminal
             .draw(|f| f.render_stateful_widget(&app, f.area(), &mut state))
-            .unwrap();
+            .expect("resized mount list should render");
         assert_eq!(state.offset, 2);
         insta::with_settings!({ prepend_module_to_snapshot => false }, {
             insta::assert_snapshot!(terminal.backend());

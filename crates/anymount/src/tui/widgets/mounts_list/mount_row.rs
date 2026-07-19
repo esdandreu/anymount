@@ -105,10 +105,11 @@ mod tests {
                 is_connected: true,
             },
         };
-        let mut terminal = Terminal::new(TestBackend::new(80, 3)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(80, 3))
+            .expect("test terminal should be created");
         terminal
             .draw(|frame| frame.render_widget(&app, frame.area()))
-            .unwrap();
+            .expect("mount row should render");
         insta::with_settings!({ prepend_module_to_snapshot => false }, {
             insta::assert_snapshot!(terminal.backend());
         });
@@ -126,10 +127,11 @@ mod tests {
                 is_connected: false,
             },
         };
-        let mut terminal = Terminal::new(TestBackend::new(80, 3)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(80, 3))
+            .expect("test terminal should be created");
         terminal
             .draw(|frame| frame.render_widget(&app, frame.area()))
-            .unwrap();
+            .expect("mount row should render");
         insta::with_settings!({ prepend_module_to_snapshot => false }, {
             insta::assert_snapshot!(terminal.backend());
         });
@@ -147,10 +149,11 @@ mod tests {
                 is_connected: false,
             },
         };
-        let mut terminal = Terminal::new(TestBackend::new(80, 3)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(80, 3))
+            .expect("test terminal should be created");
         terminal
             .draw(|frame| frame.render_widget(&app, frame.area()))
-            .unwrap();
+            .expect("mount row should render");
         insta::with_settings!({ prepend_module_to_snapshot => false }, {
             insta::assert_snapshot!(terminal.backend());
         });
@@ -168,10 +171,11 @@ mod tests {
                 is_connected: true,
             },
         };
-        let mut terminal = Terminal::new(TestBackend::new(80, 3)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(80, 3))
+            .expect("test terminal should be created");
         terminal
             .draw(|frame| frame.render_widget(&app, frame.area()))
-            .unwrap();
+            .expect("mount row should render");
         insta::with_settings!({ prepend_module_to_snapshot => false }, {
             insta::assert_snapshot!(terminal.backend());
         });
@@ -189,10 +193,11 @@ mod tests {
                 is_connected: false,
             },
         };
-        let mut terminal = Terminal::new(TestBackend::new(80, 3)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(80, 3))
+            .expect("test terminal should be created");
         terminal
             .draw(|frame| frame.render_widget(&app, frame.area()))
-            .unwrap();
+            .expect("mount row should render");
         insta::with_settings!({ prepend_module_to_snapshot => false }, {
             insta::assert_snapshot!(terminal.backend());
         });
