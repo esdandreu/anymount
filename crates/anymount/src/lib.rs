@@ -14,5 +14,4 @@ pub use anymount::Anymount;
 pub use cli::Cli;
 pub use config_dir::ConfigDir;
 pub use domain::{Config, ConfigRepository, Storage};
-pub use drivers::{Session, connect_drivers};
 pub use logger::{Logger, NoOpLogger, TracingLogger};

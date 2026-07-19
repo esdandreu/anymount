@@ -7,6 +7,9 @@ use crate::domain::storage::{
 
 pub const DEFAULT_LOCAL_CHUNK_SIZE: usize = 65536;
 
+/// Reads the exact number of bytes required to fill buf from the given offset.
+/// The offset is relative to the start of the file and thus independent from
+/// the current cursor.
 fn read_exact_at(
     file: &std::fs::File,
     buf: &mut [u8],

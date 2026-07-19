@@ -8,7 +8,6 @@ use crate::domain::{
     ConnectMountError, DisconnectMountError, Mount, Storage,
     UnregisterMountError,
 };
-use crate::drivers::Session;
 use crate::drivers::fuse::{NoCacheFsCache, StorageFilesystem};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -137,16 +136,6 @@ impl Mount for FuseMount {
             }
         })?;
         Ok(())
-    }
-}
-
-impl Session for FuseMount {
-    fn path(&self) -> &PathBuf {
-        &self.path
-    }
-
-    fn kind(&self) -> &'static str {
-        "macos"
     }
 }
 

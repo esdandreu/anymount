@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -51,9 +50,6 @@ pub enum ListMountsError {
 /// Driver domain validation failures.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum LegacyError {
-    /// The driver mount path is empty.
-    #[error("driver mount path is missing")]
-    MissingMountPath,
     /// The local storage root is empty.
     #[error("local storage root is missing")]
     MissingLocalRoot,
@@ -79,34 +75,6 @@ inventory::collect!(DefaultDriverConfig);
 
 /// Result type for driver domain validation.
 pub type LegacyResult<T> = std::result::Result<T, LegacyError>;
-
-/// A configured driver definition.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LegacyDriverConfig {
-    /// Stable driver name derived from config.
-    pub name: String,
-    /// Local mount path exposed by the driver.
-    pub path: PathBuf,
-    /// Storage backend configuration for this driver.
-    pub storage: LegacyStorageConfig,
-    /// Optional telemetry configuration for this driver.
-    pub telemetry: TelemetrySpec,
-}
-
-impl LegacyDriverConfig {
-    /// Validates driver invariants.
-    ///
-    /// # Errors
-    /// Returns an error when the mount path or storage configuration is
-    /// incomplete.
-    pub fn validate(&self) -> LegacyResult<()> {
-        if self.path.as_os_str().is_empty() {
-            return Err(LegacyError::MissingMountPath);
-        }
-
-        self.storage.validate()
-    }
-}
 
 /// Supported storage backends.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -179,91 +147,31 @@ impl LegacyStorageConfig {
     }
 }
 
-/// Driver telemetry settings.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct TelemetrySpec {
-    /// Optional OTLP exporter configuration.
-    pub otlp: Option<OtlpSpec>,
-}
-
-/// OTLP exporter settings for one driver.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OtlpSpec {
-    /// Whether OTLP export is enabled.
-    pub enabled: bool,
-    /// Optional OTLP endpoint override.
-    pub endpoint: Option<String>,
-    /// Optional transport override.
-    pub protocol: Option<OtlpTransport>,
-    /// Optional transport headers.
-    pub headers: Option<HashMap<String, String>>,
-    /// Optional extra resource attributes.
-    pub resource_attributes: Option<HashMap<String, String>>,
-}
-
-impl Default for OtlpSpec {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            endpoint: None,
-            protocol: None,
-            headers: None,
-            resource_attributes: None,
-        }
-    }
-}
-
-/// OTLP wire transport.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum OtlpTransport {
-    /// HTTP/protobuf transport.
-    #[default]
-    HttpProtobuf,
-    /// gRPC transport.
-    Grpc,
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        LegacyDriverConfig, LegacyError, LegacyStorageConfig, TelemetrySpec,
-    };
+    use super::{LegacyError, LegacyStorageConfig};
     use std::path::PathBuf;
-
-    fn local_driver_spec(name: &str) -> LegacyDriverConfig {
-        LegacyDriverConfig {
-            name: name.to_owned(),
-            path: PathBuf::from(format!("/mnt/{name}")),
-            storage: LegacyStorageConfig::Local {
-                root: PathBuf::from(format!("/data/{name}")),
-            },
-            telemetry: TelemetrySpec::default(),
-        }
-    }
 
     #[test]
     fn onedrive_spec_requires_token_material() {
-        let spec = LegacyDriverConfig {
-            name: "demo".to_owned(),
-            path: PathBuf::from("/mnt/demo"),
-            storage: LegacyStorageConfig::OneDrive {
-                root: PathBuf::from("/"),
-                endpoint: "https://graph.microsoft.com/v1.0".to_owned(),
-                access_token: None,
-                refresh_token: None,
-                client_id: None,
-                token_expiry_buffer_secs: Some(60),
-            },
-            telemetry: TelemetrySpec::default(),
+        let storage = LegacyStorageConfig::OneDrive {
+            root: PathBuf::from("/"),
+            endpoint: "https://graph.microsoft.com/v1.0".to_owned(),
+            access_token: None,
+            refresh_token: None,
+            client_id: None,
+            token_expiry_buffer_secs: Some(60),
         };
 
-        let err = spec.validate().expect_err("spec should be invalid");
+        let err = storage.validate().expect_err("storage should be invalid");
         assert!(matches!(err, LegacyError::MissingOneDriveTokenMaterial));
     }
 
     #[test]
-    fn local_spec_validation_accepts_path_and_root() {
-        let spec = local_driver_spec("demo");
-        spec.validate().expect("local spec should be valid");
+    fn local_storage_validation_accepts_root() {
+        let storage = LegacyStorageConfig::Local {
+            root: PathBuf::from("/data/demo"),
+        };
+        storage.validate().expect("local storage should be valid");
     }
 }

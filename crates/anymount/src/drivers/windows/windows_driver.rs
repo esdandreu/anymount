@@ -6,7 +6,6 @@ use crate::domain::{
     ConnectMountError, DisconnectMountError, Mount, Storage,
     UnregisterMountError,
 };
-use crate::drivers::Session;
 use crate::{Logger, NoOpLogger};
 use cloud_filter::root::{
     Connection, HydrationType, PopulationType, SecurityId,
@@ -197,20 +196,6 @@ where
             path: self.path.clone(),
             message: source.to_string(),
         })
-    }
-}
-
-impl<S, L> Session for WindowsMount<S, L>
-where
-    S: Storage + 'static,
-    L: Logger + 'static,
-{
-    fn kind(&self) -> &'static str {
-        "CloudFilter"
-    }
-
-    fn path(&self) -> &PathBuf {
-        &self.path
     }
 }
 
