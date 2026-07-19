@@ -2,9 +2,8 @@ use std::path::PathBuf;
 
 use anymount_tui::MountConfig;
 
-use crate::ConfigDir;
 use crate::cli::commands::connect::ConnectCommand;
-use crate::domain::ConfigRepository;
+use anymount::{ConfigDir, ConfigRepository};
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]

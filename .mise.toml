@@ -13,7 +13,7 @@ run = "cargo llvm-cov --all-features"
 [tasks.build]
 description = "Build platform-specific Rust components"
 sources = ["crates"]
-run = "cargo build -p anymount --release"
+run = "cargo build -p anymount-cli --release"
 outputs = ["target/**"]
 
 # Run the app

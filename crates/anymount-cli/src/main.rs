@@ -1,6 +1,10 @@
 use clap::Parser;
 use std::process::{ExitCode, Termination};
 
+mod cli;
+
+use cli::Cli;
+
 #[repr(u8)]
 pub enum AnymountResult {
     Ok = 0,
@@ -15,7 +19,7 @@ impl Termination for AnymountResult {
 }
 
 fn main() -> AnymountResult {
-    match anymount::Cli::parse().run() {
+    match Cli::parse().run() {
         Ok(()) => AnymountResult::Ok,
         Err(_) => AnymountResult::Err,
     }

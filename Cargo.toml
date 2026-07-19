@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/anymount",
+    "crates/anymount-cli",
     "crates/anymount-tui",
 ]
 resolver = "3"
