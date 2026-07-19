@@ -4,7 +4,6 @@ use crate::domain::storage::{DirEntry, WriteAt, WriteAtError};
 use crate::drivers::windows::placeholders::{
     dehydrate_file, get_placeholder_info,
 };
-use crate::service::control::messages::ServiceMessage;
 use cloud_filter::{
     error::CResult,
     filter::{Request, SyncFilter, info, ticket},
@@ -15,7 +14,6 @@ use cloud_filter::{
 use parking_lot::Mutex;
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
 use std::time::SystemTime;
 use windows::Win32::Storage::CloudFilters::CF_PIN_STATE_UNPINNED;
 
@@ -23,30 +21,20 @@ pub struct Callbacks<S: Storage, L: Logger> {
     path: PathBuf,
     storage: S,
     logger: L,
-    service_tx: Option<Sender<ServiceMessage>>,
     pending_dehydrate: Mutex<HashSet<PathBuf>>,
 }
 
 impl<S: Storage, L: Logger> Callbacks<S, L> {
-    pub fn new(
-        path: PathBuf,
-        storage: S,
-        logger: L,
-        service_tx: Option<Sender<ServiceMessage>>,
-    ) -> Self {
+    pub fn new(path: PathBuf, storage: S, logger: L) -> Self {
         Self {
             path,
             storage,
             logger,
-            service_tx,
             pending_dehydrate: Mutex::new(HashSet::new()),
         }
     }
 
     fn emit_telemetry(&self, message: String) {
-        if let Some(tx) = &self.service_tx {
-            let _ = tx.send(ServiceMessage::Telemetry(message.clone()));
-        }
         self.logger.info(message);
     }
 }

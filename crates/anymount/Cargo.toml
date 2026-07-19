@@ -9,10 +9,6 @@ authors.workspace = true
 name = "anymount-cli"
 path = "src/main.rs"
 
-[[test]]
-name = "local_provider_test"
-path = "tests/system/local_provider_test.rs"
-
 [dependencies]
 thiserror = "1.0"
 bytes = "1.9"
@@ -63,12 +59,6 @@ opentelemetry-appender-tracing = "0.31.1"
 opentelemetry-semantic-conventions = "0.31.0"
 color-eyre = "0.6.5"
 typetag = "0.2.22"
-
-# Linux-specific dependencies
-[target.'cfg(target_os = "linux")'.dependencies]
-fuser = "0.17"
-libc = "0.2"
-zbus = { version = "5", features = ["tokio"] }
 
 # macOS-specific dependencies (requires macFUSE installed)
 [target.'cfg(target_os = "macos")'.dependencies]

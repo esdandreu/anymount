@@ -48,105 +48,56 @@ pub fn connect_drivers(
     specs: &[LegacyDriverConfig],
     logger: &(impl Logger + 'static),
 ) -> Result<Drivers> {
-    use super::windows::{WindowsSession, cleanup_registry};
+    use super::windows::{WindowsMount, cleanup_registry};
+    fn legacy_storage(config: LegacyStorageConfig) -> Result<Box<dyn Storage>> {
+        match config {
+            LegacyStorageConfig::Local { root } => {
+                Ok(Box::new(crate::storages::LocalStorage::new(root)))
+            }
+            LegacyStorageConfig::OneDrive {
+                root,
+                endpoint,
+                access_token,
+                refresh_token,
+                client_id,
+                token_expiry_buffer_secs,
+            } => crate::storages::OneDriveConfig {
+                root,
+                endpoint,
+                access_token,
+                refresh_token,
+                client_id,
+                token_expiry_buffer_secs,
+            }
+            .connect()
+            .map(|storage| Box::new(storage) as Box<dyn Storage>)
+            .map_err(|source| {
+                crate::drivers::Error::LegacyStorage {
+                    message: source.to_string(),
+                }
+            }),
+        }
+    }
+
     let mut drivers: Vec<Box<dyn Session>> = Vec::new();
     for spec in specs {
-        let storage = storages::new(spec.storage.clone())?;
-        match &spec.storage {
-            LegacyStorageConfig::Local { root: _ } => {
-                let driver = WindowsSession::connect(
-                    spec.path.clone(),
-                    storage,
-                    logger.clone(),
-                    None,
-                )?;
-                drivers.push(driver);
-            }
-            LegacyStorageConfig::OneDrive { .. } => {
-                let driver = WindowsSession::connect(
-                    spec.path.clone(),
-                    storage,
-                    logger.clone(),
-                    None,
-                )?;
-                drivers.push(driver);
-            }
-        }
+        let storage = legacy_storage(spec.storage.clone())?;
+        let mount = WindowsMount::new(
+            spec.name.clone(),
+            spec.path.clone(),
+            storage,
+            logger.clone(),
+        )?;
+        drivers.push(Box::new(mount));
     }
     cleanup_registry(specs, logger)?;
     Ok(drivers)
 }
 
-#[cfg(target_os = "linux")]
-pub fn connect_drivers(
-    specs: &[LegacyDriverConfig],
-    logger: &(impl Logger + 'static),
-) -> Result<Drivers> {
-    use super::linux::dbus::AccountExporter;
-    use super::linux::{
-        LinuxDriver, export_on_dbus, mount_storage, new_runtime,
-    };
-    let rt = new_runtime()?;
-    let mut accounts: Vec<(std::path::PathBuf, AccountExporter)> = Vec::new();
-    let mut sessions: Vec<(std::path::PathBuf, fuser::BackgroundSession)> =
-        Vec::new();
-    for spec in specs {
-        let path = spec.path.clone();
-        let storage = storages::new(spec.storage.clone())?;
-        match &spec.storage {
-            LegacyStorageConfig::Local { root: _ } => {
-                let (mount_path, session) =
-                    mount_storage(path, storage, logger.clone())?;
-                let name = mount_path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("Anymount")
-                    .to_string();
-                accounts.push((
-                    mount_path.clone(),
-                    AccountExporter {
-                        name: name.clone(),
-                        path: mount_path.display().to_string(),
-                        icon: String::new(),
-                        status: 0,
-                        status_details: String::new(),
-                    },
-                ));
-                sessions.push((mount_path, session));
-            }
-            LegacyStorageConfig::OneDrive { .. } => {
-                let (mount_path, session) =
-                    mount_storage(path, storage, logger.clone())?;
-                let name = mount_path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("OneDrive")
-                    .to_string();
-                accounts.push((
-                    mount_path.clone(),
-                    AccountExporter {
-                        name,
-                        path: mount_path.display().to_string(),
-                        icon: String::new(),
-                        status: 0,
-                        status_details: String::new(),
-                    },
-                ));
-                sessions.push((mount_path, session));
-            }
-        }
-    }
-    rt.block_on(export_on_dbus(&accounts, logger))?;
-    let drivers: Vec<Box<dyn Session>> = sessions
-        .into_iter()
-        .map(|(path, session)| {
-            Box::new(LinuxDriver::new(path, session)) as Box<dyn Session>
-        })
-        .collect();
-    Ok(drivers)
-}
-
-#[cfg(all(target_os = "macos", not(feature = "fuse")))]
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "macos", not(feature = "fuse"))
+))]
 pub fn connect_drivers(
     _specs: &[LegacyDriverConfig],
     _logger: &(impl Logger + 'static),

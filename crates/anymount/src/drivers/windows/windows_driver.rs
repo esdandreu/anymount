@@ -1,41 +1,92 @@
 use super::{Error, Result};
-use crate::Logger;
-use crate::domain::storage::Storage;
+use crate::domain::driver::{
+    Driver, DriverConfig, ListMountsError, MountError,
+};
+use crate::domain::{
+    ConnectMountError, DisconnectMountError, Mount, Storage,
+    UnregisterMountError,
+};
 use crate::drivers::Session;
-use crate::service::control::messages::ServiceMessage;
+use crate::{Logger, NoOpLogger};
 use cloud_filter::root::{
     Connection, HydrationType, PopulationType, SecurityId,
     Session as CloudSession, SyncRootId, SyncRootIdBuilder, SyncRootInfo,
 };
-use std::path::{PathBuf, absolute};
-use std::sync::mpsc::Sender;
+use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf, absolute};
 
-pub const ID_PREFIX: &'static str = "Anymount";
+pub const ID_PREFIX: &str = "Anymount";
 
-pub struct WindowsSession<S, L>
-where
-    S: Storage,
-    L: Logger,
-{
-    path: PathBuf,
-    #[allow(dead_code)]
-    id: SyncRootId,
-    #[allow(dead_code)]
-    connection: Option<Connection<super::Callbacks<S, L>>>,
+/// Configuration for the Windows CloudFilter driver.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
+pub struct WindowsDriverConfig;
+
+#[typetag::serde(name = "windows")]
+impl DriverConfig for WindowsDriverConfig {
+    fn init(&self) -> Box<dyn Driver> {
+        Box::new(WindowsDriver)
+    }
 }
 
-// Implements Driver!
-impl<S, L> WindowsSession<S, L>
+inventory::submit! {
+    crate::domain::driver::DefaultDriverConfig {
+        priority: 0,
+        config: &WindowsDriverConfig,
+    }
+}
+
+/// Creates Windows CloudFilter mounts.
+pub struct WindowsDriver;
+
+impl Driver for WindowsDriver {
+    fn mount(
+        &self,
+        name: String,
+        path: PathBuf,
+        storage: Box<dyn Storage>,
+    ) -> std::result::Result<Box<dyn Mount>, MountError> {
+        WindowsMount::new(name, path.clone(), storage, NoOpLogger)
+            .map(|mount| Box::new(mount) as Box<dyn Mount>)
+            .map_err(|source| MountError::CannotMountAtPath {
+                path,
+                message: source.to_string(),
+            })
+    }
+
+    fn list_mounts(
+        &self,
+    ) -> std::result::Result<
+        Box<dyn Iterator<Item = Box<dyn Mount>>>,
+        ListMountsError,
+    > {
+        Ok(Box::new(std::iter::empty()))
+    }
+}
+
+/// A registered Windows sync root with an optional live connection.
+pub struct WindowsMount<S, L>
 where
     S: Storage,
     L: Logger,
 {
-    pub fn connect(
+    name: String,
+    path: PathBuf,
+    id: SyncRootId,
+    connection: Mutex<Option<Connection<super::Callbacks<S, L>>>>,
+}
+
+impl<S, L> WindowsMount<S, L>
+where
+    S: Storage + 'static,
+    L: Logger + 'static,
+{
+    pub fn new(
+        name: String,
         path: PathBuf,
         storage: S,
         logger: L,
-        service_tx: Option<Sender<ServiceMessage>>,
-    ) -> Result<Box<dyn Session>> {
+    ) -> Result<Self> {
         let security_id = SecurityId::current_user().map_err(|source| {
             Error::CloudFilterOperation {
                 operation: "resolve current user security id",
@@ -43,7 +94,7 @@ where
             }
         })?;
         if !path.exists() {
-            std::fs::create_dir(&path).map_err(|source| Error::Io {
+            std::fs::create_dir_all(&path).map_err(|source| Error::Io {
                 operation: "create mount path",
                 path: path.clone(),
                 source,
@@ -55,12 +106,7 @@ where
             path: path.clone(),
             source,
         })?;
-        let name = path
-            .file_name()
-            .and_then(|os_str| os_str.to_str())
-            .ok_or_else(|| Error::InvalidPath { path: path.clone() })?;
-        let driver_name = ID_PREFIX.to_owned() + "|" + name;
-
+        let driver_name = format!("{ID_PREFIX}|{name}");
         let id = SyncRootIdBuilder::new(driver_name)
             .user_security_id(security_id)
             .build();
@@ -73,7 +119,7 @@ where
         })?;
         if !is_registered {
             let sync_root_info = SyncRootInfo::default()
-                .with_display_name(name)
+                .with_display_name(&name)
                 .with_icon("%SystemRoot%\\system32\\charmap.exe,0")
                 .with_version(env!("CARGO_PKG_VERSION"))
                 .with_hydration_type(HydrationType::Full)
@@ -83,44 +129,81 @@ where
                     operation: "build sync root info",
                     source,
                 })?;
-
             id.register(sync_root_info).map_err(|source| {
                 Error::CloudFilterOperation {
                     operation: "register sync root",
                     source,
                 }
             })?;
-            logger.info(format!("Sync root registered: {}", name));
         }
 
-        let session = CloudSession::new();
-        let connection = session
+        let connection = CloudSession::new()
             .connect(
                 &path,
-                super::Callbacks::new(
-                    path.clone(),
-                    storage,
-                    logger,
-                    service_tx,
-                ),
+                super::Callbacks::new(path.clone(), storage, logger),
             )
             .map_err(|source| Error::CloudFilterOperation {
                 operation: "connect to sync root",
                 source,
             })?;
 
-        Ok(Box::new(Self {
+        Ok(Self {
+            name,
             path,
             id,
-            connection: Some(connection),
-        }))
+            connection: Mutex::new(Some(connection)),
+        })
     }
 }
 
-impl<S, L> Session for WindowsSession<S, L>
+impl<S, L> Mount for WindowsMount<S, L>
 where
-    S: Storage,
-    L: Logger,
+    S: Storage + 'static,
+    L: Logger + 'static,
+{
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn root(&self) -> &Path {
+        &self.path
+    }
+
+    fn is_connected(&self) -> bool {
+        self.connection.lock().is_some()
+    }
+
+    fn connect(&self) -> std::result::Result<(), ConnectMountError> {
+        if self.is_connected() {
+            Ok(())
+        } else {
+            Err(ConnectMountError {
+                path: self.path.clone(),
+                message:
+                    "a disconnected CloudFilter mount cannot be reconnected"
+                        .to_owned(),
+            })
+        }
+    }
+
+    fn disconnect(&self) -> std::result::Result<(), DisconnectMountError> {
+        self.connection.lock().take();
+        Ok(())
+    }
+
+    fn unregister(&self) -> std::result::Result<(), UnregisterMountError> {
+        self.connection.lock().take();
+        self.id.unregister().map_err(|source| UnregisterMountError {
+            path: self.path.clone(),
+            message: source.to_string(),
+        })
+    }
+}
+
+impl<S, L> Session for WindowsMount<S, L>
+where
+    S: Storage + 'static,
+    L: Logger + 'static,
 {
     fn kind(&self) -> &'static str {
         "CloudFilter"
@@ -128,5 +211,25 @@ where
 
     fn path(&self) -> &PathBuf {
         &self.path
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WindowsDriver, WindowsDriverConfig};
+    use crate::domain::{Driver, DriverConfig};
+
+    #[test]
+    fn config_initializes_empty_driver() {
+        let driver = WindowsDriverConfig.init();
+
+        assert_eq!(driver.list_mounts().expect("list mounts").count(), 0);
+    }
+
+    #[test]
+    fn driver_lists_no_mounts_without_native_discovery() {
+        let driver = WindowsDriver;
+
+        assert_eq!(driver.list_mounts().expect("list mounts").count(), 0);
     }
 }
