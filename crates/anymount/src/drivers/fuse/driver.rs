@@ -1,6 +1,5 @@
 // Copyright 2026 Dotphoton AG
 
-use crate::NoOpLogger;
 use crate::domain::driver::{
     Driver, DriverConfig, ListMountsError, MountError,
 };
@@ -58,7 +57,6 @@ impl Driver for FuseDriver {
         let filesystem = StorageFilesystem::new_with_cache(
             storage,
             Arc::new(NoCacheFsCache::new()),
-            NoOpLogger::default(),
         );
         let session =
             fuser::spawn_mount2(filesystem, &path, &fuser::Config::default())

@@ -1,6 +1,5 @@
 // Copyright 2026 Dotphoton AG
 
-use crate::Logger;
 pub mod error;
 use crate::domain::storage::{Storage, WriteAt, WriteAtError};
 pub use error::{Error, Result};
@@ -158,22 +157,17 @@ pub struct NodeInfo {
     pub atime: SystemTime,
 }
 
-pub struct StorageFilesystem<S: Storage, L: Logger + 'static> {
+pub struct StorageFilesystem<S: Storage> {
     storage: Arc<S>,
     cache: Arc<dyn CachePort>,
-    logger: L,
     next_ino: AtomicU64,
     ino_to_info: RwLock<HashMap<u64, NodeInfo>>,
     path_to_ino: RwLock<HashMap<PathBuf, u64>>,
     dir_cache: CachedDirCache,
 }
 
-impl<S: Storage, L: Logger + 'static> StorageFilesystem<S, L> {
-    pub fn new_with_cache(
-        storage: S,
-        cache: Arc<dyn CachePort>,
-        logger: L,
-    ) -> Self {
+impl<S: Storage> StorageFilesystem<S> {
+    pub fn new_with_cache(storage: S, cache: Arc<dyn CachePort>) -> Self {
         let storage = Arc::new(storage);
         let next_ino = AtomicU64::new(2);
         let ino_to_info = RwLock::new(HashMap::new());
@@ -192,7 +186,6 @@ impl<S: Storage, L: Logger + 'static> StorageFilesystem<S, L> {
         Self {
             storage,
             cache,
-            logger,
             next_ino,
             ino_to_info,
             path_to_ino,
@@ -288,9 +281,7 @@ impl<S: Storage, L: Logger + 'static> StorageFilesystem<S, L> {
     }
 }
 
-impl<S: Storage + 'static, L: Logger + 'static> fuser::Filesystem
-    for StorageFilesystem<S, L>
-{
+impl<S: Storage + 'static> fuser::Filesystem for StorageFilesystem<S> {
     fn lookup(
         &self,
         _req: &Request,
@@ -407,12 +398,12 @@ impl<S: Storage + 'static, L: Logger + 'static> fuser::Filesystem
             return;
         }
         if let Ok(buf) = self.cache.read_range(&info.path, offset, end) {
-            self.logger.debug(format!(
-                "served read from local cache path={} offset={} size={}",
-                info.path.display(),
+            tracing::debug!(
+                path = %info.path.display(),
                 offset,
-                end - offset
-            ));
+                size = end - offset,
+                "served read from local cache"
+            );
             reply.data(&buf);
             return;
         }
@@ -452,11 +443,11 @@ impl<S: Storage + 'static, L: Logger + 'static> fuser::Filesystem
             self.cache
                 .write_range(&info.path, offset, &writer.buf, info.size)
         {
-            self.logger.warn(format!(
-                "failed to write data cache path={} error={}",
-                info.path.display(),
-                err
-            ));
+            tracing::warn!(
+                path = %info.path.display(),
+                error = %err,
+                "failed to write data cache"
+            );
         }
         reply.data(&writer.buf);
     }
@@ -483,11 +474,11 @@ impl<S: Storage + 'static, L: Logger + 'static> fuser::Filesystem
         let entries = match self.read_dir_entries(info.path.clone()) {
             Ok(entries) => entries,
             Err(err) => {
-                self.logger.warn(format!(
-                    "readdir failed to list storage path path={} error={}",
-                    info.path.display(),
-                    err
-                ));
+                tracing::warn!(
+                    path = %info.path.display(),
+                    error = %err,
+                    "readdir failed to list storage path"
+                );
                 reply.error(Errno::from_i32(libc::EIO));
                 return;
             }
@@ -789,23 +780,23 @@ mod tests {
     #[test]
     fn child_start_index_maps_special_offsets() {
         assert_eq!(
-            StorageFilesystem::<CountingStorage, crate::NoOpLogger>::child_start_index(0),
+            StorageFilesystem::<CountingStorage>::child_start_index(0),
             0
         );
         assert_eq!(
-            StorageFilesystem::<CountingStorage, crate::NoOpLogger>::child_start_index(
+            StorageFilesystem::<CountingStorage>::child_start_index(
                 DOT_ENTRY_OFFSET
             ),
             0
         );
         assert_eq!(
-            StorageFilesystem::<CountingStorage, crate::NoOpLogger>::child_start_index(
+            StorageFilesystem::<CountingStorage>::child_start_index(
                 DOT_DOT_ENTRY_OFFSET
             ),
             0
         );
         assert_eq!(
-            StorageFilesystem::<CountingStorage, crate::NoOpLogger>::child_start_index(
+            StorageFilesystem::<CountingStorage>::child_start_index(
                 FIRST_CHILD_ENTRY_OFFSET
             ),
             1
@@ -815,15 +806,15 @@ mod tests {
     #[test]
     fn child_entry_offset_is_monotonic_and_starts_after_special_entries() {
         assert_eq!(
-            StorageFilesystem::<CountingStorage, crate::NoOpLogger>::child_entry_offset(0),
+            StorageFilesystem::<CountingStorage>::child_entry_offset(0),
             FIRST_CHILD_ENTRY_OFFSET
         );
         assert_eq!(
-            StorageFilesystem::<CountingStorage, crate::NoOpLogger>::child_entry_offset(1),
+            StorageFilesystem::<CountingStorage>::child_entry_offset(1),
             FIRST_CHILD_ENTRY_OFFSET + 1
         );
         assert_eq!(
-            StorageFilesystem::<CountingStorage, crate::NoOpLogger>::child_entry_offset(7),
+            StorageFilesystem::<CountingStorage>::child_entry_offset(7),
             10
         );
     }
@@ -836,8 +827,7 @@ mod tests {
             read_file_calls: Arc::new(AtomicUsize::new(0)),
         };
         let cache = Arc::new(mock_cache);
-        let logger = crate::NoOpLogger;
-        let fs = StorageFilesystem::new_with_cache(storage, cache, logger);
+        let fs = StorageFilesystem::new_with_cache(storage, cache);
         let root_info = fs.get_info(1);
         assert!(root_info.is_some());
         assert!(root_info.unwrap().is_dir);
@@ -853,8 +843,7 @@ mod tests {
         };
         let (mock_cache, sync_calls, _, _) = MockCachePort::new();
         let cache = Arc::new(mock_cache);
-        let logger = crate::NoOpLogger;
-        let fs = StorageFilesystem::new_with_cache(storage, cache, logger);
+        let fs = StorageFilesystem::new_with_cache(storage, cache);
         let path = PathBuf::new();
 
         let first = fs.read_dir_entries(path.clone()).unwrap();
@@ -876,8 +865,7 @@ mod tests {
         };
         let (mock_cache, sync_calls, _, _) = MockCachePort::new();
         let cache = Arc::new(mock_cache);
-        let logger = crate::NoOpLogger;
-        let fs = StorageFilesystem::new_with_cache(storage, cache, logger);
+        let fs = StorageFilesystem::new_with_cache(storage, cache);
 
         let entries = fs.read_dir_entries(PathBuf::new()).unwrap();
 

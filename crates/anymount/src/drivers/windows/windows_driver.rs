@@ -6,7 +6,6 @@ use crate::domain::{
     ConnectMountError, DisconnectMountError, Mount, Storage,
     UnregisterMountError,
 };
-use crate::{Logger, NoOpLogger};
 use cloud_filter::root::{
     Connection, HydrationType, PopulationType, SecurityId,
     Session as CloudSession, SyncRootId, SyncRootIdBuilder, SyncRootInfo,
@@ -45,7 +44,7 @@ impl Driver for WindowsDriver {
         path: PathBuf,
         storage: Box<dyn Storage>,
     ) -> std::result::Result<Box<dyn Mount>, MountError> {
-        WindowsMount::new(name, path.clone(), storage, NoOpLogger)
+        WindowsMount::new(name, path.clone(), storage)
             .map(|mount| Box::new(mount) as Box<dyn Mount>)
             .map_err(|source| MountError::CannotMountAtPath {
                 path,
@@ -64,28 +63,15 @@ impl Driver for WindowsDriver {
 }
 
 /// A registered Windows sync root with an optional live connection.
-pub struct WindowsMount<S, L>
-where
-    S: Storage,
-    L: Logger,
-{
+pub struct WindowsMount<S: Storage> {
     name: String,
     path: PathBuf,
     id: SyncRootId,
-    connection: Mutex<Option<Connection<super::Callbacks<S, L>>>>,
+    connection: Mutex<Option<Connection<super::Callbacks<S>>>>,
 }
 
-impl<S, L> WindowsMount<S, L>
-where
-    S: Storage + 'static,
-    L: Logger + 'static,
-{
-    pub fn new(
-        name: String,
-        path: PathBuf,
-        storage: S,
-        logger: L,
-    ) -> Result<Self> {
+impl<S: Storage + 'static> WindowsMount<S> {
+    pub fn new(name: String, path: PathBuf, storage: S) -> Result<Self> {
         let security_id = SecurityId::current_user().map_err(|source| {
             Error::CloudFilterOperation {
                 operation: "resolve current user security id",
@@ -99,7 +85,7 @@ where
                 source,
             })?;
         }
-        logger.info(format!("Mount path: {}", path.display()));
+        tracing::info!(path = %path.display(), "mounting Windows sync root");
         let path = absolute(&path).map_err(|source| Error::Io {
             operation: "resolve mount path",
             path: path.clone(),
@@ -137,10 +123,7 @@ where
         }
 
         let connection = CloudSession::new()
-            .connect(
-                &path,
-                super::Callbacks::new(path.clone(), storage, logger),
-            )
+            .connect(&path, super::Callbacks::new(path.clone(), storage))
             .map_err(|source| Error::CloudFilterOperation {
                 operation: "connect to sync root",
                 source,
@@ -155,11 +138,7 @@ where
     }
 }
 
-impl<S, L> Mount for WindowsMount<S, L>
-where
-    S: Storage + 'static,
-    L: Logger + 'static,
-{
+impl<S: Storage + 'static> Mount for WindowsMount<S> {
     fn name(&self) -> &str {
         &self.name
     }

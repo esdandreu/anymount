@@ -1,5 +1,4 @@
 use super::Storage;
-use crate::Logger;
 use crate::domain::storage::{DirEntry, WriteAt, WriteAtError};
 use crate::drivers::windows::placeholders::{
     dehydrate_file, get_placeholder_info,
@@ -17,29 +16,27 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 use windows::Win32::Storage::CloudFilters::CF_PIN_STATE_UNPINNED;
 
-pub struct Callbacks<S: Storage, L: Logger> {
+pub struct Callbacks<S: Storage> {
     path: PathBuf,
     storage: S,
-    logger: L,
     pending_dehydrate: Mutex<HashSet<PathBuf>>,
 }
 
-impl<S: Storage, L: Logger> Callbacks<S, L> {
-    pub fn new(path: PathBuf, storage: S, logger: L) -> Self {
+impl<S: Storage> Callbacks<S> {
+    pub fn new(path: PathBuf, storage: S) -> Self {
         Self {
             path,
             storage,
-            logger,
             pending_dehydrate: Mutex::new(HashSet::new()),
         }
     }
 
     fn emit_telemetry(&self, message: String) {
-        self.logger.info(message);
+        tracing::info!(%message);
     }
 }
 
-impl<S: Storage, L: Logger> SyncFilter for Callbacks<S, L> {
+impl<S: Storage> SyncFilter for Callbacks<S> {
     fn fetch_data(
         &self,
         request: Request,
@@ -182,7 +179,7 @@ impl<S: Storage, L: Logger> SyncFilter for Callbacks<S, L> {
         self.emit_telemetry(format!("closed: path={:?}", path));
         if self.pending_dehydrate.lock().remove(&path) {
             if let Err(e) = dehydrate_file(&path) {
-                self.logger.error(format!("dehydrate_file failed: {}", e));
+                tracing::error!(error = %e, "dehydrate_file failed");
             }
         }
     }
@@ -229,8 +226,10 @@ impl<S: Storage, L: Logger> SyncFilter for Callbacks<S, L> {
             let file_info = match get_placeholder_info(&path) {
                 Ok(info) => info,
                 Err(e) => {
-                    self.logger
-                        .error(format!("get_placeholder_info failed: {}", e));
+                    tracing::error!(
+                        error = %e,
+                        "get_placeholder_info failed"
+                    );
                     continue;
                 }
             };
@@ -239,11 +238,11 @@ impl<S: Storage, L: Logger> SyncFilter for Callbacks<S, L> {
                 && file_info.on_disk_size > 0
             {
                 if let Err(e) = dehydrate_file(&path) {
-                    self.logger.warn(format!(
-                        "dehydrate_file on state_changed failed, \
-                         flagging for pending dehydration: {}",
-                        e
-                    ));
+                    tracing::warn!(
+                        error = %e,
+                        "dehydrate_file on state_changed failed; flagging \
+                         for pending dehydration"
+                    );
                     self.pending_dehydrate.lock().insert(path);
                 }
             }

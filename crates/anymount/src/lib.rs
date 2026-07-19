@@ -4,7 +4,6 @@ pub mod cli;
 pub mod config_dir;
 pub mod domain;
 pub mod drivers;
-pub mod logger;
 pub mod storages;
 #[cfg(test)]
 pub mod test_utils;
@@ -14,4 +13,3 @@ pub use anymount::Anymount;
 pub use cli::Cli;
 pub use config_dir::ConfigDir;
 pub use domain::{Config, ConfigRepository, Storage};
-pub use logger::{Logger, NoOpLogger, TracingLogger};
