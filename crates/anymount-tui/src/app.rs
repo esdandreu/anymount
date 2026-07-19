@@ -1,7 +1,5 @@
 use std::path::PathBuf;
 
-use crate::domain::{Config, ConfigRepository, StorageConfig};
-
 use super::event::{AppEvent, Event, EventHandler};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -14,12 +12,13 @@ use ratatui::{
 
 use super::widgets::{MountItem, MountsList, MountsListState};
 
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct MountConfig {
     pub name: String,
     /// Local mount path.
     pub path: PathBuf,
-    /// Storage backend configuration.
-    pub storage: Box<dyn StorageConfig>,
+    /// Storage backend kind.
+    pub storage_type: String,
     /// Whether the mount is currently connected.
     pub is_connected: bool,
 }
@@ -50,9 +49,9 @@ impl Default for App {
 
 impl App {
     /// Constructs a new instance of [`App`].
-    pub fn new(config_repository: impl ConfigRepository) -> Self {
+    pub fn new(mounts: impl IntoIterator<Item = MountConfig>) -> Self {
         Self {
-            mounts: config_repository.list().map(MountConfig::from).collect(),
+            mounts: mounts.into_iter().collect(),
             ..Self::default()
         }
     }
@@ -156,7 +155,7 @@ impl Widget for &mut App {
             .map(|m| MountItem {
                 name: &m.name,
                 path: m.path.as_path(),
-                storage_type: m.storage.kind(),
+                storage_type: &m.storage_type,
                 is_connected: m.is_connected,
             })
             .collect::<Vec<_>>();
@@ -167,85 +166,44 @@ impl Widget for &mut App {
     }
 }
 
-impl From<Config> for MountConfig {
-    fn from(config: Config) -> Self {
-        Self {
-            name: config.name,
-            path: config.path,
-            storage: config.storage,
-            is_connected: false,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
-    use super::App;
-    use crate::domain::{
-        Config, ConfigRepository, ConnectStorageError, Storage, StorageConfig,
-    };
+    use super::{App, MountConfig};
     use ratatui::{Terminal, backend::TestBackend};
 
-    #[derive(serde::Serialize, serde::Deserialize)]
-    struct TestStorageConfig;
-
-    #[typetag::serde(name = "tui-test")]
-    impl StorageConfig for TestStorageConfig {
-        fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError> {
-            unreachable!("rendering must not connect storage")
-        }
-
-        fn kind(&self) -> &'static str {
-            "local"
-        }
-    }
-
-    struct TestConfigRepository {
-        names: Vec<&'static str>,
-    }
-
-    impl ConfigRepository for TestConfigRepository {
-        type Iter<'a> = std::vec::IntoIter<Config>;
-
-        fn list(&self) -> Self::Iter<'_> {
-            self.names
-                .iter()
-                .map(|name| Config {
-                    name: (*name).to_owned(),
-                    path: PathBuf::from("/tmp/mnt"),
-                    storage: Box::new(TestStorageConfig),
-                    driver: None,
-                })
-                .collect::<Vec<_>>()
-                .into_iter()
+    fn mount(name: &str) -> MountConfig {
+        MountConfig {
+            name: name.to_owned(),
+            path: PathBuf::from("/tmp/mnt"),
+            storage_type: "local".to_owned(),
+            is_connected: false,
         }
     }
 
     #[test]
-    fn loads_mounts_from_config_repository() {
-        let app = App::new(TestConfigRepository {
-            names: vec!["First", "Second"],
-        });
+    fn loads_mount_configs() {
+        let app = App::new([mount("First"), mount("Second")]);
 
         assert_eq!(app.mounts.len(), 2);
         assert_eq!(app.mounts[0].name, "First");
-        assert_eq!(app.mounts[0].storage.kind(), "local");
+        assert_eq!(app.mounts[0].storage_type, "local");
         assert!(!app.mounts[0].is_connected);
     }
 
     #[test]
     fn test_mounts_list() {
-        let mut app = App::new(TestConfigRepository {
-            names: vec![
+        let mut app = App::new(
+            [
                 "Hello first",
                 "Hello second",
                 "Third",
                 "Hello first",
                 "Hello first",
-            ],
-        });
+            ]
+            .map(mount),
+        );
         app.mounts[1].is_connected = true;
         app.mounts[2].is_connected = true;
         let mut terminal = Terminal::new(TestBackend::new(80, 20))

@@ -7,7 +7,6 @@ pub mod drivers;
 pub mod storages;
 #[cfg(test)]
 pub mod test_utils;
-pub mod tui;
 
 pub use anymount::Anymount;
 pub use cli::Cli;

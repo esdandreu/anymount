@@ -1,5 +1,5 @@
 ---
-source: crates/anymount/src/tui/app.rs
+source: crates/anymount-tui/src/app.rs
 expression: terminal.backend()
 ---
 "┌─────────────────────────────────────────────────────────────────────────────┬┐"

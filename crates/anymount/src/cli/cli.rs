@@ -1,8 +1,10 @@
 use std::path::PathBuf;
 
+use anymount_tui::MountConfig;
+
 use crate::ConfigDir;
 use crate::cli::commands::connect::ConnectCommand;
-use crate::tui;
+use crate::domain::ConfigRepository;
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
@@ -32,10 +34,19 @@ impl Cli {
     pub fn run(self) -> color_eyre::Result<()> {
         match self.command {
             Some(Command::Connect(cmd)) => cmd.execute(),
-            None => tui::run(
-                self.config_dir
-                    .map_or_else(ConfigDir::default, ConfigDir::new),
-            ),
+            None => {
+                let config_repository = self
+                    .config_dir
+                    .map_or_else(ConfigDir::default, ConfigDir::new);
+                let mounts =
+                    config_repository.list().map(|config| MountConfig {
+                        name: config.name,
+                        path: config.path,
+                        storage_type: config.storage.kind().to_owned(),
+                        is_connected: false,
+                    });
+                anymount_tui::run(mounts)
+            }
         }
     }
 }

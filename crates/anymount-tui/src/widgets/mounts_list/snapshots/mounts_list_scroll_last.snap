@@ -1,5 +1,5 @@
 ---
-source: crates/anymount/src/tui/widgets/mounts_list/mounts_list.rs
+source: crates/anymount-tui/src/widgets/mounts_list/mounts_list.rs
 expression: terminal.backend()
 ---
 "┌────────────────────────────────────────────────────────────────────────────┐│▲"

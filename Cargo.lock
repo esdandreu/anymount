@@ -101,12 +101,12 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 name = "anymount"
 version = "0.1.0"
 dependencies = [
+ "anymount-tui",
  "bytes",
  "chrono",
  "clap",
  "cloud-filter",
  "color-eyre",
- "crossterm 0.28.1",
  "ctrlc",
  "dirs",
  "fuser",
@@ -123,7 +123,6 @@ dependencies = [
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
  "parking_lot",
- "ratatui",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -142,6 +141,16 @@ dependencies = [
  "url",
  "urlencoding",
  "windows",
+]
+
+[[package]]
+name = "anymount-tui"
+version = "0.1.0"
+dependencies = [
+ "color-eyre",
+ "crossterm 0.28.1",
+ "insta",
+ "ratatui",
 ]
 
 [[package]]
