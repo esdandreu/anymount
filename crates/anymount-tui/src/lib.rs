@@ -1,7 +1,11 @@
-pub mod app;
+//! Provides the anymount terminal user interface.
+
+mod app;
 mod event;
-mod run;
+mod service;
+#[cfg(test)]
+mod test_utils;
+mod tui;
 mod widgets;
 
-pub use app::MountConfig;
-pub use run::run;
+pub use tui::Tui;

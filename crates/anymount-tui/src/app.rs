@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use super::event::{AppEvent, Event, EventHandler};
+use super::service::MountService;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
@@ -24,7 +25,7 @@ pub struct MountConfig {
 }
 
 /// Application.
-pub struct App {
+pub struct App<S> {
     /// Is the application running?
     pub running: bool,
     /// Event handler.
@@ -33,27 +34,23 @@ pub struct App {
     pub mounts: Vec<MountConfig>,
     /// Stateful navigation for the mounts list.
     pub mounts_list: MountsListState,
-    // TODO mount_service
+    service: S,
 }
 
-impl Default for App {
-    fn default() -> Self {
-        Self {
+impl<S> App<S>
+where
+    S: MountService,
+{
+    /// Constructs a new instance of [`App`].
+    pub fn new(service: S) -> color_eyre::Result<Self> {
+        let mounts = service.list()?;
+        Ok(Self {
             running: true,
             events: EventHandler::new(),
-            mounts: Vec::new(),
+            mounts,
             mounts_list: MountsListState::default(),
-        }
-    }
-}
-
-impl App {
-    /// Constructs a new instance of [`App`].
-    pub fn new(mounts: impl IntoIterator<Item = MountConfig>) -> Self {
-        Self {
-            mounts: mounts.into_iter().collect(),
-            ..Self::default()
-        }
+            service,
+        })
     }
 
     /// Run the application's main loop.
@@ -85,8 +82,8 @@ impl App {
                 AppEvent::SelectPrevious => self.select_previous(),
                 AppEvent::SelectNext => self.select_next(),
                 AppEvent::Quit => self.quit(),
-                AppEvent::Connect => {}
-                AppEvent::Disconnect => {}
+                AppEvent::Connect => self.connect_selected()?,
+                AppEvent::Disconnect => self.disconnect_selected()?,
                 AppEvent::Edit => {}
             },
         }
@@ -130,6 +127,34 @@ impl App {
     /// needs to be updated at a fixed frame rate. E.g. polling a server, updating an animation.
     fn tick(&self) {}
 
+    fn connect_selected(&mut self) -> color_eyre::Result<()> {
+        let Some(name) = self.selected_mount_name() else {
+            return Ok(());
+        };
+        self.service.connect(&name)?;
+        self.refresh()
+    }
+
+    fn disconnect_selected(&mut self) -> color_eyre::Result<()> {
+        let Some(name) = self.selected_mount_name() else {
+            return Ok(());
+        };
+        self.service.disconnect(&name)?;
+        self.refresh()
+    }
+
+    fn selected_mount_name(&self) -> Option<String> {
+        self.mounts_list
+            .selected()
+            .and_then(|index| self.mounts.get(index))
+            .map(|mount| mount.name.clone())
+    }
+
+    fn refresh(&mut self) -> color_eyre::Result<()> {
+        self.mounts = self.service.list()?;
+        Ok(())
+    }
+
     /// Set running to false to quit the application.
     fn quit(&mut self) {
         self.running = false;
@@ -146,7 +171,7 @@ impl App {
     }
 }
 
-impl Widget for &mut App {
+impl<S> Widget for &mut App<S> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         // TODO if editing render a different component.
         let mounts = self
@@ -171,6 +196,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{App, MountConfig};
+    use crate::test_utils::MockMountService;
     use ratatui::{Terminal, backend::TestBackend};
 
     fn mount(name: &str) -> MountConfig {
@@ -184,7 +210,9 @@ mod tests {
 
     #[test]
     fn loads_mount_configs() {
-        let app = App::new([mount("First"), mount("Second")]);
+        let app =
+            App::new(MockMountService::new([mount("First"), mount("Second")]))
+                .expect("application should be created");
 
         assert_eq!(app.mounts.len(), 2);
         assert_eq!(app.mounts[0].name, "First");
@@ -193,8 +221,36 @@ mod tests {
     }
 
     #[test]
+    fn connects_selected_mount() {
+        let mut app =
+            App::new(MockMountService::new([mount("First"), mount("Second")]))
+                .expect("application should be created");
+        app.select_next();
+
+        app.connect_selected().expect("connect should succeed");
+
+        assert_eq!(app.service.connected, ["First"]);
+        assert!(app.mounts[0].is_connected);
+    }
+
+    #[test]
+    fn disconnects_selected_mount() {
+        let mut connected_mount = mount("First");
+        connected_mount.is_connected = true;
+        let mut app = App::new(MockMountService::new([connected_mount]))
+            .expect("application should be created");
+        app.select_next();
+
+        app.disconnect_selected()
+            .expect("disconnect should succeed");
+
+        assert_eq!(app.service.disconnected, ["First"]);
+        assert!(!app.mounts[0].is_connected);
+    }
+
+    #[test]
     fn test_mounts_list() {
-        let mut app = App::new(
+        let mut service = MockMountService::new(
             [
                 "Hello first",
                 "Hello second",
@@ -204,8 +260,9 @@ mod tests {
             ]
             .map(mount),
         );
-        app.mounts[1].is_connected = true;
-        app.mounts[2].is_connected = true;
+        service.mounts[1].is_connected = true;
+        service.mounts[2].is_connected = true;
+        let mut app = App::new(service).expect("application should be created");
         let mut terminal = Terminal::new(TestBackend::new(80, 20))
             .expect("test terminal should be created");
         terminal

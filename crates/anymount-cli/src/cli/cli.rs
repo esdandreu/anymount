@@ -1,9 +1,6 @@
 use std::path::PathBuf;
 
-use anymount_tui::MountConfig;
-
 use crate::cli::commands::connect::ConnectCommand;
-use anymount::{ConfigDir, ConfigRepository};
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
@@ -33,19 +30,7 @@ impl Cli {
     pub fn run(self) -> color_eyre::Result<()> {
         match self.command {
             Some(Command::Connect(cmd)) => cmd.execute(),
-            None => {
-                let config_repository = self
-                    .config_dir
-                    .map_or_else(ConfigDir::default, ConfigDir::new);
-                let mounts =
-                    config_repository.list().map(|config| MountConfig {
-                        name: config.name,
-                        path: config.path,
-                        storage_type: config.storage.kind().to_owned(),
-                        is_connected: false,
-                    });
-                anymount_tui::run(mounts)
-            }
+            None => anymount_tui::Tui::new(self.config_dir).run(),
         }
     }
 }
@@ -54,6 +39,18 @@ impl Cli {
 mod tests {
     use super::super::commands::connect::ConnectSubcommand;
     use super::*;
+
+    #[test]
+    fn parses_config_directory() {
+        let cli = Cli::try_parse_from([
+            "anymount",
+            "--config-dir",
+            "/tmp/anymount-config",
+        ])
+        .expect("parse should succeed");
+
+        assert_eq!(cli.config_dir, Some(PathBuf::from("/tmp/anymount-config")));
+    }
 
     #[test]
     fn parse_connect_sync_name_command() {

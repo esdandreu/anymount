@@ -151,6 +151,7 @@ dependencies = [
 name = "anymount-tui"
 version = "0.1.0"
 dependencies = [
+ "anymount",
  "color-eyre",
  "crossterm 0.28.1",
  "insta",

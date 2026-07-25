@@ -6,6 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+anymount = { path = "../anymount" }
 color-eyre = "0.6.5"
 crossterm = "0.28"
 ratatui = "0.30"
