@@ -1,6 +1,7 @@
 use super::{Error, Result};
 use crate::domain::driver::{
-    Driver, DriverConfig, ListMountsError, MountError,
+    Driver, DriverConfig, ListMountsError, MountError, MountStatus,
+    MountStatusError,
 };
 use crate::domain::{
     ConnectMountError, DisconnectMountError, Mount, Storage,
@@ -52,6 +53,38 @@ impl Driver for WindowsDriver {
             })
     }
 
+    fn is_mounted(
+        &self,
+        name: &str,
+        expected_root: &Path,
+    ) -> std::result::Result<MountStatus, MountStatusError> {
+        let id = sync_root_id(name).map_err(|source| MountStatusError {
+            name: name.to_owned(),
+            message: source.to_string(),
+        })?;
+        if !id.is_registered().map_err(|source| MountStatusError {
+            name: name.to_owned(),
+            message: source.to_string(),
+        })? {
+            return Ok(MountStatus::NotMounted);
+        }
+
+        let registered_root = id
+            .info()
+            .map_err(|source| MountStatusError {
+                name: name.to_owned(),
+                message: source.to_string(),
+            })?
+            .path();
+        let expected_root =
+            absolute(expected_root).map_err(|source| MountStatusError {
+                name: name.to_owned(),
+                message: source.to_string(),
+            })?;
+
+        Ok(status_for_root(&registered_root, &expected_root))
+    }
+
     fn list_mounts(
         &self,
     ) -> std::result::Result<
@@ -59,6 +92,29 @@ impl Driver for WindowsDriver {
         ListMountsError,
     > {
         Ok(Box::new(std::iter::empty()))
+    }
+}
+
+fn sync_root_id(name: &str) -> Result<SyncRootId> {
+    let security_id = SecurityId::current_user().map_err(|source| {
+        Error::CloudFilterOperation {
+            operation: "resolve current user security id",
+            source,
+        }
+    })?;
+    Ok(SyncRootIdBuilder::new(format!("{ID_PREFIX}|{name}"))
+        .user_security_id(security_id)
+        .build())
+}
+
+fn status_for_root(
+    registered_root: &Path,
+    expected_root: &Path,
+) -> MountStatus {
+    if registered_root == expected_root {
+        MountStatus::MountedAtExpectedRoot
+    } else {
+        MountStatus::MountedAtDifferentRoot
     }
 }
 
@@ -72,12 +128,6 @@ pub struct WindowsMount<S: Storage> {
 
 impl<S: Storage + 'static> WindowsMount<S> {
     pub fn new(name: String, path: PathBuf, storage: S) -> Result<Self> {
-        let security_id = SecurityId::current_user().map_err(|source| {
-            Error::CloudFilterOperation {
-                operation: "resolve current user security id",
-                source,
-            }
-        })?;
         if !path.exists() {
             std::fs::create_dir_all(&path).map_err(|source| Error::Io {
                 operation: "create mount path",
@@ -91,10 +141,7 @@ impl<S: Storage + 'static> WindowsMount<S> {
             path: path.clone(),
             source,
         })?;
-        let driver_name = format!("{ID_PREFIX}|{name}");
-        let id = SyncRootIdBuilder::new(driver_name)
-            .user_security_id(security_id)
-            .build();
+        let id = sync_root_id(&name)?;
 
         let is_registered = id.is_registered().map_err(|source| {
             Error::CloudFilterOperation {
@@ -180,18 +227,42 @@ impl<S: Storage + 'static> Mount for WindowsMount<S> {
 
 #[cfg(test)]
 mod tests {
-    use super::{WindowsDriver, WindowsDriverConfig};
-    use crate::domain::{Driver, DriverConfig};
+    use super::{WindowsDriver, WindowsDriverConfig, status_for_root};
+    use crate::domain::{Driver, DriverConfig, MountStatus};
+    use std::path::Path;
 
     #[test]
     fn config_initializes_empty_driver() {
         let driver = WindowsDriverConfig.init();
 
-        assert_eq!(driver.list_mounts().expect("list mounts").count(), 0);
+        assert_eq!(
+            driver.kind(),
+            std::any::type_name::<super::WindowsDriver>()
+        );
     }
 
     #[test]
-    fn driver_lists_no_mounts_without_native_discovery() {
+    fn reports_mount_at_expected_root() {
+        let status = status_for_root(
+            Path::new(r"C:\mounts\documents"),
+            Path::new(r"C:\mounts\documents"),
+        );
+
+        assert_eq!(status, MountStatus::MountedAtExpectedRoot);
+    }
+
+    #[test]
+    fn reports_mount_at_different_root() {
+        let status = status_for_root(
+            Path::new(r"C:\mounts\old"),
+            Path::new(r"C:\mounts\documents"),
+        );
+
+        assert_eq!(status, MountStatus::MountedAtDifferentRoot);
+    }
+
+    #[test]
+    fn driver_lists_no_mounts_without_native_reconstruction() {
         let driver = WindowsDriver;
 
         assert_eq!(driver.list_mounts().expect("list mounts").count(), 0);

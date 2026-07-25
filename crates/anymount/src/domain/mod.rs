@@ -4,7 +4,7 @@ pub mod mount;
 pub mod storage;
 
 pub use config::{Config, ConfigRepository};
-pub use driver::{Driver, DriverConfig};
+pub use driver::{Driver, DriverConfig, MountStatus, MountStatusError};
 pub use mount::{
     ConnectMountError, DisconnectMountError, Mount, UnregisterMountError,
 };

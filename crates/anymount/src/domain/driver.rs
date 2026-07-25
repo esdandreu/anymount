@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::{Mount, Storage};
 
@@ -25,7 +25,25 @@ pub trait Driver: Send + Sync {
         std::any::type_name::<Self>()
     }
 
+    /// Determines whether a mount is registered at `expected_root`.
+    ///
+    /// A mount is identified by its driver-specific stable representation of
+    /// `name`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the platform mount registry cannot be inspected.
+    fn is_mounted(
+        &self,
+        name: &str,
+        expected_root: &Path,
+    ) -> Result<MountStatus, MountStatusError>;
+
     /// Lists registered mounts.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the platform mount registry cannot be inspected.
     fn list_mounts(
         &self,
     ) -> Result<Box<dyn Iterator<Item = Box<dyn Mount>>>, ListMountsError>;
@@ -37,6 +55,30 @@ pub enum MountError {
     /// in some way.
     #[error("failed to mount at {path}: {message}")]
     CannotMountAtPath { path: PathBuf, message: String },
+}
+
+/// Describes a mount's registration status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MountStatus {
+    /// No mount with the requested identity is registered.
+    NotMounted,
+
+    /// The mount is registered at the expected root.
+    MountedAtExpectedRoot,
+
+    /// The mount is registered at another root.
+    // TODO should also include other config discrepancies
+    MountedAtDifferentRoot,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("failed to inspect mount {name}: {message}")]
+pub struct MountStatusError {
+    /// The stable mount name that could not be inspected.
+    pub name: String,
+
+    /// The platform error description.
+    pub message: String,
 }
 
 #[derive(Debug, thiserror::Error)]
