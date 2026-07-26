@@ -1,7 +1,10 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use crate::domain::driver::DriverConfig;
-use crate::domain::{Config, ConfigRepository, StorageConfig};
+use crate::domain::{Config, ConfigRepository};
+
+mod read_config;
+
+use read_config::{ReadConfigError, read_config};
 
 /// A configuration repository that reads configuration from files within a
 /// folder. The name of the file determines the name of the configuration.
@@ -11,6 +14,7 @@ pub struct ConfigDir {
 }
 
 impl ConfigDir {
+    /// Creates a repository for an explicit configuration directory.
     pub fn new(path: PathBuf) -> Self {
         Self { path }
     }
@@ -39,7 +43,14 @@ impl ConfigRepository for ConfigDir {
     fn list(&self) -> Self::Iter<'_> {
         match std::fs::read_dir(&self.path) {
             Ok(entries) => ConfigFileIter::Entries(entries),
-            Err(_) => ConfigFileIter::Empty,
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    path = %self.path.display(),
+                    "failed to read configuration directory",
+                );
+                ConfigFileIter::Empty
+            }
         }
     }
 }
@@ -74,83 +85,6 @@ impl Iterator for ConfigFileIter {
     }
 }
 
-fn read_config(path: &Path) -> Result<Config, ReadConfigError> {
-    let name = path
-        .file_stem()
-        .and_then(|file_stem| file_stem.to_str())
-        .ok_or(ReadConfigError::NotAConfigFile)?
-        .to_owned();
-    let content = read_config_file(path)?;
-    Ok(Config {
-        name,
-        path: content.path,
-        storage: content.storage,
-        driver: content.driver,
-    })
-}
-
-fn read_config_file(path: &Path) -> Result<ConfigFileContent, ReadConfigError> {
-    if !path.is_file() {
-        return Err(ReadConfigError::NotAConfigFile);
-    }
-    let format =
-        ConfigFormat::from_path(path).ok_or(ReadConfigError::NotAConfigFile)?;
-    let contents = std::fs::read_to_string(path)
-        .map_err(|source| ReadConfigError::CannotReadFile { source })?;
-    let content = format
-        .deserialize(&contents)
-        .map_err(|message| ReadConfigError::CannotDeserialize { message })?;
-    Ok(content)
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct ConfigFileContent {
-    path: PathBuf,
-    storage: Box<dyn StorageConfig>,
-    driver: Option<Box<dyn DriverConfig>>,
-}
-
-#[derive(Debug, thiserror::Error)]
-enum ReadConfigError {
-    #[error("not a configuration file")]
-    NotAConfigFile,
-
-    #[error("failed to read file: {source}")]
-    CannotReadFile { source: std::io::Error },
-
-    #[error("failed to deserialize configuration: {message}")]
-    CannotDeserialize { message: String },
-}
-
-enum ConfigFormat {
-    Toml,
-    Json,
-    Yaml,
-}
-
-impl ConfigFormat {
-    fn from_path(path: &Path) -> Option<Self> {
-        match path.extension()?.to_str()? {
-            "toml" => Some(Self::Toml),
-            "json" => Some(Self::Json),
-            "yaml" | "yml" => Some(Self::Yaml),
-            _ => None,
-        }
-    }
-
-    fn deserialize(&self, contents: &str) -> Result<ConfigFileContent, String> {
-        match self {
-            Self::Toml => {
-                toml::from_str(contents).map_err(|error| error.to_string())
-            }
-            Self::Json => serde_json::from_str(contents)
-                .map_err(|error| error.to_string()),
-            Self::Yaml => serde_yaml::from_str(contents)
-                .map_err(|error| error.to_string()),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,7 +95,7 @@ mod tests {
     fn reads_toml_config_file() {
         let dir = TempDir::new().expect("create temp dir");
         std::fs::write(
-            dir.path().join("demo.toml"),
+            &dir.path().join("demo.toml"),
             r#"
 path = "/mnt/test"
 [storage]
@@ -186,7 +120,7 @@ error_message = "toml test"
     fn reads_json_config_file() {
         let dir = TempDir::new().expect("create temp dir");
         std::fs::write(
-            dir.path().join("demo.json"),
+            &dir.path().join("demo.json"),
             r#"{
         "path": "/mnt/test",
         "storage": {
@@ -213,7 +147,7 @@ error_message = "toml test"
     fn reads_yaml_config_file() {
         let dir = TempDir::new().expect("create temp dir");
         std::fs::write(
-            dir.path().join("demo.yaml"),
+            &dir.path().join("demo.yaml"),
             r#"
 path: /mnt/test
 storage:
@@ -234,42 +168,6 @@ storage:
             }
         }
     }
-    #[test]
-    fn read_config_not_a_config_file() {
-        let dir = TempDir::new().expect("create temp dir");
-        let path = dir.path().join("demo.txt");
-        std::fs::write(&path, "not a config").expect("write unknown config");
-
-        assert!(matches!(
-            read_config_file(&path),
-            Err(ReadConfigError::NotAConfigFile)
-        ));
-    }
-
-    #[test]
-    fn read_config_cannot_deserialize() {
-        let dir = TempDir::new().expect("create temp dir");
-        let path = dir.path().join("demo.toml");
-        std::fs::write(
-            dir.path().join("demo.toml"),
-            r#"
-path = "/mnt/test"
-[storage]
-type = "unknown"
-key = "value"
-"#,
-        )
-        .expect("write toml config");
-        match read_config_file(&path) {
-            Err(ReadConfigError::CannotDeserialize { message }) => {
-                assert!(message.starts_with("TOML parse error"));
-                assert!(message.contains("unknown variant"));
-            }
-            Err(other) => panic!("expected deserialize error, got {other:?}"),
-            Ok(_) => panic!("expected failure"),
-        }
-    }
-
     #[test]
     #[traced_test]
     fn warns_config_errors() {

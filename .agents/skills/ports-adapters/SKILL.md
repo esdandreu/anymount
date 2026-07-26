@@ -18,6 +18,8 @@ pattern at all levels, from services to classes.
   interface-only types.
 - **Dependency injection**: Use dependency injection to isolate logical
   concerns so they can be unit tested.
+- **Visibility**: Do not use `pub(super)` or `pub(crate)`. Keep adapter
+  internals private or expose an intentional public API.
 
 This keeps boundaries clear and allows swapping adapters (e.g. real
 storage vs mocks) without changing core logic.
