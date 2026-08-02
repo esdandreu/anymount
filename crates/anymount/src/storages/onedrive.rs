@@ -1,18 +1,26 @@
-use crate::auth::onedrive::OneDriveTokenSource;
-use crate::auth::token_response::jwt_expires_at;
+//! Implements OneDrive storage and authorization.
+
+mod authorization;
+mod token;
+
+use authorization::OneDriveAuthorization;
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
+use token::{OneDriveTokenSource, jwt_expires_at};
 
 use crate::domain::storage::{
     ConnectStorageError, DirEntry, ReadDirError, ReadFileAtError, Storage,
-    WriteAt,
+    StorageConfig, WriteAt,
 };
+use crate::domain::{AuthStorageError, StartedAuthorization};
 
 /// Default buffer (seconds) before token expiry to trigger refresh when not set in config.
 const DEFAULT_TOKEN_EXPIRY_BUFFER_SECS: u64 = 60;
+const ANYMOUNT_AZURE_APP_CLIENT_ID: &str =
+    "5970173e-1b75-4317-987d-6849236cc3df";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -22,7 +30,7 @@ pub enum Error {
     #[error("token access failed")]
     Token {
         #[source]
-        source: crate::auth::onedrive::Error,
+        source: token::Error,
     },
 
     #[error("request failed for {url}")]
@@ -71,13 +79,13 @@ enum ConnectError {
     #[error("token access failed")]
     Token {
         #[source]
-        source: crate::auth::onedrive::Error,
+        source: token::Error,
     },
 }
 
 impl From<ConnectError> for ConnectStorageError {
     fn from(error: ConnectError) -> Self {
-        Self {
+        Self::Failed {
             kind: "onedrive",
             message: error.to_string(),
         }
@@ -203,7 +211,7 @@ impl BearerToken for OneDriveTokenSource {
 /// `access_token` is set it must not be expired. Optional `client_id` defaults
 /// to the built-in Azure app when refreshing. Optional
 /// `token_expiry_buffer_secs` defaults to 60.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct OneDriveConfig {
     pub root: PathBuf,
     pub endpoint: String,
@@ -218,18 +226,17 @@ impl OneDriveConfig {
     ///
     /// # Errors
     ///
-    /// Returns `InvalidConfig` if neither token is set or access_token is
-    /// expired without a refresh_token.
+    /// Returns `NotAuthenticated` when credentials are absent. Returns a
+    /// connection failure when the configured credentials are unusable.
     pub fn connect(
         self,
     ) -> std::result::Result<OneDriveStorage, ConnectStorageError> {
         let has_access = self.access_token.is_some();
         let has_refresh = self.refresh_token.is_some();
         if !has_access && !has_refresh {
-            return Err(ConnectError::InvalidConfig {
-                message: "OneDrive requires access_token or refresh_token",
-            }
-            .into());
+            return Err(ConnectStorageError::NotAuthenticated {
+                kind: "onedrive",
+            });
         }
         let buffer_secs = self
             .token_expiry_buffer_secs
@@ -269,6 +276,25 @@ impl OneDriveConfig {
             endpoint,
             token: token_source,
             fetch: UreqHttpGet::new(),
+        })
+    }
+}
+
+#[typetag::serde(name = "onedrive")]
+impl StorageConfig for OneDriveConfig {
+    fn connect(
+        &self,
+    ) -> std::result::Result<Box<dyn Storage>, ConnectStorageError> {
+        OneDriveConfig::connect(self.clone())
+            .map(|storage| Box::new(storage) as Box<dyn Storage>)
+    }
+
+    fn start_authorization(
+        self: Box<Self>,
+    ) -> std::result::Result<Box<dyn StartedAuthorization>, AuthStorageError>
+    {
+        OneDriveAuthorization::start(*self).map(|authorization| {
+            Box::new(authorization) as Box<dyn StartedAuthorization>
         })
     }
 }
@@ -481,7 +507,7 @@ mod tests {
     }
 
     #[test]
-    fn config_fails_with_no_token() {
+    fn config_without_token_is_not_authenticated() {
         let config = OneDriveConfig {
             root: PathBuf::from("/"),
             endpoint: "https://graph.microsoft.com/v1.0".into(),
@@ -490,29 +516,30 @@ mod tests {
             client_id: None,
             token_expiry_buffer_secs: None,
         };
-        let r = config.connect();
-        let Err(e) = r else {
-            panic!("expected config to fail")
+        let Err(error) = config.connect() else {
+            panic!("config should fail")
         };
-        assert!(e.to_string().contains("access_token or refresh_token"));
+        assert!(matches!(
+            error,
+            ConnectStorageError::NotAuthenticated { kind: "onedrive" }
+        ));
     }
 
     #[test]
-    fn config_fails_with_no_token_returns_invalid_config_error() {
-        let config = OneDriveConfig {
-            root: PathBuf::from("/"),
-            endpoint: "https://graph.microsoft.com/v1.0".into(),
-            access_token: None,
-            refresh_token: None,
-            client_id: None,
-            token_expiry_buffer_secs: None,
-        };
+    fn storage_config_deserializes_and_reports_missing_authorization() {
+        let config: Box<dyn StorageConfig> = toml::from_str(
+            r#"
+type = "onedrive"
+root = "/"
+endpoint = "https://graph.microsoft.com/v1.0"
+"#,
+        )
+        .expect("deserialize OneDrive config");
 
-        let result = config.connect();
-        let Err(err) = result else {
-            panic!("config should fail")
-        };
-        assert_eq!(err.kind, "onedrive");
+        assert!(matches!(
+            config.connect(),
+            Err(ConnectStorageError::NotAuthenticated { kind: "onedrive" })
+        ));
     }
 
     #[test]

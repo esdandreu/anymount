@@ -3,12 +3,23 @@
 [![codecov](https://codecov.io/gh/esdandreu/anymount/graph/badge.svg)](https://codecov.io/gh/esdandreu/anymount)
 
 Mount cloud storage as local filesystems using platform-native APIs. Today,
-storage providers such offer both the storage service and the client software
-used to access it. Storage providers have no incentive to build client software
-that compresses on device in order to reduce transfer and storage costs. They
-are not motivated either to include first-class end-to-end encryption features.
-The software layer responsible for interacting with cloud storage should not be
+storage providers offer both the storage service and the client software used to
+access it. Storage providers have no incentive to build client software that
+compresses on device in order to reduce transfer and storage costs. They are not
+motivated either to include first-class end-to-end encryption features. The
+software layer responsible for interacting with cloud storage should not be
 owned by the storage provider, it should be owned by us.
+
+
+> Working with agents is a lot about making sure the right context and tools are
+  available to do the task. If both are covered, agents can get stuff done
+  without you interfering. 
+  [Ben's Bites - Jul 2,
+  2026](https://www.bensbites.com/p/fable-is-back)
+
+Harnesses are optimized for local storage handling. Re-using that interface to
+access any storage allows Agents to access your data more effectively and
+efficiently.
 
 ## Quick Start
 

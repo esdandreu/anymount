@@ -1,5 +1,7 @@
 use std::{ops::Range, path::PathBuf, time::SystemTime};
 
+use super::auth::{AuthStorageError, StartedAuthorization};
+
 #[typetag::serde(tag = "type")]
 pub trait StorageConfig {
     fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError>;
@@ -7,13 +9,26 @@ pub trait StorageConfig {
     fn kind(&self) -> &'static str {
         std::any::type_name::<Self>()
     }
+
+    /// Starts authorization for this storage configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when authorization cannot be started.
+    fn start_authorization(
+        self: Box<Self>,
+    ) -> Result<Box<dyn StartedAuthorization>, AuthStorageError> {
+        Err(AuthStorageError::NotImplemented { kind: self.kind() })
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("failed to connect {kind} storage: {message}")]
-pub struct ConnectStorageError {
-    pub kind: &'static str,
-    pub message: String,
+pub enum ConnectStorageError {
+    #[error("{kind} storage is not authenticated")]
+    NotAuthenticated { kind: &'static str },
+
+    #[error("failed to connect {kind} storage: {message}")]
+    Failed { kind: &'static str, message: String },
 }
 
 pub trait Storage: Send + Sync {
@@ -178,6 +193,21 @@ mod test {
         fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError> {
             Ok(Box::new(TestStorageConnection {}))
         }
+    }
+
+    #[test]
+    fn authorization_is_not_implemented_by_default() {
+        let config = Box::new(TestStorageConfig {
+            endpoint: None,
+            bucket: "documents".to_owned(),
+            username: "user".to_owned(),
+            password: "secret".to_owned(),
+        });
+
+        assert!(matches!(
+            config.start_authorization(),
+            Err(AuthStorageError::NotImplemented { .. })
+        ));
     }
 
     #[test]

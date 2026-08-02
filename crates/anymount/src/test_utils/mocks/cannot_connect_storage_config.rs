@@ -8,7 +8,7 @@ struct CannotConnectStorageConfig {
 #[typetag::serde(name = "cannot-connect")]
 impl StorageConfig for CannotConnectStorageConfig {
     fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError> {
-        Err(ConnectStorageError {
+        Err(ConnectStorageError::Failed {
             kind: self.kind(),
             message: self.error_message.clone(),
         })

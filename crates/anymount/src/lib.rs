@@ -1,4 +1,3 @@
-pub mod auth;
 pub mod config_dir;
 pub mod domain;
 pub mod drivers;

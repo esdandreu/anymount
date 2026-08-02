@@ -88,6 +88,7 @@ impl Iterator for ConfigFileIter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::ConnectStorageError;
     use tempfile::TempDir;
     use tracing_test::traced_test;
 
@@ -110,9 +111,10 @@ error_message = "toml test"
         assert_eq!(config.name, "demo");
         match config.storage.connect() {
             Ok(_) => panic!("should not connect"),
-            Err(error) => {
-                assert_eq!(error.message, "toml test");
+            Err(ConnectStorageError::Failed { message, .. }) => {
+                assert_eq!(message, "toml test");
             }
+            Err(error) => panic!("unexpected connection error: {error}"),
         }
     }
 
@@ -137,9 +139,10 @@ error_message = "toml test"
         assert_eq!(config.name, "demo");
         match config.storage.connect() {
             Ok(_) => panic!("should not connect"),
-            Err(error) => {
-                assert_eq!(error.message, "json test");
+            Err(ConnectStorageError::Failed { message, .. }) => {
+                assert_eq!(message, "json test");
             }
+            Err(error) => panic!("unexpected connection error: {error}"),
         }
     }
 
@@ -163,9 +166,10 @@ storage:
         assert_eq!(config.name, "demo");
         match config.storage.connect() {
             Ok(_) => panic!("should not connect"),
-            Err(error) => {
-                assert_eq!(error.message, "yaml test");
+            Err(ConnectStorageError::Failed { message, .. }) => {
+                assert_eq!(message, "yaml test");
             }
+            Err(error) => panic!("unexpected connection error: {error}"),
         }
     }
     #[test]
