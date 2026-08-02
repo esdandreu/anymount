@@ -18,7 +18,7 @@ owned by the storage provider, it should be owned by us.
   2026](https://www.bensbites.com/p/fable-is-back)
 
 Harnesses are optimized for local storage handling. Re-using that interface to
-access any storage allows Agents to access your data more effectively and
+access any storage allows agents to access your data more effectively and more
 efficiently.
 
 ## Quick Start
