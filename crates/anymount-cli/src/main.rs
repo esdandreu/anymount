@@ -2,6 +2,7 @@ use clap::Parser;
 use std::process::{ExitCode, Termination};
 
 mod cli;
+mod commands;
 
 use cli::Cli;
 

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::cli::commands::connect::ConnectCommand;
+use crate::commands::connect::ConnectCommand;
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
@@ -37,8 +37,8 @@ impl Cli {
 
 #[cfg(test)]
 mod tests {
-    use super::super::commands::connect::ConnectSubcommand;
     use super::*;
+    use crate::commands::connect::ConnectSubcommand;
 
     #[test]
     fn parses_config_directory() {
