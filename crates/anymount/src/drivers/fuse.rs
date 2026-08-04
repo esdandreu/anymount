@@ -1,7 +1,8 @@
 // Copyright 2026 Dotphoton AG
 
 pub mod error;
-use crate::domain::storage::{Storage, WriteAt, WriteAtError};
+use crate::domain::storage::{Storage, StoragePath, WriteAt, WriteAtError};
+use crate::{read_dir, read_file_at};
 pub use error::{Error, Result};
 use fuser::{
     Errno, FileAttr, FileHandle, FileType, Generation, INodeNo, OpenFlags,
@@ -265,16 +266,15 @@ impl<S: Storage> StorageFilesystem<S> {
         if let Some(entries) = self.dir_cache.get(&path) {
             return Ok(entries);
         }
-        let entries: Vec<CachedDirEntry> = self
-            .storage
-            .read_dir(path.clone())?
-            .map(|entry| CachedDirEntry {
-                file_name: entry.file_name(),
-                is_dir: entry.is_dir(),
-                size: entry.size(),
-                accessed: entry.accessed(),
-            })
-            .collect();
+        let entries: Vec<CachedDirEntry> =
+            read_dir(&self.storage, path.clone())?
+                .map(|entry| CachedDirEntry {
+                    file_name: entry.file_name(),
+                    is_dir: entry.is_dir(),
+                    size: entry.size(),
+                    accessed: entry.accessed(),
+                })
+                .collect();
         self.cache.sync_metadata_placeholders(&path, &entries)?;
         self.dir_cache.insert(path, entries.clone());
         Ok(entries)
@@ -441,10 +441,13 @@ impl<S: Storage + 'static> fuser::Filesystem for StorageFilesystem<S> {
             buf: vec![0u8; range_len],
             range_start: offset,
         };
-        if self
-            .storage
-            .read_file_at(info.path.clone(), &mut writer, offset..end)
-            .is_err()
+        if read_file_at(
+            &self.storage,
+            info.path.clone(),
+            &mut writer,
+            offset..end,
+        )
+        .is_err()
         {
             reply.error(Errno::from_i32(libc::EIO));
             return;
@@ -608,7 +611,7 @@ mod tests {
     impl Storage for CountingStorage {
         fn read_dir(
             &self,
-            _path: PathBuf,
+            _path: StoragePath,
         ) -> std::result::Result<
             Box<dyn Iterator<Item = Box<dyn DirEntry>>>,
             ReadDirError,
@@ -625,7 +628,7 @@ mod tests {
 
         fn read_file_at(
             &self,
-            _path: PathBuf,
+            _path: StoragePath,
             _writer: &mut dyn WriteAt,
             _range: std::ops::Range<u64>,
         ) -> std::result::Result<(), ReadFileAtError> {

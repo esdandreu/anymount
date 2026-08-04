@@ -3,6 +3,7 @@ use crate::domain::storage::{DirEntry, WriteAt, WriteAtError};
 use crate::drivers::windows::placeholders::{
     dehydrate_file, get_placeholder_info,
 };
+use crate::{read_dir, read_file_at};
 use cloud_filter::{
     error::CResult,
     filter::{Request, SyncFilter, info, ticket},
@@ -62,8 +63,7 @@ impl<S: Storage> SyncFilter for Callbacks<S> {
         };
         let range = info.required_file_range();
         let mut writer = FetchDataWriter::new(ticket, range.end);
-        self.storage
-            .read_file_at(relative, &mut writer, range.clone())
+        read_file_at(&self.storage, relative, &mut writer, range.clone())
             .map_err(|e| {
                 self.emit_telemetry(format!("read_file_at failed: {}", e));
                 cloud_filter::error::CloudErrorKind::Unsuccessful
@@ -94,7 +94,7 @@ impl<S: Storage> SyncFilter for Callbacks<S> {
                 return Err(cloud_filter::error::CloudErrorKind::Unsuccessful);
             }
         };
-        let iter = self.storage.read_dir(relative).map_err(|e| {
+        let iter = read_dir(&self.storage, relative).map_err(|e| {
             self.emit_telemetry(format!("read_dir failed: {}", e));
             cloud_filter::error::CloudErrorKind::Unsuccessful
         })?;

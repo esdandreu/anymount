@@ -1,8 +1,11 @@
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+use cap_std::ambient_authority;
+use cap_std::fs::Dir;
+
 use crate::domain::storage::{
-    DirEntry, ReadDirError, ReadFileAtError, Storage, WriteAt,
+    DirEntry, ReadDirError, ReadFileAtError, Storage, StoragePath, WriteAt,
 };
 
 pub const DEFAULT_LOCAL_CHUNK_SIZE: usize = 65536;
@@ -39,8 +42,14 @@ fn read_exact_at(
 }
 
 pub struct LocalStorage {
-    root: PathBuf,
+    root: Result<Dir, RootOpenError>,
     chunk_size: usize,
+}
+
+#[derive(Debug)]
+struct RootOpenError {
+    kind: std::io::ErrorKind,
+    message: String,
 }
 
 pub struct LocalDirEntry {
@@ -52,6 +61,12 @@ pub struct LocalDirEntry {
 
 impl LocalStorage {
     pub fn new(root: PathBuf) -> Self {
+        let root = Dir::open_ambient_dir(root, ambient_authority()).map_err(
+            |source| RootOpenError {
+                kind: source.kind(),
+                message: source.to_string(),
+            },
+        );
         Self {
             root,
             chunk_size: DEFAULT_LOCAL_CHUNK_SIZE,
@@ -61,6 +76,26 @@ impl LocalStorage {
     pub fn with_chunk_size(mut self, chunk_size: usize) -> Self {
         self.chunk_size = chunk_size;
         self
+    }
+}
+
+fn root_io_error(error: &RootOpenError) -> std::io::Error {
+    std::io::Error::new(error.kind, error.message.clone())
+}
+
+fn read_dir_error(source: std::io::Error) -> ReadDirError {
+    if source.kind() == std::io::ErrorKind::PermissionDenied {
+        ReadDirError::PermissionDenied
+    } else {
+        source.into()
+    }
+}
+
+fn read_file_error(source: std::io::Error) -> ReadFileAtError {
+    if source.kind() == std::io::ErrorKind::PermissionDenied {
+        ReadFileAtError::PermissionDenied
+    } else {
+        source.into()
     }
 }
 
@@ -82,14 +117,22 @@ impl DirEntry for LocalDirEntry {
 impl Storage for LocalStorage {
     fn read_dir(
         &self,
-        path: PathBuf,
+        path: StoragePath,
     ) -> Result<Box<dyn Iterator<Item = Box<dyn DirEntry>>>, ReadDirError> {
-        let full_path = self.root.join(path);
+        let root = self.root.as_ref().map_err(root_io_error)?;
         let mut entries: Vec<Box<dyn DirEntry>> = Vec::new();
-        for entry in std::fs::read_dir(&full_path)? {
-            let entry = entry?;
-            let meta = entry.metadata()?;
-            let accessed = meta.accessed().unwrap_or(SystemTime::UNIX_EPOCH);
+        let read_dir = if path.as_path().as_os_str().is_empty() {
+            root.entries()
+        } else {
+            root.read_dir(path.as_path())
+        };
+        for entry in read_dir.map_err(read_dir_error)? {
+            let entry = entry.map_err(read_dir_error)?;
+            let meta = entry.metadata().map_err(read_dir_error)?;
+            let accessed = meta
+                .accessed()
+                .map(cap_std::time::SystemTime::into_std)
+                .unwrap_or(SystemTime::UNIX_EPOCH);
             entries.push(Box::new(LocalDirEntry {
                 file_name: entry.file_name().to_string_lossy().into_owned(),
                 is_dir: meta.is_dir(),
@@ -102,12 +145,13 @@ impl Storage for LocalStorage {
 
     fn read_file_at(
         &self,
-        path: PathBuf,
+        path: StoragePath,
         writer: &mut dyn WriteAt,
         range: std::ops::Range<u64>,
     ) -> Result<(), ReadFileAtError> {
-        let full_path = self.root.join(path);
-        let file = std::fs::File::open(&full_path)?;
+        let root = self.root.as_ref().map_err(root_io_error)?;
+        let file = root.open(path.as_path()).map_err(read_file_error)?;
+        let file = file.into_std();
         let len = (range.end - range.start) as usize;
         let chunk_size = self.chunk_size.min(len);
         let mut buf = vec![0u8; chunk_size];
@@ -127,6 +171,7 @@ impl Storage for LocalStorage {
 mod tests {
     use super::*;
     use crate::domain::storage::WriteAtError;
+    use crate::{read_dir, read_file_at};
     use tempfile::TempDir;
 
     struct RecordingWriter {
@@ -159,6 +204,11 @@ mod tests {
         }
     }
 
+    fn storage_path(value: impl Into<PathBuf>) -> StoragePath {
+        StoragePath::try_from(value.into())
+            .expect("test storage path should be valid")
+    }
+
     #[test]
     fn new_and_with_chunk_size() {
         let storage =
@@ -181,7 +231,7 @@ mod tests {
 
         let storage = LocalStorage::new(path.to_path_buf());
         let iter = storage
-            .read_dir(PathBuf::new())
+            .read_dir(StoragePath::root())
             .expect("test directory should be readable");
         let entries: Vec<_> = iter.collect();
         assert!(entries.len() >= 2);
@@ -202,6 +252,50 @@ mod tests {
     }
 
     #[test]
+    fn read_dir_allows_nested_directory() {
+        let dir =
+            TempDir::new().expect("temporary directory should be created");
+        let nested = dir.path().join("nested");
+        std::fs::create_dir(&nested)
+            .expect("nested directory should be created");
+        std::fs::write(nested.join("f.txt"), b"nested")
+            .expect("nested test file should be written");
+
+        let storage = LocalStorage::new(dir.path().to_path_buf());
+        let entries: Vec<_> = storage
+            .read_dir(storage_path("nested"))
+            .expect("nested directory should be readable")
+            .collect();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].file_name(), "f.txt");
+    }
+
+    #[test]
+    fn read_dir_rejects_absolute_path() {
+        let dir =
+            TempDir::new().expect("temporary directory should be created");
+        let storage = LocalStorage::new(dir.path().to_path_buf());
+
+        let result = read_dir(&storage, dir.path().to_path_buf());
+
+        assert!(matches!(result, Err(crate::ReadDirError::InvalidPath(_))));
+    }
+
+    #[test]
+    fn read_dir_rejects_parent_components() {
+        let dir =
+            TempDir::new().expect("temporary directory should be created");
+        let storage = LocalStorage::new(dir.path().to_path_buf());
+
+        let parent = read_dir(&storage, PathBuf::from(".."));
+        let nested = read_dir(&storage, PathBuf::from("nested/../../outside"));
+
+        assert!(matches!(parent, Err(crate::ReadDirError::InvalidPath(_))));
+        assert!(matches!(nested, Err(crate::ReadDirError::InvalidPath(_))));
+    }
+
+    #[test]
     fn read_file_at_writes_exact_range() {
         let dir =
             TempDir::new().expect("temporary directory should be created");
@@ -213,10 +307,142 @@ mod tests {
         let storage = LocalStorage::new(path.to_path_buf());
         let mut writer = RecordingWriter::new();
         storage
-            .read_file_at(PathBuf::from("f"), &mut writer, 0..5000)
+            .read_file_at(storage_path("f"), &mut writer, 0..5000)
             .expect("test range should be readable");
         assert_eq!(writer.total_bytes(), 5000);
         assert_eq!(writer.flat_bytes(), body);
+    }
+
+    #[test]
+    fn read_file_at_allows_nested_file() {
+        let dir =
+            TempDir::new().expect("temporary directory should be created");
+        let nested = dir.path().join("nested");
+        std::fs::create_dir(&nested)
+            .expect("nested directory should be created");
+        std::fs::write(nested.join("f.txt"), b"nested")
+            .expect("nested test file should be written");
+        let storage = LocalStorage::new(dir.path().to_path_buf());
+        let mut writer = RecordingWriter::new();
+
+        storage
+            .read_file_at(storage_path("nested/f.txt"), &mut writer, 0..6)
+            .expect("nested file should be readable");
+
+        assert_eq!(writer.flat_bytes(), b"nested");
+    }
+
+    #[test]
+    fn read_file_at_rejects_absolute_path() {
+        let dir =
+            TempDir::new().expect("temporary directory should be created");
+        let storage = LocalStorage::new(dir.path().to_path_buf());
+        let mut writer = RecordingWriter::new();
+
+        let result = read_file_at(
+            &storage,
+            dir.path().join("outside"),
+            &mut writer,
+            0..1,
+        );
+
+        assert!(matches!(
+            result,
+            Err(crate::ReadFileAtError::InvalidPath(_))
+        ));
+    }
+
+    #[test]
+    fn read_file_at_rejects_parent_components() {
+        let dir =
+            TempDir::new().expect("temporary directory should be created");
+        let storage = LocalStorage::new(dir.path().to_path_buf());
+        let mut writer = RecordingWriter::new();
+
+        let parent = read_file_at(
+            &storage,
+            PathBuf::from("../outside"),
+            &mut writer,
+            0..1,
+        );
+        let nested = read_file_at(
+            &storage,
+            PathBuf::from("nested/../../outside"),
+            &mut writer,
+            0..1,
+        );
+
+        assert!(matches!(
+            parent,
+            Err(crate::ReadFileAtError::InvalidPath(_))
+        ));
+        assert!(matches!(
+            nested,
+            Err(crate::ReadFileAtError::InvalidPath(_))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn operations_reject_symlinks_outside_root() {
+        use std::os::unix::fs::symlink;
+
+        let root = TempDir::new().expect("storage root should be created");
+        let outside =
+            TempDir::new().expect("outside directory should be created");
+        std::fs::write(outside.path().join("secret"), b"secret")
+            .expect("outside test file should be written");
+        symlink(outside.path(), root.path().join("outside-dir"))
+            .expect("outside directory symlink should be created");
+        symlink(
+            outside.path().join("secret"),
+            root.path().join("outside-file"),
+        )
+        .expect("outside file symlink should be created");
+        let storage = LocalStorage::new(root.path().to_path_buf());
+        let mut writer = RecordingWriter::new();
+
+        let directory = storage.read_dir(storage_path("outside-dir"));
+        let file = storage.read_file_at(
+            storage_path("outside-file"),
+            &mut writer,
+            0..6,
+        );
+
+        assert!(matches!(directory, Err(ReadDirError::PermissionDenied)));
+        assert!(matches!(file, Err(ReadFileAtError::PermissionDenied)));
+        assert_eq!(writer.total_bytes(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn operations_allow_symlinks_inside_root() {
+        use std::os::unix::fs::symlink;
+
+        let root = TempDir::new().expect("storage root should be created");
+        let nested = root.path().join("nested");
+        std::fs::create_dir(&nested)
+            .expect("nested directory should be created");
+        std::fs::write(nested.join("f.txt"), b"inside")
+            .expect("nested test file should be written");
+        symlink("nested", root.path().join("internal-dir"))
+            .expect("internal directory symlink should be created");
+        symlink("nested/f.txt", root.path().join("internal-file"))
+            .expect("internal file symlink should be created");
+        let storage = LocalStorage::new(root.path().to_path_buf());
+        let mut writer = RecordingWriter::new();
+
+        let entries: Vec<_> = storage
+            .read_dir(storage_path("internal-dir"))
+            .expect("internal directory symlink should be readable")
+            .collect();
+        storage
+            .read_file_at(storage_path("internal-file"), &mut writer, 0..6)
+            .expect("internal file symlink should be readable");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].file_name(), "f.txt");
+        assert_eq!(writer.flat_bytes(), b"inside");
     }
 
     #[test]
@@ -231,7 +457,7 @@ mod tests {
         let storage = LocalStorage::new(path.to_path_buf());
         let mut writer = RecordingWriter::new();
         storage
-            .read_file_at(PathBuf::from("f"), &mut writer, 0..5000)
+            .read_file_at(storage_path("f"), &mut writer, 0..5000)
             .expect("test range should be readable");
         assert_eq!(writer.total_bytes(), 5000);
     }

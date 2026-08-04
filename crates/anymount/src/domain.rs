@@ -10,4 +10,7 @@ pub use driver::{Driver, DriverConfig, MountStatus, MountStatusError};
 pub use mount::{
     ConnectMountError, DisconnectMountError, Mount, UnregisterMountError,
 };
-pub use storage::{ConnectStorageError, Storage, StorageConfig};
+pub use storage::{
+    ConnectStorageError, InvalidStoragePath, Storage, StorageConfig,
+    StoragePath,
+};

@@ -13,7 +13,7 @@ use token::{OneDriveTokenSource, jwt_expires_at};
 
 use crate::domain::storage::{
     ConnectStorageError, DirEntry, ReadDirError, ReadFileAtError, Storage,
-    StorageConfig, WriteAt,
+    StorageConfig, StoragePath, WriteAt,
 };
 use crate::domain::{AuthStorageError, StartedAuthorization};
 
@@ -379,17 +379,17 @@ where
 {
     fn read_dir(
         &self,
-        path: PathBuf,
+        path: StoragePath,
     ) -> std::result::Result<
         Box<dyn Iterator<Item = Box<dyn DirEntry>>>,
         ReadDirError,
     > {
         let token =
             self.token.access_token().map_err(read_dir_backend_error)?;
-        let full_path = if path.as_os_str().is_empty() {
+        let full_path = if path.as_path().as_os_str().is_empty() {
             self.root.clone()
         } else {
-            self.root.join(path)
+            self.root.join(path.as_path())
         };
         let segment = Self::path_to_graph_segment(&full_path);
         let url = if segment.is_empty() {
@@ -438,7 +438,7 @@ where
 
     fn read_file_at(
         &self,
-        path: PathBuf,
+        path: StoragePath,
         writer: &mut dyn WriteAt,
         range: std::ops::Range<u64>,
     ) -> std::result::Result<(), ReadFileAtError> {
@@ -446,7 +446,7 @@ where
             .token
             .access_token()
             .map_err(read_file_at_backend_error)?;
-        let full_path = self.root.join(path);
+        let full_path = self.root.join(path.as_path());
         let segment = Self::path_to_graph_segment(&full_path);
         let url =
             format!("{}/me/drive/root:{}:/content", self.endpoint, segment);
@@ -490,6 +490,11 @@ mod tests {
     use crate::domain::storage::WriteAtError;
 
     type DefaultStorage = OneDriveStorage<OneDriveTokenSource, UreqHttpGet>;
+
+    fn storage_path(value: impl Into<PathBuf>) -> StoragePath {
+        StoragePath::try_from(value.into())
+            .expect("test storage path should be valid")
+    }
 
     fn storage_with_response(
         status: u16,
@@ -715,7 +720,7 @@ endpoint = "https://graph.microsoft.com/v1.0"
         let list_json = br#"{"value":[{"name":"f.txt","size":100,"lastModifiedDateTime":"2024-01-01T00:00:00Z"}]}"#;
         let storage = storage_with_response(200, list_json);
         let iter = storage
-            .read_dir(PathBuf::new())
+            .read_dir(StoragePath::root())
             .expect("mock directory listing should succeed");
         let entries: Vec<_> = iter.collect();
         assert_eq!(entries.len(), 1);
@@ -727,7 +732,7 @@ endpoint = "https://graph.microsoft.com/v1.0"
     #[test]
     fn read_dir_http_failure_returns_list_error() {
         let storage = storage_with_response(500, b"boom");
-        let result = storage.read_dir(PathBuf::new());
+        let result = storage.read_dir(StoragePath::root());
         let Err(err) = result else {
             panic!("list should fail")
         };
@@ -749,7 +754,7 @@ endpoint = "https://graph.microsoft.com/v1.0"
         };
         let mut writer = RecordingWriter::new();
         storage
-            .read_file_at(PathBuf::from("f"), &mut writer, 0..5000)
+            .read_file_at(storage_path("f"), &mut writer, 0..5000)
             .expect("mock range read should succeed");
         assert_eq!(writer.total_bytes(), 5000);
         let flat: Vec<u8> = writer
@@ -771,7 +776,7 @@ endpoint = "https://graph.microsoft.com/v1.0"
         };
         let mut writer = RecordingWriter::new();
         storage
-            .read_file_at(PathBuf::from("f"), &mut writer, 0..5000)
+            .read_file_at(storage_path("f"), &mut writer, 0..5000)
             .expect("mock range read should succeed");
         assert_eq!(writer.total_bytes(), 5000);
     }

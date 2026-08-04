@@ -1,4 +1,8 @@
-use std::{ops::Range, path::PathBuf, time::SystemTime};
+mod path;
+
+pub use path::{InvalidStoragePath, StoragePath};
+
+use std::{ops::Range, time::SystemTime};
 
 use super::auth::{AuthStorageError, StartedAuthorization};
 
@@ -34,14 +38,14 @@ pub enum ConnectStorageError {
 pub trait Storage: Send + Sync {
     fn read_dir(
         &self,
-        _path: PathBuf,
+        _path: StoragePath,
     ) -> Result<Box<dyn Iterator<Item = Box<dyn DirEntry>>>, ReadDirError> {
         Err(ReadDirError::NotSupported)
     }
 
     fn read_file_at(
         &self,
-        _path: PathBuf,
+        _path: StoragePath,
         _writer: &mut dyn WriteAt,
         _range: Range<u64>,
     ) -> Result<(), ReadFileAtError> {
@@ -55,14 +59,14 @@ where
 {
     fn read_dir(
         &self,
-        path: PathBuf,
+        path: StoragePath,
     ) -> Result<Box<dyn Iterator<Item = Box<dyn DirEntry>>>, ReadDirError> {
         (**self).read_dir(path)
     }
 
     fn read_file_at(
         &self,
-        path: PathBuf,
+        path: StoragePath,
         writer: &mut dyn WriteAt,
         range: Range<u64>,
     ) -> Result<(), ReadFileAtError> {
@@ -174,7 +178,6 @@ impl From<std::io::Error> for ReadFileAtError {
 #[cfg(test)]
 mod test {
     use super::*;
-    use std::path::PathBuf;
 
     #[derive(Clone, serde::Serialize, serde::Deserialize)]
     struct TestStorageConfig {
@@ -225,7 +228,7 @@ password = "secret"
 
         let connection = config.connect().expect("connect test storage");
         assert!(matches!(
-            connection.read_dir(PathBuf::from("/")),
+            connection.read_dir(StoragePath::root()),
             Err(ReadDirError::NotSupported)
         ));
     }
@@ -244,7 +247,7 @@ password = "secret"
 
         let connection = config.connect().expect("connect test storage");
         assert!(matches!(
-            connection.read_dir("/".into()),
+            connection.read_dir(StoragePath::root()),
             Err(ReadDirError::NotSupported)
         ));
     }

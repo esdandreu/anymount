@@ -23,7 +23,7 @@ pub enum Error {
         source: std::io::Error,
     },
     #[error("failed to read storage directory: {0}")]
-    ReadDir(#[from] crate::domain::storage::ReadDirError),
+    ReadDir(#[from] crate::ReadDirError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

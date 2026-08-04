@@ -6,6 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+cap-std = "4.0.2"
 thiserror = "1.0"
 bytes = "1.9"
 parking_lot = "0.12"
