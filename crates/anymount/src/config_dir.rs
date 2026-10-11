@@ -124,11 +124,11 @@ error_message = "toml test"
         std::fs::write(
             &dir.path().join("demo.json"),
             r#"{
-        "path": "/mnt/test",
-        "storage": {
-            "type": "cannot-connect",
-            "error_message": "json test"
-        }
+    "path": "/mnt/test",
+    "storage": {
+        "type": "cannot-connect",
+        "error_message": "json test"
+    }
 }"#,
         )
         .expect("write json config");
