@@ -1,7 +1,7 @@
 // Copyright 2026 Dotphoton AG
 
 pub mod error;
-use crate::domain::storage::{Storage, StoragePath, WriteAt, WriteAtError};
+use crate::domain::storage::{Storage, WriteAt, WriteAtError};
 use crate::{read_dir, read_file_at};
 pub use error::{Error, Result};
 use fuser::{
@@ -159,7 +159,7 @@ pub struct NodeInfo {
 }
 
 pub struct StorageFilesystem<S: Storage> {
-    storage: Arc<S>,
+    storage: S,
     cache: Arc<dyn CachePort>,
     next_ino: AtomicU64,
     ino_to_info: RwLock<HashMap<u64, NodeInfo>>,
@@ -169,7 +169,6 @@ pub struct StorageFilesystem<S: Storage> {
 
 impl<S: Storage> StorageFilesystem<S> {
     pub fn new_with_cache(storage: S, cache: Arc<dyn CachePort>) -> Self {
-        let storage = Arc::new(storage);
         let next_ino = AtomicU64::new(2);
         let ino_to_info = RwLock::new(HashMap::new());
         let path_to_ino = RwLock::new(HashMap::new());
@@ -569,7 +568,7 @@ mod tests {
         StorageFilesystem,
     };
     use crate::domain::storage::{
-        DirEntry, ReadDirError, ReadFileAtError, Storage, WriteAt,
+        DirEntry, ReadDirError, ReadFileAtError, Storage, StoragePath, WriteAt,
     };
     use crate::drivers::fuse::error::Error;
     use std::path::{Path, PathBuf};
