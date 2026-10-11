@@ -54,92 +54,6 @@ impl<S: Storage> StorageFilesystem<S> {
             dir_cache: CachedDirCache::new(),
         }
     }
-
-    pub fn get_info(&self, ino: u64) -> Option<NodeInfo> {
-        self.ino_to_info.read().get(&ino).cloned()
-    }
-
-    fn get_or_create_ino(
-        &self,
-        path: PathBuf,
-        is_dir: bool,
-        size: u64,
-        atime: SystemTime,
-    ) -> u64 {
-        {
-            let guard = self.path_to_ino.read();
-            if let Some(&ino) = guard.get(&path) {
-                return ino;
-            }
-        }
-        let ino = self.next_ino.fetch_add(1, Ordering::SeqCst);
-        self.ino_to_info.write().insert(
-            ino,
-            NodeInfo {
-                path: path.clone(),
-                is_dir,
-                size,
-                atime,
-            },
-        );
-        self.path_to_ino.write().insert(path, ino);
-        ino
-    }
-
-    fn attr_from_info(&self, ino: INodeNo, info: &NodeInfo) -> FileAttr {
-        let kind = if info.is_dir {
-            FileType::Directory
-        } else {
-            FileType::RegularFile
-        };
-        let perm = if info.is_dir { 0o755 } else { 0o644 };
-        FileAttr {
-            ino,
-            size: info.size,
-            blocks: info.size.div_ceil(512),
-            atime: info.atime,
-            mtime: info.atime,
-            ctime: info.atime,
-            crtime: info.atime,
-            kind,
-            perm,
-            nlink: 1,
-            uid: unsafe { libc::getuid() },
-            gid: unsafe { libc::getgid() },
-            rdev: 0,
-            blksize: 512,
-            flags: 0,
-        }
-    }
-
-    pub fn child_entry_offset(index: usize) -> u64 {
-        index as u64 + FIRST_CHILD_ENTRY_OFFSET
-    }
-
-    pub fn child_start_index(offset: u64) -> usize {
-        offset.saturating_sub(DOT_DOT_ENTRY_OFFSET) as usize
-    }
-
-    pub fn read_dir_entries(
-        &self,
-        path: PathBuf,
-    ) -> Result<Vec<CachedDirEntry>> {
-        if let Some(entries) = self.dir_cache.get(&path) {
-            return Ok(entries);
-        }
-        let entries: Vec<CachedDirEntry> =
-            read_dir(&self.storage, path.clone())?
-                .map(|entry| CachedDirEntry {
-                    file_name: entry.file_name(),
-                    is_dir: entry.is_dir(),
-                    size: entry.size(),
-                    accessed: entry.accessed(),
-                })
-                .collect();
-        self.cache.sync_metadata_placeholders(&path, &entries)?;
-        self.dir_cache.insert(path, entries.clone());
-        Ok(entries)
-    }
 }
 
 impl<S: Storage + 'static> fuser::Filesystem for StorageFilesystem<S> {
@@ -419,6 +333,94 @@ impl<S: Storage + 'static> fuser::Filesystem for StorageFilesystem<S> {
             }
         }
         reply.ok();
+    }
+}
+
+impl<S: Storage> StorageFilesystem<S> {
+    pub fn get_info(&self, ino: u64) -> Option<NodeInfo> {
+        self.ino_to_info.read().get(&ino).cloned()
+    }
+
+    fn get_or_create_ino(
+        &self,
+        path: PathBuf,
+        is_dir: bool,
+        size: u64,
+        atime: SystemTime,
+    ) -> u64 {
+        {
+            let guard = self.path_to_ino.read();
+            if let Some(&ino) = guard.get(&path) {
+                return ino;
+            }
+        }
+        let ino = self.next_ino.fetch_add(1, Ordering::SeqCst);
+        self.ino_to_info.write().insert(
+            ino,
+            NodeInfo {
+                path: path.clone(),
+                is_dir,
+                size,
+                atime,
+            },
+        );
+        self.path_to_ino.write().insert(path, ino);
+        ino
+    }
+
+    fn attr_from_info(&self, ino: INodeNo, info: &NodeInfo) -> FileAttr {
+        let kind = if info.is_dir {
+            FileType::Directory
+        } else {
+            FileType::RegularFile
+        };
+        let perm = if info.is_dir { 0o755 } else { 0o644 };
+        FileAttr {
+            ino,
+            size: info.size,
+            blocks: info.size.div_ceil(512),
+            atime: info.atime,
+            mtime: info.atime,
+            ctime: info.atime,
+            crtime: info.atime,
+            kind,
+            perm,
+            nlink: 1,
+            uid: unsafe { libc::getuid() },
+            gid: unsafe { libc::getgid() },
+            rdev: 0,
+            blksize: 512,
+            flags: 0,
+        }
+    }
+
+    pub fn child_entry_offset(index: usize) -> u64 {
+        index as u64 + FIRST_CHILD_ENTRY_OFFSET
+    }
+
+    pub fn child_start_index(offset: u64) -> usize {
+        offset.saturating_sub(DOT_DOT_ENTRY_OFFSET) as usize
+    }
+
+    pub fn read_dir_entries(
+        &self,
+        path: PathBuf,
+    ) -> Result<Vec<CachedDirEntry>> {
+        if let Some(entries) = self.dir_cache.get(&path) {
+            return Ok(entries);
+        }
+        let entries: Vec<CachedDirEntry> =
+            read_dir(&self.storage, path.clone())?
+                .map(|entry| CachedDirEntry {
+                    file_name: entry.file_name(),
+                    is_dir: entry.is_dir(),
+                    size: entry.size(),
+                    accessed: entry.accessed(),
+                })
+                .collect();
+        self.cache.sync_metadata_placeholders(&path, &entries)?;
+        self.dir_cache.insert(path, entries.clone());
+        Ok(entries)
     }
 }
 

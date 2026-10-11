@@ -2,6 +2,7 @@ mod cache;
 pub mod error;
 mod filesystem;
 pub mod fuse_driver;
+mod fuse_mount;
 
 pub use cache::{
     CachePort, CachedDir, CachedDirCache, CachedDirEntry, NoCacheFsCache,
@@ -12,4 +13,5 @@ pub use filesystem::{
     FUSE_GENERATION, NodeInfo, ROOT_INO, StorageFilesystem, TTL,
 };
 
-pub use fuse_driver::{FuseDriver, FuseDriverConfig, FuseMount};
+pub use fuse_driver::{FuseDriver, FuseDriverConfig};
+pub use fuse_mount::FuseMount;
