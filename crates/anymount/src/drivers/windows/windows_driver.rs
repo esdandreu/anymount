@@ -1,8 +1,7 @@
 use super::callbacks::Callbacks;
 use super::{Error, Result};
 use crate::domain::driver::{
-    Driver, DriverConfig, ListMountsError, MountError, MountStatus,
-    MountStatusError,
+    Driver, DriverConfig, MountError,
 };
 use crate::domain::{
     ConnectMountError, DisconnectMountError, Mount, Storage,
@@ -54,46 +53,6 @@ impl Driver for WindowsDriver {
             })
     }
 
-    fn is_mounted(
-        &self,
-        name: &str,
-        expected_root: &Path,
-    ) -> std::result::Result<MountStatus, MountStatusError> {
-        let id = sync_root_id(name).map_err(|source| MountStatusError {
-            name: name.to_owned(),
-            message: source.to_string(),
-        })?;
-        if !id.is_registered().map_err(|source| MountStatusError {
-            name: name.to_owned(),
-            message: source.to_string(),
-        })? {
-            return Ok(MountStatus::NotMounted);
-        }
-
-        let registered_root = id
-            .info()
-            .map_err(|source| MountStatusError {
-                name: name.to_owned(),
-                message: source.to_string(),
-            })?
-            .path();
-        let expected_root =
-            absolute(expected_root).map_err(|source| MountStatusError {
-                name: name.to_owned(),
-                message: source.to_string(),
-            })?;
-
-        Ok(status_for_root(&registered_root, &expected_root))
-    }
-
-    fn list_mounts(
-        &self,
-    ) -> std::result::Result<
-        Box<dyn Iterator<Item = Box<dyn Mount>>>,
-        ListMountsError,
-    > {
-        Ok(Box::new(std::iter::empty()))
-    }
 }
 
 fn sync_root_id(name: &str) -> Result<SyncRootId> {
@@ -106,17 +65,6 @@ fn sync_root_id(name: &str) -> Result<SyncRootId> {
     Ok(SyncRootIdBuilder::new(format!("{ID_PREFIX}|{name}"))
         .user_security_id(security_id)
         .build())
-}
-
-fn status_for_root(
-    registered_root: &Path,
-    expected_root: &Path,
-) -> MountStatus {
-    if registered_root == expected_root {
-        MountStatus::MountedAtExpectedRoot
-    } else {
-        MountStatus::MountedAtDifferentRoot
-    }
 }
 
 /// A registered Windows sync root with an optional live connection.
@@ -228,9 +176,8 @@ impl<S: Storage + 'static> Mount for WindowsMount<S> {
 
 #[cfg(test)]
 mod tests {
-    use super::{WindowsDriver, WindowsDriverConfig, status_for_root};
-    use crate::domain::{Driver, DriverConfig, MountStatus};
-    use std::path::Path;
+    use super::{WindowsDriver, WindowsDriverConfig};
+    use crate::domain::{Driver, DriverConfig};
 
     #[test]
     fn config_initializes_empty_driver() {
@@ -240,29 +187,4 @@ mod tests {
     }
 
     #[test]
-    fn reports_mount_at_expected_root() {
-        let status = status_for_root(
-            Path::new(r"C:\mounts\documents"),
-            Path::new(r"C:\mounts\documents"),
-        );
-
-        assert_eq!(status, MountStatus::MountedAtExpectedRoot);
-    }
-
-    #[test]
-    fn reports_mount_at_different_root() {
-        let status = status_for_root(
-            Path::new(r"C:\mounts\old"),
-            Path::new(r"C:\mounts\documents"),
-        );
-
-        assert_eq!(status, MountStatus::MountedAtDifferentRoot);
-    }
-
-    #[test]
-    fn driver_lists_no_mounts_without_native_reconstruction() {
-        let driver = WindowsDriver;
-
-        assert_eq!(driver.list_mounts().expect("list mounts").count(), 0);
-    }
 }

@@ -9,6 +9,7 @@ extern crate rustc_session;
 extern crate rustc_span;
 
 use rustc_lint::{LateContext, LateLintPass, LintContext};
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
@@ -17,7 +18,7 @@ dylint_linting::dylint_library!();
 rustc_lint_defs::declare_lint!(
     pub DRIVER_README,
     Deny,
-    "driver directories must have a README with Concepts and States sections"
+    "driver READMEs must document the Unmounted, Mounted, Connected, and Disconnected states"
 );
 
 rustc_lint_defs::declare_lint_pass!(DriverReadme => [DRIVER_README]);
@@ -109,9 +110,9 @@ fn validate_driver_readmes(drivers_dir: &Path) -> std::io::Result<Vec<String>> {
             }
         };
 
-        for section in missing_sections(&contents) {
+        for state in missing_states(&contents) {
             issues.push(format!(
-                "driver `{display_path}` README.md is missing the `## {section}` heading"
+                "driver `{display_path}` README.md is missing the `{state}` state bullet under `## States`"
             ));
         }
     }
@@ -119,23 +120,49 @@ fn validate_driver_readmes(drivers_dir: &Path) -> std::io::Result<Vec<String>> {
     Ok(issues)
 }
 
-fn missing_sections(contents: &str) -> Vec<&'static str> {
-    ["Concepts", "States"]
+fn missing_states(contents: &str) -> Vec<&'static str> {
+    const REQUIRED_STATES: [&str; 4] = [
+        "Unmounted",
+        "Mounted",
+        "Connected",
+        "Disconnected",
+    ];
+
+    let mut in_states = false;
+    let mut documented = HashSet::new();
+    for line in contents.lines() {
+        if line.starts_with("## ") {
+            in_states = line.trim() == "## States";
+            continue;
+        }
+        if !in_states {
+            continue;
+        }
+
+        let bullet = line.trim_start();
+        if let Some(label) = bullet
+            .strip_prefix("- **")
+            .or_else(|| bullet.strip_prefix("* **"))
+            && let Some((state, _)) = label.split_once(":**")
+            && REQUIRED_STATES.contains(&state)
+        {
+            documented.insert(state);
+        }
+    }
+
+    REQUIRED_STATES
         .into_iter()
-        .filter(|section| {
-            !contents
-                .lines()
-                .any(|line| line.trim() == format!("## {section}"))
-        })
+        .filter(|state| !documented.contains(state))
         .collect()
 }
 
 #[test]
-fn requires_both_level_two_sections() {
-    assert!(missing_sections("## Concepts\n\n## States\n").is_empty());
+fn requires_all_state_bullets_under_level_two_states_section() {
+    let states = "## States\n\n- **Unmounted:** A\n- **Mounted:** B\n  - **Connected:** C\n  - **Disconnected:** D\n";
+    assert!(missing_states(states).is_empty());
     assert_eq!(
-        missing_sections("### Concepts\n## State\n"),
-        ["Concepts", "States"]
+        missing_states("### States\n- **Unmounted:** A\n- **Mounted:** B\n- **Connected:** C\n- **Disconnected:** D\n"),
+        ["Unmounted", "Mounted", "Connected", "Disconnected"]
     );
 }
 
@@ -154,20 +181,21 @@ fn reports_missing_readme() {
 }
 
 #[test]
-fn reports_missing_headings() {
+fn reports_missing_states() {
     let temp_dir = tempfile::tempdir().expect("temporary directory");
     let drivers_dir = temp_dir.path().join("drivers");
     let driver_dir = drivers_dir.join("example");
     fs::create_dir_all(&driver_dir).expect("driver directory");
-    fs::write(driver_dir.join("README.md"), "# Example\n\n### Concepts\n")
+    fs::write(driver_dir.join("README.md"), "# Example\n\n## States\n- **Unmounted:** A\n")
         .expect("write README");
 
     let issues =
         validate_driver_readmes(&drivers_dir).expect("validate readmes");
 
-    assert_eq!(issues.len(), 2);
-    assert!(issues.iter().any(|issue| issue.contains("`## Concepts`")));
-    assert!(issues.iter().any(|issue| issue.contains("`## States`")));
+    assert_eq!(issues.len(), 3);
+    assert!(issues.iter().any(|issue| issue.contains("`Mounted` state bullet")));
+    assert!(issues.iter().any(|issue| issue.contains("`Connected` state bullet")));
+    assert!(issues.iter().any(|issue| issue.contains("`Disconnected` state bullet")));
 }
 
 #[test]

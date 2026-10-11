@@ -12,38 +12,18 @@ pub trait DriverConfig: Send + Sync {
 }
 
 pub trait Driver: Send + Sync {
-    /// Registers a mount. If a mount was already registered, with the same
-    /// name and path the storage will be re-configured.
+    /// Registers a mount. No-op if a mount was already registered with the same
+    /// configuration.
     fn mount(&self, config: &MountConfig)
     -> Result<Box<dyn Mount>, MountError>;
 
+    /// Unregisters a mount. No-op if the mount is not registered.
     fn unmount(&self, name: &str) -> Result<(), MountError>;
 
     fn kind(&self) -> &'static str {
         std::any::type_name::<Self>()
     }
 
-    /// Determines whether a mount is registered at `expected_root`.
-    ///
-    /// A mount is identified by its driver-specific stable representation of
-    /// `name`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the platform mount registry cannot be inspected.
-    fn is_mounted(
-        &self,
-        config: &MountConfig,
-    ) -> Result<MountStatus, MountStatusError>;
-
-    /// Lists registered mounts.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the platform mount registry cannot be inspected.
-    fn list_mounts(
-        &self,
-    ) -> Result<Box<dyn Iterator<Item = Box<dyn Mount>>>, ListMountsError>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -52,36 +32,6 @@ pub enum MountError {
     /// in some way.
     #[error("failed to mount at {path}: {message}")]
     CannotMountAtPath { path: PathBuf, message: String },
-}
-
-/// Describes a mount's registration status.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MountStatus {
-    /// No mount with the requested identity is registered.
-    NotMounted,
-
-    /// The mount is registered at the expected root.
-    MountedAtExpectedRoot,
-
-    /// The mount is registered at another root.
-    // TODO should also include other config discrepancies
-    MountedAtDifferentRoot,
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("failed to inspect mount {name}: {message}")]
-pub struct MountStatusError {
-    /// The stable mount name that could not be inspected.
-    pub name: String,
-
-    /// The platform error description.
-    pub message: String,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum ListMountsError {
-    #[error("failed to list mounts: {message}")]
-    CannotListMounts { message: String },
 }
 
 /// Driver config with a priority value to determine which is the default driver

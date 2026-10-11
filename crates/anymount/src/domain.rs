@@ -6,7 +6,7 @@ pub mod storage;
 
 pub use auth::{AuthStorageError, StartedAuthorization};
 pub use config::{Config, ConfigNotFound, ConfigRepository, MountConfig};
-pub use driver::{Driver, DriverConfig, MountStatus, MountStatusError};
+pub use driver::{Driver, DriverConfig};
 pub use mount::{
     ConnectMountError, DisconnectMountError, Mount, UnregisterMountError,
 };
