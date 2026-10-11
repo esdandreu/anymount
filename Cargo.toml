@@ -12,3 +12,6 @@ edition = "2024"
 license = "GPL-3.0"
 authors = ["esdandreu"]
 build = "build.rs"
+
+[workspace.metadata.dylint]
+libraries = [{ path = "tools/lints/no_pub_crate" }]

@@ -39,7 +39,7 @@ impl AuthCommand {
 
     /// Internal entry point for injection (e.g. tests). Not part of the public
     /// API.
-    pub(crate) fn _execute<U, O>(
+    fn _execute<U, O>(
         &self,
         use_case: &U,
         url_opener: &O,

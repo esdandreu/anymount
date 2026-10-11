@@ -123,7 +123,7 @@ pub struct WindowsMount<S: Storage> {
     name: String,
     path: PathBuf,
     id: SyncRootId,
-    connection: Mutex<Option<Connection<super::Callbacks<S>>>>,
+    connection: Mutex<Option<Connection<super::callbacks::Callbacks<S>>>>,
 }
 
 impl<S: Storage + 'static> WindowsMount<S> {
@@ -170,7 +170,10 @@ impl<S: Storage + 'static> WindowsMount<S> {
         }
 
         let connection = CloudSession::new()
-            .connect(&path, super::Callbacks::new(path.clone(), storage))
+            .connect(
+                &path,
+                super::callbacks::Callbacks::new(path.clone(), storage),
+            )
             .map_err(|source| Error::CloudFilterOperation {
                 operation: "connect to sync root",
                 source,

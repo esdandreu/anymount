@@ -478,7 +478,7 @@ where
     }
 }
 
-pub(crate) fn parse_last_modified(s: &str) -> SystemTime {
+fn parse_last_modified(s: &str) -> SystemTime {
     DateTime::parse_from_rfc3339(s.trim())
         .map(|dt| dt.with_timezone(&Utc).into())
         .unwrap_or(UNIX_EPOCH)

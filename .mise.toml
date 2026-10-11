@@ -6,7 +6,12 @@ _.file = [".env.default", ".env"]
 
 [tasks.test]
 description = "Run tests"
+depends = ["lint"]
 run = "cargo test --all"
+
+[tasks.lint]
+description = "Run custom Rust lints"
+run = "cargo dylint --all"
 
 [tasks.coverage]
 description = "Run tests with code coverage"
@@ -15,6 +20,7 @@ run = "cargo llvm-cov --all-features"
 # Build Rust components
 [tasks.build]
 description = "Build platform-specific Rust components"
+depends = ["lint"]
 sources = ["crates"]
 run = "cargo build -p anymount-cli --release{% if env.ANYMOUNT_FUSE == '1' %} --features anymount/fuse{% endif %}"
 outputs = ["target/**"]
