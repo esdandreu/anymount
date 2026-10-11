@@ -1,6 +1,9 @@
 [tools]
 rust = "latest"
 
+[env]
+_.file = [".env.default", ".env"]
+
 [tasks.test]
 description = "Run tests"
 run = "cargo test --all"
@@ -13,7 +16,7 @@ run = "cargo llvm-cov --all-features"
 [tasks.build]
 description = "Build platform-specific Rust components"
 sources = ["crates"]
-run = "cargo build -p anymount-cli --release"
+run = "cargo build -p anymount-cli --release{% if env.ANYMOUNT_FUSE == '1' %} --features anymount/fuse{% endif %}"
 outputs = ["target/**"]
 
 # Run the app

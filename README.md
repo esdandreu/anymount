@@ -60,6 +60,10 @@ Build the release binary (`target/release/anymount-cli`):
 mise run build
 ```
 
+### Build options
+
+Copy `.env.default` as `.env` and edit it to set build options.
+
 ## Architecture
 
 `anymount` is organized around three layers.
