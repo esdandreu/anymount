@@ -1,5 +1,3 @@
-// Copyright 2026 Dotphoton AG
-
 use crate::domain::driver::{
     Driver, DriverConfig, ListMountsError, MountError, MountStatus,
     MountStatusError,
@@ -34,7 +32,6 @@ inventory::submit! {
     }
 }
 
-/// Creates macOS FUSE mounts.
 #[derive(Default)]
 pub struct FuseDriver;
 

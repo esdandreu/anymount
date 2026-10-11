@@ -1,5 +1,3 @@
-// Copyright 2026 Dotphoton AG
-
 use std::path::PathBuf;
 use thiserror::Error;
 
