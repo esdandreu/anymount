@@ -18,4 +18,5 @@ libraries = [
     { path = "tools/lints/no_pub_crate" },
     { path = "tools/lints/no_super_outside_use" },
     { path = "tools/lints/driver_readme" },
+    { path = "tools/lints/no_mod_rs" },
 ]

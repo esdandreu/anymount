@@ -8,16 +8,10 @@ _.file = [".env.default", ".env"]
 description = "Run tests"
 depends = ["lint"]
 run = "cargo test --all"
-
-[tasks.lint]
-description = "Run custom Rust lints"
-run = "cargo dylint --all"
-
 [tasks.coverage]
 description = "Run tests with code coverage"
 run = "cargo llvm-cov --all-features"
 
-# Build Rust components
 [tasks.build]
 description = "Build platform-specific Rust components"
 depends = ["lint"]
@@ -25,7 +19,6 @@ sources = ["crates"]
 run = "cargo build -p anymount-cli --release{% if env.ANYMOUNT_FUSE == '1' %} --features anymount/fuse{% endif %}"
 outputs = ["target/**"]
 
-# Run the app
 [tasks.cli]
 alias = "anymount"
 description = "Run the application"
@@ -43,3 +36,59 @@ run_windows = "target\\release\\anymount-cli.exe"
 [tasks.review-tui-tests]
 description = "Review terminal user interface snapshot test changes"
 run = "cargo insta review"
+
+[tasks.lint]
+description = "Run custom Rust lints"
+depends = ["lint-build"]
+run = "cargo dylint --all --no-build"
+
+[tasks.lint-build]
+description = "Build custom Rust lint libraries"
+sources = [
+  "tools/lints/*/Cargo.toml",
+  "tools/lints/*/Cargo.lock",
+  "tools/lints/*/rust-toolchain.toml",
+  "tools/lints/*/src/**/*.rs",
+  "tools/lints/*/ui/**/*.rs",
+]
+outputs = ["target/lint-libraries/dylint"]
+run = '''
+for manifest in tools/lints/*/Cargo.toml; do
+  cargo +nightly-2026-08-20 build --release \
+    --target-dir target/lint-libraries \
+    --manifest-path "$manifest"
+done
+host=$(rustc +nightly-2026-08-20 -vV | awk '/^host:/ { print $2 }')
+case "$host" in
+  *apple*) extension=dylib ;;
+  *windows*) extension=dll ;;
+  *) extension=so ;;
+esac
+toolchain="nightly-2026-08-20-$host"
+cache="target/dylint/libraries/$toolchain/release"
+staging="target/lint-libraries/dylint"
+rm -rf "$staging"
+mkdir -p "$cache" "$staging"
+for library in target/lint-libraries/release/lib*.$extension; do
+  filename=${library##*/}
+  name=${filename#lib}
+  name=${name%.$extension}
+  suffixed="lib$name@$toolchain.$extension"
+  cp "$library" "$cache/$suffixed"
+  cp "$library" "$staging/$suffixed"
+done
+'''
+run_windows = '''
+$hostTriple = (rustc +nightly-2026-08-20 -vV | Select-String '^host:').ToString().Split(' ')[1]
+$toolchain = "nightly-2026-08-20-$hostTriple"
+$cache = "target/dylint/libraries/$toolchain/release"
+$staging = "target/lint-libraries/dylint"
+Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path $cache, $staging | Out-Null
+foreach ($library in Get-ChildItem "target/lint-libraries/release/lib*.dll") {
+  $name = $library.BaseName.Substring(3)
+  $suffixed = "lib$name@$toolchain.dll"
+  Copy-Item $library.FullName "$cache/$suffixed"
+  Copy-Item $library.FullName "$staging/$suffixed"
+}
+'''
