@@ -1,10 +1,9 @@
 use std::collections::HashMap;
 
-use anymount::{
-    ConfigRepository, MountStatus, domain::Mount, find_and_mount, is_mounted,
-};
-
 use crate::app::MountConfig;
+use anymount::{
+    ConfigRepository, MountStatus, domain::Mount, is_mounted, mount,
+};
 
 pub trait MountService {
     fn list(&self) -> color_eyre::Result<Vec<MountConfig>>;
@@ -34,9 +33,9 @@ where
         self.repository
             .list()
             .map(|config| {
-                let name = config.name.clone();
-                let path = config.path.clone();
-                let storage_type = config.storage.kind().to_owned();
+                let name = config.mount.name.clone();
+                let path = config.mount.path.clone();
+                let storage_type = config.mount.storage.kind().to_owned();
                 let status = is_mounted(config)?;
 
                 Ok(MountConfig {
@@ -50,7 +49,8 @@ where
     }
 
     fn connect(&mut self, name: &str) -> color_eyre::Result<()> {
-        let mount = find_and_mount(&self.repository, name)?;
+        let config = self.repository.find(name)?;
+        let mount = mount(config)?;
         self.active_mounts.insert(name.to_owned(), mount);
         Ok(())
     }

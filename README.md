@@ -64,6 +64,32 @@ mise run build
 
 Copy `.env.default` as `.env` and edit it to set build options.
 
+## Mounts
+
+```mermaid
+stateDiagram-v2
+    Unmounted --> Mounted
+    Mounted --> Unmounted
+
+    state Mounted {
+        Disconnected --> Connected
+        Connected --> Disconnected
+    }
+```
+
+- **Unmounted**: Configuration might exist but there is no artifact associated
+  to it on the system. For example, there is no Sync Root registered on Windows.
+- **Mounted**: The system contains artifacts associated to the mount. But the
+  mount doesn't necessarily have a live connection.
+  - **Connected**: The mount has a live connection to the storage provider. For
+    example, on Windows the Cloud Filter driver is running and providing
+    callbacks for filesystem events.
+  - **Disconnected**: The mount has no live connection to the storage provider.
+    For example, on Windows the Cloud Filter driver is not running and there are
+    no callbacks for filesystem events.
+
+
+
 ## Architecture
 
 `anymount` is organized around three layers.

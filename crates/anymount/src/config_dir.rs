@@ -108,8 +108,8 @@ error_message = "toml test"
         let config_dir = ConfigDir::new(dir.path().to_path_buf());
         let mounts = config_dir.list().collect::<Vec<_>>();
         let config = mounts.into_iter().next().expect("read config");
-        assert_eq!(config.name, "demo");
-        match config.storage.connect() {
+        assert_eq!(config.mount.name, "demo");
+        match config.mount.storage.connect() {
             Ok(_) => panic!("should not connect"),
             Err(ConnectStorageError::Failed { message, .. }) => {
                 assert_eq!(message, "toml test");
@@ -136,8 +136,8 @@ error_message = "toml test"
         let config_dir = ConfigDir::new(dir.path().to_path_buf());
         let mounts = config_dir.list().collect::<Vec<_>>();
         let config = mounts.into_iter().next().expect("read config");
-        assert_eq!(config.name, "demo");
-        match config.storage.connect() {
+        assert_eq!(config.mount.name, "demo");
+        match config.mount.storage.connect() {
             Ok(_) => panic!("should not connect"),
             Err(ConnectStorageError::Failed { message, .. }) => {
                 assert_eq!(message, "json test");
@@ -163,8 +163,8 @@ storage:
         let config_dir = ConfigDir::new(dir.path().to_path_buf());
         let mounts = config_dir.list().collect::<Vec<_>>();
         let config = mounts.into_iter().next().expect("read config");
-        assert_eq!(config.name, "demo");
-        match config.storage.connect() {
+        assert_eq!(config.mount.name, "demo");
+        match config.mount.storage.connect() {
             Ok(_) => panic!("should not connect"),
             Err(ConnectStorageError::Failed { message, .. }) => {
                 assert_eq!(message, "yaml test");

@@ -1,6 +1,6 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use super::{Mount, Storage};
+use super::{Mount, MountConfig};
 
 #[typetag::serde(tag = "type")]
 pub trait DriverConfig: Send + Sync {
@@ -14,12 +14,10 @@ pub trait DriverConfig: Send + Sync {
 pub trait Driver: Send + Sync {
     /// Registers a mount. If a mount was already registered, with the same
     /// name and path the storage will be re-configured.
-    fn mount(
-        &self,
-        name: String,
-        path: PathBuf,
-        storage: Box<dyn Storage>,
-    ) -> Result<Box<dyn Mount>, MountError>;
+    fn mount(&self, config: &MountConfig)
+    -> Result<Box<dyn Mount>, MountError>;
+
+    fn unmount(&self, name: &str) -> Result<(), MountError>;
 
     fn kind(&self) -> &'static str {
         std::any::type_name::<Self>()
@@ -35,8 +33,7 @@ pub trait Driver: Send + Sync {
     /// Returns an error when the platform mount registry cannot be inspected.
     fn is_mounted(
         &self,
-        name: &str,
-        expected_root: &Path,
+        config: &MountConfig,
     ) -> Result<MountStatus, MountStatusError>;
 
     /// Lists registered mounts.

@@ -12,8 +12,6 @@ pub trait Mount: Send + Sync {
     fn connect(&self) -> Result<(), ConnectMountError>;
 
     fn disconnect(&self) -> Result<(), DisconnectMountError>;
-
-    fn unregister(&self) -> Result<(), UnregisterMountError>;
 }
 
 /// A mount could not be connected to its storage.

@@ -5,7 +5,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use crate::domain::driver::DriverConfig;
-use crate::domain::{Config, StorageConfig};
+use crate::domain::{Config, MountConfig, StorageConfig};
 
 pub fn read_config(path: &Path) -> Result<Config, ReadConfigError> {
     let name = path
@@ -15,9 +15,11 @@ pub fn read_config(path: &Path) -> Result<Config, ReadConfigError> {
         .to_owned();
     let content = read_config_file(path)?;
     Ok(Config {
-        name,
-        path: content.path,
-        storage: content.storage,
+        mount: MountConfig {
+            name,
+            path: content.path,
+            storage: content.storage,
+        },
         driver: content.driver,
     })
 }

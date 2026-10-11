@@ -1,7 +1,7 @@
 //! Determines whether a configured mount is registered.
 
 use crate::domain::{Config, MountStatusError};
-use crate::drivers::{NoDefaultDriver, init_driver_or_default};
+use crate::drivers::{NoDefaultDriver, init_driver};
 
 pub use crate::domain::MountStatus;
 
@@ -12,10 +12,7 @@ pub use crate::domain::MountStatus;
 /// Returns an error when no driver is configured or the mount cannot be
 /// inspected.
 pub fn is_mounted(config: Config) -> Result<MountStatus, IsMountedError> {
-    let Config {
-        name, path, driver, ..
-    } = config;
-    Ok(init_driver_or_default(driver)?.is_mounted(&name, &path)?)
+    Ok(init_driver(config.driver.as_deref())?.is_mounted(&config.mount)?)
 }
 
 /// An error encountered while determining a mount's status.
@@ -23,7 +20,7 @@ pub fn is_mounted(config: Config) -> Result<MountStatus, IsMountedError> {
 pub enum IsMountedError {
     /// No configured or platform-default driver is available.
     #[error(transparent)]
-    NoDefaultDriver(#[from] NoDefaultDriver),
+    DriverSelection(#[from] NoDefaultDriver),
 
     /// The driver could not inspect the mount registration.
     #[error(transparent)]
