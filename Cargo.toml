@@ -14,4 +14,7 @@ authors = ["esdandreu"]
 build = "build.rs"
 
 [workspace.metadata.dylint]
-libraries = [{ path = "tools/lints/no_pub_crate" }]
+libraries = [
+    { path = "tools/lints/no_pub_crate" },
+    { path = "tools/lints/no_super_outside_use" },
+]

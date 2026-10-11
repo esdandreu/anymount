@@ -136,6 +136,6 @@ mod tests {
         let err =
             dehydrate_file(dir.path()).expect_err("directory should fail");
 
-        assert!(matches!(err, super::Error::CannotDehydrateDirectory { .. }));
+        assert!(matches!(err, Error::CannotDehydrateDirectory { .. }));
     }
 }

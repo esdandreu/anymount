@@ -1,3 +1,4 @@
+use super::callbacks::Callbacks;
 use super::{Error, Result};
 use crate::domain::driver::{
     Driver, DriverConfig, ListMountsError, MountError, MountStatus,
@@ -123,7 +124,7 @@ pub struct WindowsMount<S: Storage> {
     name: String,
     path: PathBuf,
     id: SyncRootId,
-    connection: Mutex<Option<Connection<super::callbacks::Callbacks<S>>>>,
+    connection: Mutex<Option<Connection<Callbacks<S>>>>,
 }
 
 impl<S: Storage + 'static> WindowsMount<S> {
@@ -170,10 +171,7 @@ impl<S: Storage + 'static> WindowsMount<S> {
         }
 
         let connection = CloudSession::new()
-            .connect(
-                &path,
-                super::callbacks::Callbacks::new(path.clone(), storage),
-            )
+            .connect(&path, Callbacks::new(path.clone(), storage))
             .map_err(|source| Error::CloudFilterOperation {
                 operation: "connect to sync root",
                 source,
@@ -238,10 +236,7 @@ mod tests {
     fn config_initializes_empty_driver() {
         let driver = WindowsDriverConfig.init();
 
-        assert_eq!(
-            driver.kind(),
-            std::any::type_name::<super::WindowsDriver>()
-        );
+        assert_eq!(driver.kind(), std::any::type_name::<WindowsDriver>());
     }
 
     #[test]

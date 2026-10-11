@@ -1,0 +1,28 @@
+error: import `super` items in a `use` statement instead of using `super::` paths
+  --> $DIR/main.rs:10:23
+   |
+LL |     fn direct_type(_: super::parent::Thing) {}
+   |                       ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[deny(no_super_outside_use)]` on by default
+
+error: import `super` items in a `use` statement instead of using `super::` paths
+  --> $DIR/main.rs:13:17
+   |
+LL |         let _ = super::parent::Thing;
+   |                 ^^^^^^^^^^^^^^^^^^^^
+
+error: import `super` items in a `use` statement instead of using `super::` paths
+  --> $DIR/main.rs:16:30
+   |
+LL |     fn direct_pattern(value: super::parent::Thing) {
+   |                              ^^^^^^^^^^^^^^^^^^^^
+
+error: import `super` items in a `use` statement instead of using `super::` paths
+  --> $DIR/main.rs:17:13
+   |
+LL |         let super::parent::Thing = value;
+   |             ^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 4 previous errors
+
