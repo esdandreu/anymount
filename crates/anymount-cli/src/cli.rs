@@ -1,6 +1,4 @@
-use std::future::Future;
 use std::path::PathBuf;
-use std::pin::Pin;
 
 use crate::commands::connect::ConnectCommand;
 use clap::{Parser, Subcommand};
@@ -29,12 +27,10 @@ pub enum Command {
 }
 
 impl Cli {
-    pub fn run(self) -> Pin<Box<dyn Future<Output = color_eyre::Result<()>>>> {
+    pub async fn run(self) -> color_eyre::Result<()> {
         match self.command {
-            Some(Command::Connect(cmd)) => {
-                Box::pin(async move { cmd.execute() })
-            }
-            None => Box::pin(anymount_tui::Tui::new(self.config_dir).run()),
+            Some(Command::Connect(cmd)) => cmd.execute(),
+            None => anymount_tui::Tui::new(self.config_dir).run().await,
         }
     }
 }
