@@ -19,8 +19,9 @@ impl Termination for AnymountResult {
     }
 }
 
-fn main() -> AnymountResult {
-    match Cli::parse().run() {
+#[tokio::main]
+async fn main() -> AnymountResult {
+    match Cli::parse().run().await {
         Ok(()) => AnymountResult::Ok,
         Err(_) => AnymountResult::Err,
     }

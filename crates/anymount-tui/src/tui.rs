@@ -26,15 +26,15 @@ impl Tui {
     ///
     /// Returns an error when configuration, terminal setup, or event handling
     /// fails.
-    pub fn run(self) -> color_eyre::Result<()> {
+    pub async fn run(self) -> color_eyre::Result<()> {
         color_eyre::install()?;
         let repository = self
             .config_dir
             .map_or_else(ConfigDir::default, ConfigDir::new);
         let service = AnymountMountService::new(repository);
-        let app = App::new(service)?;
+        let app = App::new(service).await?;
         let terminal = ratatui::init();
-        let result = app.run(terminal);
+        let result = app.run(terminal).await;
         ratatui::restore();
         result
     }

@@ -51,8 +51,8 @@ opentelemetry-appender-tracing = "0.31.1"
 opentelemetry-semantic-conventions = "0.31.0"
 typetag = "0.2.22"
 
-# macOS-specific dependencies (requires macFUSE installed)
-[target.'cfg(target_os = "macos")'.dependencies]
+# Unix-specific dependencies (requires FUSE installed)
+[target.'cfg(unix)'.dependencies]
 fuser = { version = "0.17", optional = true }
 libc = { version = "0.2", optional = true }
 

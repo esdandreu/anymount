@@ -63,8 +63,8 @@ mod tests {
     use super::*;
     use crate::test_utils::mocks::{EmptyStorageConfig, NoOpMount};
 
-    #[test]
-    fn driver_lifecycle_is_callable_through_trait_object() {
+    #[tokio::test]
+    async fn driver_lifecycle_is_callable_through_trait_object() {
         let mut mock_driver = MockDriver::new();
         mock_driver
             .expect_mount()
@@ -85,15 +85,10 @@ mod tests {
             path: PathBuf::from("/tmp/test"),
             storage: Box::new(EmptyStorageConfig),
         };
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .expect("create async runtime");
-
-        let mount = runtime
-            .block_on(driver.mount(&config))
-            .expect("mount should succeed");
-        runtime
-            .block_on(driver.unmount(mount.name()))
+        let mount = driver.mount(&config).await.expect("mount should succeed");
+        driver
+            .unmount(mount.name())
+            .await
             .expect("unmount should succeed");
     }
 }

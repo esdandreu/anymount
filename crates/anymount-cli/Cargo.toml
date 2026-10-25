@@ -6,6 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 anymount = { path = "../anymount" }
 anymount-tui = { path = "../anymount-tui" }
 clap = { version = "4.5", features = ["derive"] }

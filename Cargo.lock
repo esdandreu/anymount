@@ -154,6 +154,7 @@ dependencies = [
  "anymount-tui",
  "clap",
  "color-eyre",
+ "tokio",
 ]
 
 [[package]]
@@ -161,6 +162,7 @@ name = "anymount-tui"
 version = "0.1.0"
 dependencies = [
  "anymount",
+ "async-trait",
  "color-eyre",
  "crossterm 0.28.1",
  "insta",
