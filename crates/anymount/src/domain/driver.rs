@@ -6,7 +6,7 @@ use super::storage::ConnectStorageError;
 use super::{Mount, MountConfig};
 
 #[typetag::serde(tag = "type")]
-pub trait DriverConfig: Send + Sync {
+pub trait DriverConfig: super::PlatformSendSync {
     fn init(&self) -> Box<dyn Driver>;
 
     fn kind(&self) -> &'static str {
@@ -15,8 +15,9 @@ pub trait DriverConfig: Send + Sync {
 }
 
 #[cfg_attr(test, mockall::automock)]
-#[async_trait]
-pub trait Driver: Send + Sync {
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+pub trait Driver: super::PlatformSendSync {
     /// Registers a mount. No-op if a mount was already registered with the same
     /// configuration.
     async fn mount(
@@ -49,11 +50,13 @@ pub enum MountError {
 /// used by default when the mount does not specify any driver. Users of this
 /// library can override the default driver by submitting a their own drivers
 /// with a higher priority.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct DefaultDriverConfig {
     pub priority: i32,
     pub config: &'static dyn DriverConfig,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 inventory::collect!(DefaultDriverConfig);
 
 #[cfg(test)]

@@ -4,7 +4,6 @@ on:
     push:
         branches: [main]
     pull_request:
-        branches: [main]
 
 env:
     CARGO_TERM_COLOR: always
@@ -22,6 +21,15 @@ jobs:
               uses: dtolnay/rust-toolchain@stable
               with:
                   components: llvm-tools-preview
+
+            - name: Install WebAssembly target
+              run: rustup target add wasm32-unknown-unknown
+
+            - name: Check browser driver
+              run: cargo check -p anymount-browser --target wasm32-unknown-unknown
+
+            - name: Test browser adapter
+              run: node --test examples/browser/driver.test.mjs
 
             - name: Cache Rust
               uses: Swatinem/rust-cache@v2
