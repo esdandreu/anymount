@@ -14,6 +14,7 @@ pub trait DriverConfig: Send + Sync {
     }
 }
 
+#[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait Driver: Send + Sync {
     /// Registers a mount. No-op if a mount was already registered with the same
@@ -61,24 +62,6 @@ mod tests {
 
     use super::*;
     use crate::test_utils::mocks::{EmptyStorageConfig, NoOpMount};
-    use async_trait::async_trait;
-    use mockall::mock;
-
-    mock! {
-        Driver {}
-        #[async_trait]
-        impl Driver for Driver {
-            async fn mount(
-                &self,
-                config: &MountConfig,
-            ) -> std::result::Result<Box<dyn Mount>, MountError>;
-
-            async fn unmount(
-                &self,
-                name: &str,
-            ) -> std::result::Result<(), MountError>;
-        }
-    }
 
     #[test]
     fn driver_lifecycle_is_callable_through_trait_object() {

@@ -1,5 +1,5 @@
 use super::windows_mount::WindowsMount;
-use crate::domain::driver::{Driver, DriverConfig, MountError};
+use crate::domain::{Driver, DriverConfig, MountError};
 use crate::domain::{Mount, MountConfig};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -16,7 +16,7 @@ impl DriverConfig for WindowsDriverConfig {
 }
 
 inventory::submit! {
-    crate::domain::driver::DefaultDriverConfig {
+    crate::domain::DefaultDriverConfig {
         priority: 0,
         config: &WindowsDriverConfig,
     }

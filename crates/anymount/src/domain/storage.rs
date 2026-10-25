@@ -35,6 +35,7 @@ pub enum ConnectStorageError {
     Failed { kind: &'static str, message: String },
 }
 
+#[cfg_attr(test, mockall::automock)]
 pub trait Storage: Send + Sync {
     fn read_dir(
         &self,

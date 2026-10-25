@@ -1,0 +1,22 @@
+[package]
+name = "no_pub_mod_domain"
+version = "0.1.0"
+authors = ["esdandreu"]
+description = "Dylint lint that forbids public modules in domain.rs"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+dylint_linting = "=6.0.4"
+syn = { version = "2", features = ["full"] }
+
+[dev-dependencies]
+dylint_testing = "=6.0.4"
+
+[workspace]
+
+[package.metadata.rust-analyzer]
+rustc_private = true

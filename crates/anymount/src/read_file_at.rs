@@ -1,6 +1,6 @@
 use std::{ops::Range, path::PathBuf};
 
-use crate::domain::storage::{
+use crate::domain::{
     InvalidStoragePath, ReadFileAtError as StorageError, Storage, WriteAt,
 };
 
@@ -35,7 +35,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::storage::WriteAtError;
+    use crate::domain::WriteAtError;
     use crate::test_utils::mocks::NoOpStorage;
 
     struct TestWriter;

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::domain::storage::{
+use crate::domain::{
     DirEntry, InvalidStoragePath, ReadDirError as StorageError, Storage,
 };
 

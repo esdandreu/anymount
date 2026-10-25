@@ -1,5 +1,5 @@
 use super::{CachePort, CachedDirCache, CachedDirEntry, Result};
-use crate::domain::storage::{Storage, WriteAt, WriteAtError};
+use crate::domain::{Storage, WriteAt, WriteAtError};
 use crate::{read_dir, read_file_at};
 use fuser::{
     Errno, FileAttr, FileHandle, FileType, Generation, INodeNo, OpenFlags,
@@ -437,59 +437,15 @@ mod tests {
         CachePort, CachedDirCache, CachedDirEntry, DOT_DOT_ENTRY_OFFSET,
         DOT_ENTRY_OFFSET, FIRST_CHILD_ENTRY_OFFSET, StorageFilesystem,
     };
-    use crate::domain::storage::{
-        DirEntry, ReadDirError, ReadFileAtError, Storage as StoragePort,
-        StoragePath, WriteAt,
+    use crate::domain::{
+        DirEntry, MockStorage, ReadDirError, ReadFileAtError, StoragePath,
     };
+    use crate::drivers::fuse::cached_dir::MockCachePort as MockCache;
     use crate::drivers::fuse::error::Error;
     use crate::drivers::fuse::{NoCacheFsCache, Result};
-    use mockall::mock;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::{Duration, SystemTime};
-
-    mock! {
-        Cache {}
-        impl CachePort for Cache {
-            fn sync_metadata_placeholders(
-                &self,
-                dir_path: &Path,
-                entries: &[CachedDirEntry],
-            ) -> Result<()>;
-            fn read_range(
-                &self,
-                path: &Path,
-                start: u64,
-                end: u64,
-            ) -> Result<Vec<u8>>;
-            fn write_range(
-                &self,
-                path: &Path,
-                start: u64,
-                data: &[u8],
-                size: u64,
-            ) -> Result<()>;
-        }
-    }
-
-    mock! {
-        Storage {}
-        impl StoragePort for Storage {
-            fn read_dir(
-                &self,
-                path: StoragePath,
-            ) -> std::result::Result<
-                Box<dyn Iterator<Item = Box<dyn DirEntry>>>,
-                ReadDirError,
-            >;
-            fn read_file_at(
-                &self,
-                path: StoragePath,
-                writer: &mut dyn WriteAt,
-                range: std::ops::Range<u64>,
-            ) -> std::result::Result<(), ReadFileAtError>;
-        }
-    }
 
     #[derive(Clone)]
     struct TestDirEntry {

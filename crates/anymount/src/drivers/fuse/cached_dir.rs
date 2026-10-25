@@ -66,6 +66,7 @@ impl Default for CachedDirCache {
     }
 }
 
+#[cfg_attr(test, mockall::automock)]
 pub trait CachePort: Send + Sync {
     fn sync_metadata_placeholders(
         &self,

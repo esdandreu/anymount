@@ -13,5 +13,5 @@ pub enum MountError {
     DriverSelection(#[from] NoDefaultDriver),
 
     #[error("failed to mount: {0}")]
-    CannotMount(#[from] crate::domain::driver::MountError),
+    CannotMount(#[from] crate::domain::MountError),
 }

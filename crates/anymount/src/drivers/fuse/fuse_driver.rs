@@ -1,4 +1,4 @@
-use crate::domain::driver::{Driver, DriverConfig, MountError};
+use crate::domain::{Driver, DriverConfig, MountError};
 use crate::domain::{Mount, MountConfig};
 use crate::drivers::fuse::fuse_mount::FuseMount;
 use crate::drivers::fuse::{NoCacheFsCache, StorageFilesystem};
@@ -17,7 +17,7 @@ impl DriverConfig for FuseDriverConfig {
 }
 
 inventory::submit! {
-    crate::domain::driver::DefaultDriverConfig {
+    crate::domain::DefaultDriverConfig {
         priority: 0,
         config: &FuseDriverConfig,
     }

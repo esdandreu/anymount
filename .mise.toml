@@ -44,7 +44,10 @@ run = "cargo dylint --all --no-build"
 
 [tasks.lint-tests]
 description = "Test custom Rust lints"
-run = "cargo +nightly-2026-08-20 test --manifest-path tools/lints/module_names/Cargo.toml"
+run = '''
+cargo +nightly-2026-08-20 test --manifest-path tools/lints/module_names/Cargo.toml
+cargo +nightly-2026-08-20 test --manifest-path tools/lints/no_pub_mod_domain/Cargo.toml
+'''
 
 [tasks.lint-build]
 description = "Build custom Rust lint libraries"
