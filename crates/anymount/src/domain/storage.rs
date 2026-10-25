@@ -104,10 +104,6 @@ pub enum ReadDirError {
     #[error("storage is unavailable: {message}")]
     Unavailable { message: String },
 
-    // TODO remove, use one of the others
-    #[error("storage returned an invalid response: {message}")]
-    InvalidResponse { message: String },
-
     #[error("failed to list directory: {message}")]
     Unknown { message: String },
 }
@@ -150,9 +146,6 @@ pub enum ReadFileAtError {
 
     #[error("storage is unavailable: {message}")]
     Unavailable { message: String },
-
-    #[error("storage returned an invalid response: {message}")]
-    InvalidResponse { message: String },
 
     #[error("failed to write content")]
     WriteAt(#[from] WriteAtError),

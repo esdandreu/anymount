@@ -407,7 +407,7 @@ where
             return Err(read_dir_status_error(status, &body));
         }
         let parsed: GraphChildrenResponse = serde_json::from_slice(&body)
-            .map_err(|source| ReadDirError::InvalidResponse {
+            .map_err(|source| ReadDirError::Unknown {
                 message: Error::ListResponse {
                     url: url.clone(),
                     source,

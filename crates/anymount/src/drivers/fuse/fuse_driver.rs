@@ -1,6 +1,4 @@
-use crate::domain::driver::{
-    Driver, DriverConfig, MountError,
-};
+use crate::domain::driver::{Driver, DriverConfig, MountError};
 use crate::domain::{Mount, Storage};
 use crate::drivers::fuse::fuse_mount::FuseMount;
 use crate::drivers::fuse::{NoCacheFsCache, StorageFilesystem};
@@ -63,5 +61,4 @@ impl Driver for FuseDriver {
         )?;
         Ok(Box::new(FuseMount::new(name, path, session)))
     }
-
 }

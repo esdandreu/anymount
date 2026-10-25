@@ -23,7 +23,6 @@ pub trait Driver: Send + Sync {
     fn kind(&self) -> &'static str {
         std::any::type_name::<Self>()
     }
-
 }
 
 #[derive(Debug, thiserror::Error)]
