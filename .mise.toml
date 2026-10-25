@@ -39,8 +39,12 @@ run = "cargo insta review"
 
 [tasks.lint]
 description = "Run custom Rust lints"
-depends = ["lint-build"]
+depends = ["lint-build", "lint-tests"]
 run = "cargo dylint --all --no-build"
+
+[tasks.lint-tests]
+description = "Test custom Rust lints"
+run = "cargo +nightly-2026-08-20 test --manifest-path tools/lints/module_names/Cargo.toml"
 
 [tasks.lint-build]
 description = "Build custom Rust lint libraries"
