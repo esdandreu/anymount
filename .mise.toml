@@ -37,6 +37,18 @@ run_windows = "target\\release\\anymount-cli.exe"
 description = "Review terminal user interface snapshot test changes"
 run = "cargo insta review"
 
+[tasks.browser-test]
+description = "Test the browser driver adapter"
+run = "node --test examples/browser/driver.test.mjs"
+
+[tasks.browser-build]
+description = "Build the browser driver WebAssembly package"
+run = "wasm-pack build crates/anymount-browser --target web --out-dir ../../examples/browser/pkg --release"
+
+[tasks.browser-serve]
+description = "Serve the static browser example on localhost"
+run = "python3 -m http.server 4173 --directory examples/browser"
+
 [tasks.lint]
 description = "Run custom Rust lints"
 depends = ["lint-build"]
