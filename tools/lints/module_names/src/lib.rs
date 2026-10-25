@@ -9,6 +9,7 @@ extern crate rustc_session;
 extern crate rustc_span;
 
 use rustc_lint::{LateContext, LateLintPass, LintContext};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -17,7 +18,7 @@ dylint_linting::dylint_library!();
 rustc_lint_defs::declare_lint!(
     pub MODULE_NAMES,
     Deny,
-    "module filenames must match their public item names"
+    "module names and mock exports must follow project conventions"
 );
 
 rustc_lint_defs::declare_lint_pass!(ModuleNames => [MODULE_NAMES]);
@@ -89,6 +90,10 @@ fn validate_module_names(source_dir: &Path) -> std::io::Result<Vec<String>> {
             .filter_map(public_item_name)
             .collect::<Vec<_>>();
 
+        if is_mock_module_file(&file) {
+            issues.extend(validate_mock_exports(&file, &syntax)?);
+        }
+
         if public_items.is_empty() || is_special_module_file(&file) {
             continue;
         }
@@ -110,6 +115,86 @@ fn validate_module_names(source_dir: &Path) -> std::io::Result<Vec<String>> {
     }
 
     Ok(issues)
+}
+
+fn validate_mock_exports(
+    file: &Path,
+    syntax: &syn::File,
+) -> std::io::Result<Vec<String>> {
+    let mut issues = Vec::new();
+    let mut modules = BTreeSet::new();
+    let mut reexports = BTreeSet::new();
+
+    for item in &syntax.items {
+        match item {
+            syn::Item::Mod(module) => {
+                modules.insert(module.ident.to_string());
+                if !matches!(&module.vis, syn::Visibility::Inherited) {
+                    issues.push(format!(
+                        "mock module `{}` must be private; re-export its public items with `pub use module::Item`",
+                        module.ident
+                    ));
+                }
+            }
+            syn::Item::Use(item_use)
+                if matches!(&item_use.vis, syn::Visibility::Public(_)) =>
+            {
+                collect_reexports(&item_use.tree, &mut Vec::new(), &mut reexports);
+            }
+            _ => {}
+        }
+    }
+
+    let parent = file.parent().unwrap_or_else(|| Path::new("."));
+    for module in modules {
+        let child_file = parent.join(format!("{module}.rs"));
+        if !child_file.is_file() {
+            continue;
+        }
+
+        let contents = fs::read_to_string(&child_file)?;
+        let child_syntax = syn::parse_file(&contents).map_err(|error| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, error)
+        })?;
+        for item in &child_syntax.items {
+            let Some(name) = public_item_name(item) else {
+                continue;
+            };
+            if !reexports.contains(&(module.clone(), name.clone())) {
+                issues.push(format!(
+                    "mock module `{module}` exports public item `{name}` without `pub use {module}::{name}`"
+                ));
+            }
+        }
+    }
+
+    Ok(issues)
+}
+
+fn collect_reexports(
+    tree: &syn::UseTree,
+    path: &mut Vec<String>,
+    reexports: &mut BTreeSet<(String, String)>,
+) {
+    match tree {
+        syn::UseTree::Path(tree_path) => {
+            path.push(tree_path.ident.to_string());
+            collect_reexports(&tree_path.tree, path, reexports);
+            path.pop();
+        }
+        syn::UseTree::Name(tree_name) if path.len() == 1 => {
+            reexports.insert((path[0].clone(), tree_name.ident.to_string()));
+        }
+        syn::UseTree::Rename(tree_rename) if path.len() == 1 => {
+            reexports.insert((path[0].clone(), tree_rename.ident.to_string()));
+        }
+        syn::UseTree::Group(tree_group) => {
+            for item in &tree_group.items {
+                collect_reexports(item, path, reexports);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn find_rust_files(
@@ -142,6 +227,14 @@ fn is_special_module_file(path: &Path) -> bool {
             .iter()
             .any(|special_name| name == *special_name)
     })
+}
+
+fn is_mock_module_file(path: &Path) -> bool {
+    path.file_name().is_some_and(|name| name == "mod.rs")
+        && path
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|name| name == "mocks")
 }
 
 fn public_item_name(item: &syn::Item) -> Option<String> {
@@ -230,6 +323,46 @@ fn accepts_module_name_that_matches_public_function() {
         "pub fn read_file() {}",
     )
     .expect("write module");
+
+    let issues = validate_module_names(temp_dir.path())
+        .expect("validate module names");
+
+    assert!(issues.is_empty());
+}
+
+#[test]
+fn requires_private_mock_modules_and_public_item_reexports() {
+    let temp_dir = tempfile::tempdir().expect("temporary directory");
+    let mocks_dir = temp_dir.path().join("test_utils/mocks");
+    fs::create_dir_all(&mocks_dir).expect("mocks directory");
+    fs::write(mocks_dir.join("mod.rs"), "pub mod sample;")
+        .expect("write mocks module");
+    fs::write(mocks_dir.join("sample.rs"), "pub struct Sample;")
+        .expect("write sample module");
+
+    let issues = validate_module_names(temp_dir.path())
+        .expect("validate module names");
+
+    assert!(issues.iter().any(|issue| issue.contains(
+        "mock module `sample` must be private"
+    )));
+    assert!(issues.iter().any(|issue| issue.contains(
+        "without `pub use sample::Sample`"
+    )));
+}
+
+#[test]
+fn accepts_private_mock_modules_with_explicit_reexports() {
+    let temp_dir = tempfile::tempdir().expect("temporary directory");
+    let mocks_dir = temp_dir.path().join("test_utils/mocks");
+    fs::create_dir_all(&mocks_dir).expect("mocks directory");
+    fs::write(
+        mocks_dir.join("mod.rs"),
+        "mod sample;\npub use sample::Sample;",
+    )
+    .expect("write mocks module");
+    fs::write(mocks_dir.join("sample.rs"), "pub struct Sample;")
+        .expect("write sample module");
 
     let issues = validate_module_names(temp_dir.path())
         .expect("validate module names");

@@ -2,7 +2,7 @@
 name = "module_names"
 version = "0.1.0"
 authors = ["esdandreu"]
-description = "Dylint lint that matches module filenames to exported types"
+description = "Dylint lint for module names and mock export conventions"
 edition = "2024"
 publish = false
 
