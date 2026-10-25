@@ -77,10 +77,10 @@ jobs:
               uses: taiki-e/install-action@nextest
 
             - name: Run tests (JUnit for analytics)
-              run: cargo nextest run --no-default-features --profile ci
+              run: cargo nextest run --profile ci
 
             - name: Run tests with coverage
-              run: cargo llvm-cov --no-default-features --lcov --output-path lcov.info
+              run: cargo llvm-cov --lcov --output-path lcov.info
 
             - name: Upload coverage to Codecov
               uses: codecov/codecov-action@v5
