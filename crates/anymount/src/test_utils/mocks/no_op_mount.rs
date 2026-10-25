@@ -1,10 +1,12 @@
 use crate::domain::{
     ConnectMountError, DisconnectMountError, Mount, UnregisterMountError,
 };
+use async_trait::async_trait;
 use std::path::Path;
 
 pub struct NoOpMount;
 
+#[async_trait]
 impl Mount for NoOpMount {
     fn name(&self) -> &str {
         "no-op"
@@ -18,15 +20,15 @@ impl Mount for NoOpMount {
         true
     }
 
-    fn connect(&self) -> Result<(), ConnectMountError> {
+    async fn connect(&self) -> Result<(), ConnectMountError> {
         Ok(())
     }
 
-    fn disconnect(&self) -> Result<(), DisconnectMountError> {
+    async fn disconnect(&self) -> Result<(), DisconnectMountError> {
         Ok(())
     }
 
-    fn unregister(&self) -> Result<(), UnregisterMountError> {
+    async fn unregister(&self) -> Result<(), UnregisterMountError> {
         Ok(())
     }
 }

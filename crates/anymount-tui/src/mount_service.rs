@@ -60,7 +60,7 @@ where
                 "mount '{name}' was not connected by this TUI session"
             )
         })?;
-        mount.disconnect()?;
+        mount.disconnect().await?;
         self.active_mounts.remove(name);
         Ok(())
     }

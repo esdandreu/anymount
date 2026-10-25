@@ -1,6 +1,7 @@
 use crate::domain::{
     ConnectMountError, DisconnectMountError, Mount, UnregisterMountError,
 };
+use async_trait::async_trait;
 use parking_lot::Mutex;
 use std::path::{Path, PathBuf};
 
@@ -24,6 +25,7 @@ impl FuseMount {
     }
 }
 
+#[async_trait]
 impl Mount for FuseMount {
     fn name(&self) -> &str {
         &self.name
@@ -37,7 +39,7 @@ impl Mount for FuseMount {
         self.session.lock().is_some()
     }
 
-    fn connect(&self) -> Result<(), ConnectMountError> {
+    async fn connect(&self) -> Result<(), ConnectMountError> {
         if self.is_connected() {
             Ok(())
         } else {
@@ -49,12 +51,12 @@ impl Mount for FuseMount {
         }
     }
 
-    fn disconnect(&self) -> Result<(), DisconnectMountError> {
+    async fn disconnect(&self) -> Result<(), DisconnectMountError> {
         self.session.lock().take();
         Ok(())
     }
 
-    fn unregister(&self) -> Result<(), UnregisterMountError> {
+    async fn unregister(&self) -> Result<(), UnregisterMountError> {
         self.session.lock().take();
         std::fs::remove_dir(&self.path).map_err(|source| {
             UnregisterMountError {
