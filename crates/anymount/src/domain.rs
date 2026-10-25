@@ -15,3 +15,6 @@ pub use storage::{
     ReadFileAtError, Storage, StorageConfig, StoragePath, WriteAt,
     WriteAtError,
 };
+
+#[cfg(test)]
+pub use storage::MockStorage;

@@ -9,5 +9,5 @@ pub use init_driver::init_driver;
 #[cfg(target_os = "windows")]
 pub mod windows;
 
-#[cfg(feature = "fuse")]
+#[cfg(all(feature = "fuse", target_os = "macos"))]
 pub mod fuse;
