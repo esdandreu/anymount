@@ -70,6 +70,9 @@ jobs:
               with:
                   key: llvm-cov
 
+            - name: Check FUSE feature
+              run: cargo check -p anymount --features fuse
+
             - name: Install cargo-llvm-cov
               run: cargo install cargo-llvm-cov
 
