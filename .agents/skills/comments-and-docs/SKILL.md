@@ -1,8 +1,9 @@
 ---
 name: comments-and-docs
 description: >
-  Keeps code and docs simple with minimal comments and clear markdown. Use
-  when writing code, docstrings, comments, or markdown in this project.
+  ALWAYS invoke this skill when writing docstrings, comments, or markdown in 
+  this project. Keeps code and docs simple with minimal comments and clear 
+  markdown.
 ---
 
 # Comments and documentation

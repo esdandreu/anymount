@@ -1,9 +1,9 @@
 ---
 name: mise-tasks
 description: >
-  Use mise for task execution instead of ad-hoc scripts or markdown run
-  instructions. Use when running builds, tests, or any project tasks, or
-  when the user asks how to run something.
+  ALWAYS invoke this skill BEFORE running builds, tests, or any project tasks, 
+  or when the user asks how to run something. Use mise for task execution 
+  instead of ad-hoc scripts or markdown run instructions.
 ---
 
 # Mise task execution
