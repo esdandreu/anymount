@@ -86,6 +86,9 @@ mod tests {
             storage: Box::new(EmptyStorageConfig),
         };
         let mount = driver.mount(&config).await.expect("mount should succeed");
+        mount.connect().await.expect("mount should connect");
+        mount.disconnect().await.expect("mount should disconnect");
+        mount.unregister().await.expect("mount should unregister");
         driver
             .unmount(mount.name())
             .await

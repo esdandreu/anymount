@@ -4,6 +4,7 @@ use crate::domain::{
     ConnectMountError, DisconnectMountError, Mount, Storage,
     UnregisterMountError,
 };
+use async_trait::async_trait;
 use cloud_filter::root::{
     Connection, HydrationType, PopulationType, SecurityId,
     Session as CloudSession, SyncRootId, SyncRootIdBuilder, SyncRootInfo,
@@ -92,6 +93,7 @@ impl<S: Storage + 'static> WindowsMount<S> {
     }
 }
 
+#[async_trait]
 impl<S: Storage + 'static> Mount for WindowsMount<S> {
     fn name(&self) -> &str {
         &self.name
@@ -105,7 +107,7 @@ impl<S: Storage + 'static> Mount for WindowsMount<S> {
         self.connection.lock().is_some()
     }
 
-    fn connect(&self) -> std::result::Result<(), ConnectMountError> {
+    async fn connect(&self) -> std::result::Result<(), ConnectMountError> {
         if self.is_connected() {
             Ok(())
         } else {
@@ -118,12 +120,16 @@ impl<S: Storage + 'static> Mount for WindowsMount<S> {
         }
     }
 
-    fn disconnect(&self) -> std::result::Result<(), DisconnectMountError> {
+    async fn disconnect(
+        &self,
+    ) -> std::result::Result<(), DisconnectMountError> {
         self.connection.lock().take();
         Ok(())
     }
 
-    fn unregister(&self) -> std::result::Result<(), UnregisterMountError> {
+    async fn unregister(
+        &self,
+    ) -> std::result::Result<(), UnregisterMountError> {
         self.connection.lock().take();
         self.id.unregister().map_err(|source| UnregisterMountError {
             path: self.path.clone(),

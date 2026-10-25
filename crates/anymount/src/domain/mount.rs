@@ -1,6 +1,8 @@
+use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+#[async_trait]
 pub trait Mount: Send + Sync {
     fn name(&self) -> &str;
 
@@ -9,11 +11,11 @@ pub trait Mount: Send + Sync {
 
     fn is_connected(&self) -> bool;
 
-    fn connect(&self) -> Result<(), ConnectMountError>;
+    async fn connect(&self) -> Result<(), ConnectMountError>;
 
-    fn disconnect(&self) -> Result<(), DisconnectMountError>;
+    async fn disconnect(&self) -> Result<(), DisconnectMountError>;
 
-    fn unregister(&self) -> Result<(), UnregisterMountError>;
+    async fn unregister(&self) -> Result<(), UnregisterMountError>;
 }
 
 /// A mount could not be connected to its storage.

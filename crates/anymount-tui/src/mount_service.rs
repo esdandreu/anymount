@@ -48,8 +48,21 @@ where
     }
 
     async fn connect(&mut self, name: &str) -> color_eyre::Result<()> {
+        if self.active_mounts.contains_key(name) {
+            return Ok(());
+        }
         let config = self.repository.find(name)?;
         let mount = mount(config).await?;
+        if !mount.is_connected()
+            && let Err(error) = mount.connect().await
+        {
+            if let Err(cleanup_error) = mount.unregister().await {
+                return Err(color_eyre::eyre::eyre!(
+                    "failed to connect mount: {error}; cleanup also failed: {cleanup_error}"
+                ));
+            }
+            return Err(error.into());
+        }
         self.active_mounts.insert(name.to_owned(), mount);
         Ok(())
     }
@@ -60,7 +73,7 @@ where
                 "mount '{name}' was not connected by this TUI session"
             )
         })?;
-        mount.disconnect()?;
+        mount.disconnect().await?;
         self.active_mounts.remove(name);
         Ok(())
     }
