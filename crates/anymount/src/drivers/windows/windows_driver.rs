@@ -1,8 +1,8 @@
 use super::windows_mount::WindowsMount;
 use crate::domain::driver::{Driver, DriverConfig, MountError};
-use crate::domain::{Mount, Storage};
+use crate::domain::{Mount, MountConfig};
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 /// Configuration for the Windows CloudFilter driver.
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
@@ -25,17 +25,22 @@ inventory::submit! {
 /// Creates Windows CloudFilter mounts.
 pub struct WindowsDriver;
 
+#[async_trait]
 impl Driver for WindowsDriver {
-    fn mount(
+    async fn mount(
         &self,
-        name: String,
-        path: PathBuf,
-        storage: Box<dyn Storage>,
+        config: &MountConfig,
     ) -> std::result::Result<Box<dyn Mount>, MountError> {
-        WindowsMount::new(name, path.clone(), storage)
+        let storage = config.storage.connect().map_err(|source| {
+            MountError::CannotMountAtPath {
+                path: config.path.clone(),
+                message: source.to_string(),
+            }
+        })?;
+        WindowsMount::new(config.name.clone(), config.path.clone(), storage)
             .map(|mount| Box::new(mount) as Box<dyn Mount>)
             .map_err(|source| MountError::CannotMountAtPath {
-                path,
+                path: config.path.clone(),
                 message: source.to_string(),
             })
     }

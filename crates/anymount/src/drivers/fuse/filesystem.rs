@@ -7,10 +7,17 @@ use fuser::{
 };
 use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
+
+pub const ROOT_INO: u64 = 1;
+pub const FUSE_GENERATION: Generation = Generation(1);
+pub const TTL: Duration = Duration::from_secs(1);
+pub const DOT_ENTRY_OFFSET: u64 = 1;
+pub const DOT_DOT_ENTRY_OFFSET: u64 = 2;
+pub const FIRST_CHILD_ENTRY_OFFSET: u64 = 3;
 
 #[derive(Clone)]
 pub struct NodeInfo {
@@ -428,12 +435,12 @@ impl<S: Storage> StorageFilesystem<S> {
 mod tests {
     use super::{
         CachePort, CachedDirCache, CachedDirEntry, DOT_DOT_ENTRY_OFFSET,
-        DOT_ENTRY_OFFSET, FIRST_CHILD_ENTRY_OFFSET, NoCacheFsCache,
-        StorageFilesystem,
+        DOT_ENTRY_OFFSET, FIRST_CHILD_ENTRY_OFFSET, StorageFilesystem,
     };
     use crate::domain::storage::{
         DirEntry, ReadDirError, ReadFileAtError, Storage, StoragePath, WriteAt,
     };
+    use crate::drivers::fuse::NoCacheFsCache;
     use crate::drivers::fuse::error::Error;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;

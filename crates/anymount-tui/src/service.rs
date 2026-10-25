@@ -34,7 +34,9 @@ where
                 let name = config.mount.name.clone();
                 let path = config.mount.path.clone();
                 let storage_type = config.mount.storage.kind().to_owned();
-                let mount = mount(config)?;
+                let mount = tokio::runtime::Builder::new_current_thread()
+                    .build()?
+                    .block_on(mount(config))?;
 
                 Ok(MountConfig {
                     name,
@@ -48,7 +50,9 @@ where
 
     fn connect(&mut self, name: &str) -> color_eyre::Result<()> {
         let config = self.repository.find(name)?;
-        let mount = mount(config)?;
+        let mount = tokio::runtime::Builder::new_current_thread()
+            .build()?
+            .block_on(mount(config))?;
         self.active_mounts.insert(name.to_owned(), mount);
         Ok(())
     }

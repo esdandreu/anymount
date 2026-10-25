@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
+const DIR_CACHE_TTL: Duration = Duration::from_secs(1);
+
 #[derive(Debug, Clone)]
 pub struct CachedDirEntry {
     pub file_name: String,

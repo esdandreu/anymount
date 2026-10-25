@@ -7,7 +7,7 @@ use std::{ops::Range, time::SystemTime};
 use super::auth::{AuthStorageError, StartedAuthorization};
 
 #[typetag::serde(tag = "type")]
-pub trait StorageConfig {
+pub trait StorageConfig: Send + Sync {
     fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError>;
 
     fn kind(&self) -> &'static str {
