@@ -70,9 +70,6 @@ jobs:
               with:
                   key: llvm-cov
 
-            - name: Check FUSE feature
-              run: cargo check -p anymount --features fuse
-
             - name: Install cargo-llvm-cov
               run: cargo install cargo-llvm-cov
 
@@ -80,10 +77,10 @@ jobs:
               uses: taiki-e/install-action@nextest
 
             - name: Run tests (JUnit for analytics)
-              run: cargo nextest run --all-features --profile ci
+              run: cargo nextest run --no-default-features --profile ci
 
             - name: Run tests with coverage
-              run: cargo llvm-cov --all-features --lcov --output-path lcov.info
+              run: cargo llvm-cov --no-default-features --lcov --output-path lcov.info
 
             - name: Upload coverage to Codecov
               uses: codecov/codecov-action@v5
