@@ -34,12 +34,7 @@ impl Driver for FuseDriver {
     ) -> Result<Box<dyn Mount>, MountError> {
         let name = config.name.clone();
         let path = config.path.clone();
-        let storage = config.storage.connect().map_err(|source| {
-            MountError::CannotMountAtPath {
-                path: path.clone(),
-                message: source.to_string(),
-            }
-        })?;
+        let storage = config.storage.connect()?;
         std::fs::create_dir_all(&path).map_err(|source| {
             MountError::CannotMountAtPath {
                 path: path.clone(),
@@ -67,5 +62,9 @@ impl Driver for FuseDriver {
             },
         )?;
         Ok(Box::new(FuseMount::new(name, path, session)))
+    }
+
+    async fn unmount(&self, _name: &str) -> Result<(), MountError> {
+        Ok(())
     }
 }

@@ -438,14 +438,58 @@ mod tests {
         DOT_ENTRY_OFFSET, FIRST_CHILD_ENTRY_OFFSET, StorageFilesystem,
     };
     use crate::domain::storage::{
-        DirEntry, ReadDirError, ReadFileAtError, Storage, StoragePath, WriteAt,
+        DirEntry, ReadDirError, ReadFileAtError, Storage as StoragePort,
+        StoragePath, WriteAt,
     };
-    use crate::drivers::fuse::NoCacheFsCache;
     use crate::drivers::fuse::error::Error;
+    use crate::drivers::fuse::{NoCacheFsCache, Result};
+    use mockall::mock;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, SystemTime};
+
+    mock! {
+        Cache {}
+        impl CachePort for Cache {
+            fn sync_metadata_placeholders(
+                &self,
+                dir_path: &Path,
+                entries: &[CachedDirEntry],
+            ) -> Result<()>;
+            fn read_range(
+                &self,
+                path: &Path,
+                start: u64,
+                end: u64,
+            ) -> Result<Vec<u8>>;
+            fn write_range(
+                &self,
+                path: &Path,
+                start: u64,
+                data: &[u8],
+                size: u64,
+            ) -> Result<()>;
+        }
+    }
+
+    mock! {
+        Storage {}
+        impl StoragePort for Storage {
+            fn read_dir(
+                &self,
+                path: StoragePath,
+            ) -> std::result::Result<
+                Box<dyn Iterator<Item = Box<dyn DirEntry>>>,
+                ReadDirError,
+            >;
+            fn read_file_at(
+                &self,
+                path: StoragePath,
+                writer: &mut dyn WriteAt,
+                range: std::ops::Range<u64>,
+            ) -> std::result::Result<(), ReadFileAtError>;
+        }
+    }
 
     #[derive(Clone)]
     struct TestDirEntry {
@@ -473,99 +517,30 @@ mod tests {
         }
     }
 
-    struct CountingStorage {
-        read_dir_calls: Arc<AtomicUsize>,
-        read_file_calls: Arc<AtomicUsize>,
-    }
-
-    impl Storage for CountingStorage {
-        fn read_dir(
-            &self,
-            _path: StoragePath,
-        ) -> std::result::Result<
-            Box<dyn Iterator<Item = Box<dyn DirEntry>>>,
-            ReadDirError,
-        > {
-            self.read_dir_calls.fetch_add(1, Ordering::SeqCst);
-            let entry: Box<dyn DirEntry> = Box::new(TestDirEntry {
-                file_name: "alpha.txt".to_string(),
-                is_dir: false,
-                size: 5,
-                accessed: SystemTime::UNIX_EPOCH,
+    fn mock_storage(read_dir_calls: usize) -> MockStorage {
+        let mut storage = MockStorage::new();
+        storage
+            .expect_read_dir()
+            .times(read_dir_calls)
+            .returning_st(|_| {
+                let entry: Box<dyn DirEntry> = Box::new(TestDirEntry {
+                    file_name: "alpha.txt".to_string(),
+                    is_dir: false,
+                    size: 5,
+                    accessed: SystemTime::UNIX_EPOCH,
+                });
+                Ok(Box::new(std::iter::once(entry)))
             });
-            Ok(Box::new(std::iter::once(entry)))
-        }
-
-        fn read_file_at(
-            &self,
-            _path: StoragePath,
-            _writer: &mut dyn WriteAt,
-            _range: std::ops::Range<u64>,
-        ) -> std::result::Result<(), ReadFileAtError> {
-            self.read_file_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        }
+        storage
     }
 
-    struct MockCachePort {
-        sync_calls: Arc<AtomicUsize>,
-        read_calls: Arc<AtomicUsize>,
-        write_calls: Arc<AtomicUsize>,
-    }
-
-    impl MockCachePort {
-        fn new() -> (Self, Arc<AtomicUsize>, Arc<AtomicUsize>, Arc<AtomicUsize>)
-        {
-            let sync_calls = Arc::new(AtomicUsize::new(0));
-            let read_calls = Arc::new(AtomicUsize::new(0));
-            let write_calls = Arc::new(AtomicUsize::new(0));
-            (
-                Self {
-                    sync_calls: sync_calls.clone(),
-                    read_calls: read_calls.clone(),
-                    write_calls: write_calls.clone(),
-                },
-                sync_calls,
-                read_calls,
-                write_calls,
-            )
-        }
-    }
-
-    impl CachePort for MockCachePort {
-        fn sync_metadata_placeholders(
-            &self,
-            _dir_path: &Path,
-            _entries: &[CachedDirEntry],
-        ) -> crate::drivers::fuse::Result<()> {
-            self.sync_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        }
-
-        fn read_range(
-            &self,
-            _path: &Path,
-            _start: u64,
-            _end: u64,
-        ) -> crate::drivers::fuse::Result<Vec<u8>> {
-            self.read_calls.fetch_add(1, Ordering::SeqCst);
-            Err(Error::CacheRangeNotCached {
-                path: PathBuf::new(),
-                start: 0,
-                end: 0,
-            })
-        }
-
-        fn write_range(
-            &self,
-            _path: &Path,
-            _start: u64,
-            _data: &[u8],
-            _size: u64,
-        ) -> crate::drivers::fuse::Result<()> {
-            self.write_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        }
+    fn mock_cache(sync_calls: usize) -> MockCache {
+        let mut cache = MockCache::new();
+        cache
+            .expect_sync_metadata_placeholders()
+            .times(sync_calls)
+            .returning(|_, _| Ok(()));
+        cache
     }
 
     #[test]
@@ -662,24 +637,21 @@ mod tests {
 
     #[test]
     fn child_start_index_maps_special_offsets() {
+        assert_eq!(StorageFilesystem::<MockStorage>::child_start_index(0), 0);
         assert_eq!(
-            StorageFilesystem::<CountingStorage>::child_start_index(0),
-            0
-        );
-        assert_eq!(
-            StorageFilesystem::<CountingStorage>::child_start_index(
+            StorageFilesystem::<MockStorage>::child_start_index(
                 DOT_ENTRY_OFFSET
             ),
             0
         );
         assert_eq!(
-            StorageFilesystem::<CountingStorage>::child_start_index(
+            StorageFilesystem::<MockStorage>::child_start_index(
                 DOT_DOT_ENTRY_OFFSET
             ),
             0
         );
         assert_eq!(
-            StorageFilesystem::<CountingStorage>::child_start_index(
+            StorageFilesystem::<MockStorage>::child_start_index(
                 FIRST_CHILD_ENTRY_OFFSET
             ),
             1
@@ -689,27 +661,20 @@ mod tests {
     #[test]
     fn child_entry_offset_is_monotonic_and_starts_after_special_entries() {
         assert_eq!(
-            StorageFilesystem::<CountingStorage>::child_entry_offset(0),
+            StorageFilesystem::<MockStorage>::child_entry_offset(0),
             FIRST_CHILD_ENTRY_OFFSET
         );
         assert_eq!(
-            StorageFilesystem::<CountingStorage>::child_entry_offset(1),
+            StorageFilesystem::<MockStorage>::child_entry_offset(1),
             FIRST_CHILD_ENTRY_OFFSET + 1
         );
-        assert_eq!(
-            StorageFilesystem::<CountingStorage>::child_entry_offset(7),
-            10
-        );
+        assert_eq!(StorageFilesystem::<MockStorage>::child_entry_offset(7), 10);
     }
 
     #[test]
     fn storage_filesystem_new_with_cache_creates_root_node() {
-        let (mock_cache, _, _, _) = MockCachePort::new();
-        let storage = CountingStorage {
-            read_dir_calls: Arc::new(AtomicUsize::new(0)),
-            read_file_calls: Arc::new(AtomicUsize::new(0)),
-        };
-        let cache = Arc::new(mock_cache);
+        let storage = mock_storage(0);
+        let cache = Arc::new(NoCacheFsCache::new());
         let fs = StorageFilesystem::new_with_cache(storage, cache);
         let root_info = fs.get_info(1);
         assert!(root_info.is_some());
@@ -718,14 +683,8 @@ mod tests {
 
     #[test]
     fn read_dir_entries_uses_cache_within_ttl() {
-        let read_dir_calls = Arc::new(AtomicUsize::new(0));
-        let read_file_calls = Arc::new(AtomicUsize::new(0));
-        let storage = CountingStorage {
-            read_dir_calls: Arc::clone(&read_dir_calls),
-            read_file_calls,
-        };
-        let (mock_cache, sync_calls, _, _) = MockCachePort::new();
-        let cache = Arc::new(mock_cache);
+        let storage = mock_storage(1);
+        let cache = Arc::new(mock_cache(1));
         let fs = StorageFilesystem::new_with_cache(storage, cache);
         let path = PathBuf::new();
 
@@ -738,20 +697,22 @@ mod tests {
 
         assert_eq!(first.len(), 1);
         assert_eq!(second.len(), 1);
-        assert_eq!(read_dir_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(sync_calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]
-    fn read_dir_entries_call_cache_port() {
-        let read_dir_calls = Arc::new(AtomicUsize::new(0));
-        let read_file_calls = Arc::new(AtomicUsize::new(0));
-        let storage = CountingStorage {
-            read_dir_calls: Arc::clone(&read_dir_calls),
-            read_file_calls,
-        };
-        let (mock_cache, sync_calls, _, _) = MockCachePort::new();
-        let cache = Arc::new(mock_cache);
+    fn read_dir_entries_passes_entries_to_cache_port() {
+        let storage = mock_storage(1);
+        let mut cache = MockCache::new();
+        cache
+            .expect_sync_metadata_placeholders()
+            .withf(|path, entries| {
+                path == Path::new("")
+                    && entries.len() == 1
+                    && entries[0].file_name == "alpha.txt"
+            })
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let cache = Arc::new(cache);
         let fs = StorageFilesystem::new_with_cache(storage, cache);
 
         let entries = fs
@@ -759,7 +720,5 @@ mod tests {
             .expect("directory read should succeed");
 
         assert_eq!(entries.len(), 1);
-        assert_eq!(sync_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(read_dir_calls.load(Ordering::SeqCst), 1);
     }
 }

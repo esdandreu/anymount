@@ -1,4 +1,4 @@
-use crate::{app::MountConfig, service::MountService};
+use crate::{app::MountConfig, mount_service::MountService};
 
 pub struct MockMountService {
     pub mounts: Vec<MountConfig>,

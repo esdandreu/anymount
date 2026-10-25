@@ -4,7 +4,7 @@ pub use path::{InvalidStoragePath, StoragePath};
 
 use std::{ops::Range, time::SystemTime};
 
-use super::auth::{AuthStorageError, StartedAuthorization};
+use super::started_authorization::{AuthStorageError, StartedAuthorization};
 
 #[typetag::serde(tag = "type")]
 pub trait StorageConfig: Send + Sync {

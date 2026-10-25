@@ -1,6 +1,6 @@
 use super::Storage;
 use crate::domain::storage::{DirEntry, WriteAt, WriteAtError};
-use crate::drivers::windows::placeholders::{
+use crate::drivers::windows::placeholder_utils::{
     dehydrate_file, get_placeholder_info,
 };
 use crate::{read_dir, read_file_at};

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use super::event::{AppEvent, Event, EventHandler};
-use super::service::MountService;
+use super::mount_service::MountService;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{

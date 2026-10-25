@@ -98,10 +98,7 @@ fn validate_module_names(source_dir: &Path) -> std::io::Result<Vec<String>> {
             continue;
         }
 
-        let expected = public_items
-            .iter()
-            .map(|name| format!("{}.rs", to_snake_case(name)))
-            .collect::<Vec<_>>();
+        let expected = expected_file_names(&file, &public_items);
         let actual_file_name = file.file_name().unwrap_or_default().to_string_lossy();
         if !expected.iter().any(|name| name == &actual_file_name) {
             let exports = public_items.join("`, `");
@@ -115,6 +112,59 @@ fn validate_module_names(source_dir: &Path) -> std::io::Result<Vec<String>> {
     }
 
     Ok(issues)
+}
+
+fn expected_file_names(file: &Path, public_items: &[String]) -> Vec<String> {
+    let parent_names = file
+        .parent()
+        .and_then(Path::file_name)
+        .map(|name| to_snake_case(&name.to_string_lossy()))
+        .map(|name| {
+            let mut names = BTreeSet::from([name.clone()]);
+            if let Some(singular) = singular_module_name(&name) {
+                names.insert(singular);
+            }
+            names
+        })
+        .unwrap_or_default();
+    let mut expected = BTreeSet::new();
+
+    for item in public_items {
+        let item_name = to_snake_case(item);
+        expected.insert(format!("{item_name}.rs"));
+        let item_parts = item_name.split('_').collect::<Vec<_>>();
+        for prefix_end in 2..item_parts.len() {
+            expected.insert(format!("{}.rs", item_parts[..prefix_end].concat()));
+        }
+        for parent_name in &parent_names {
+            let prefix = format!("{parent_name}_");
+            if let Some(name) = item_name.strip_prefix(&prefix) {
+                expected.insert(format!("{name}.rs"));
+            }
+            let item_parts = item_name.split('_').collect::<Vec<_>>();
+            for prefix_end in 1..item_parts.len() {
+                let item_parent = item_parts[..prefix_end].concat();
+                if &item_parent == parent_name {
+                    let name = item_parts[prefix_end..].join("_");
+                    expected.insert(format!("{name}.rs"));
+                }
+            }
+            let suffix = format!("_{parent_name}");
+            if let Some(name) = item_name.strip_suffix(&suffix) {
+                expected.insert(format!("{name}.rs"));
+            }
+        }
+    }
+
+    expected.into_iter().collect()
+}
+
+fn singular_module_name(name: &str) -> Option<String> {
+    if let Some(stem) = name.strip_suffix("ies") {
+        Some(format!("{stem}y"))
+    } else {
+        name.strip_suffix('s').map(str::to_owned)
+    }
 }
 
 fn validate_mock_exports(
@@ -226,6 +276,8 @@ fn is_special_module_file(path: &Path) -> bool {
         ["build.rs", "lib.rs", "main.rs", "mod.rs"]
             .iter()
             .any(|special_name| name == *special_name)
+    }) || path.file_stem().is_some_and(|stem| {
+        stem == "utils" || stem.to_string_lossy().ends_with("_utils")
     })
 }
 
@@ -316,6 +368,94 @@ fn accepts_module_name_that_matches_public_type() {
 }
 
 #[test]
+fn accepts_parent_module_as_prefix_or_singular_suffix() {
+    let temp_dir = tempfile::tempdir().expect("temporary directory");
+    let storage_dir = temp_dir.path().join("storage");
+    let commands_dir = temp_dir.path().join("commands");
+    let storages_dir = temp_dir.path().join("storages");
+    fs::create_dir_all(&storage_dir).expect("storage directory");
+    fs::create_dir_all(&commands_dir).expect("commands directory");
+    fs::create_dir_all(&storages_dir).expect("storages directory");
+    fs::write(storage_dir.join("path.rs"), "pub struct StoragePath;")
+        .expect("write path module");
+    fs::write(commands_dir.join("auth.rs"), "pub struct AuthCommand;")
+        .expect("write auth module");
+    fs::write(storages_dir.join("local.rs"), "pub struct LocalStorage;")
+        .expect("write local storage module");
+
+    let issues = validate_module_names(temp_dir.path())
+        .expect("validate module names");
+
+    assert!(issues.is_empty());
+}
+
+#[test]
+fn accepts_parent_module_prefix_with_compound_capitalization() {
+    let temp_dir = tempfile::tempdir().expect("temporary directory");
+    let onedrive_dir = temp_dir.path().join("storages/onedrive");
+    fs::create_dir_all(&onedrive_dir).expect("OneDrive directory");
+    fs::write(
+        onedrive_dir.join("authorization.rs"),
+        "pub struct OneDriveAuthorization;",
+    )
+    .expect("write authorization module");
+
+    let issues = validate_module_names(temp_dir.path())
+        .expect("validate module names");
+
+    assert!(issues.is_empty());
+}
+
+#[test]
+fn accepts_compound_capitalization_in_filename_for_public_type() {
+    let temp_dir = tempfile::tempdir().expect("temporary directory");
+    let storages_dir = temp_dir.path().join("storages");
+    fs::create_dir_all(&storages_dir).expect("storages directory");
+    fs::write(
+        storages_dir.join("onedrive.rs"),
+        "pub struct OneDriveStorage;",
+    )
+    .expect("write OneDrive module");
+
+    let issues = validate_module_names(temp_dir.path())
+        .expect("validate module names");
+
+    assert!(issues.is_empty());
+}
+
+#[test]
+fn accepts_full_type_name_when_parent_prefix_is_present() {
+    let temp_dir = tempfile::tempdir().expect("temporary directory");
+    let module_dir = temp_dir.path().join("storage");
+    fs::create_dir_all(&module_dir).expect("module directory");
+    fs::write(
+        module_dir.join("storage_path.rs"),
+        "pub struct StoragePath;",
+    )
+    .expect("write storage path module");
+
+    let issues = validate_module_names(temp_dir.path())
+        .expect("validate module names");
+
+    assert!(issues.is_empty());
+}
+
+#[test]
+fn rejects_filename_when_parent_is_not_a_type_name_prefix() {
+    let temp_dir = tempfile::tempdir().expect("temporary directory");
+    let module_dir = temp_dir.path().join("storage");
+    fs::create_dir_all(&module_dir).expect("module directory");
+    fs::write(module_dir.join("path.rs"), "pub struct StorageCache;")
+        .expect("write path module");
+
+    let issues = validate_module_names(temp_dir.path())
+        .expect("validate module names");
+
+    assert_eq!(issues.len(), 1);
+    assert!(issues[0].contains("storage/path.rs"));
+}
+
+#[test]
 fn accepts_module_name_that_matches_public_function() {
     let temp_dir = tempfile::tempdir().expect("temporary directory");
     fs::write(
@@ -323,6 +463,25 @@ fn accepts_module_name_that_matches_public_function() {
         "pub fn read_file() {}",
     )
     .expect("write module");
+
+    let issues = validate_module_names(temp_dir.path())
+        .expect("validate module names");
+
+    assert!(issues.is_empty());
+}
+
+#[test]
+fn accepts_utils_module_names_for_public_items() {
+    let temp_dir = tempfile::tempdir().expect("temporary directory");
+    let windows_dir = temp_dir.path().join("drivers/windows");
+    fs::create_dir_all(&windows_dir).expect("Windows driver directory");
+    fs::write(
+        windows_dir.join("placeholder_utils.rs"),
+        "pub fn open_file_handle() {}",
+    )
+    .expect("write placeholder utils module");
+    fs::write(temp_dir.path().join("utils.rs"), "pub struct Support;")
+        .expect("write utils module");
 
     let issues = validate_module_names(temp_dir.path())
         .expect("validate module names");

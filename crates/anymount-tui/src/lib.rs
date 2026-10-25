@@ -2,7 +2,7 @@
 
 mod app;
 mod event;
-mod service;
+mod mount_service;
 #[cfg(test)]
 mod test_utils;
 mod tui;

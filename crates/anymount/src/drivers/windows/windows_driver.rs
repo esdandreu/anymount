@@ -31,18 +31,17 @@ impl Driver for WindowsDriver {
         &self,
         config: &MountConfig,
     ) -> std::result::Result<Box<dyn Mount>, MountError> {
-        let storage = config.storage.connect().map_err(|source| {
-            MountError::CannotMountAtPath {
-                path: config.path.clone(),
-                message: source.to_string(),
-            }
-        })?;
+        let storage = config.storage.connect()?;
         WindowsMount::new(config.name.clone(), config.path.clone(), storage)
             .map(|mount| Box::new(mount) as Box<dyn Mount>)
             .map_err(|source| MountError::CannotMountAtPath {
                 path: config.path.clone(),
                 message: source.to_string(),
             })
+    }
+
+    async fn unmount(&self, _name: &str) -> Result<(), MountError> {
+        Ok(())
     }
 }
 

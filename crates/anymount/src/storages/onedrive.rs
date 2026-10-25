@@ -1,7 +1,7 @@
 //! Implements OneDrive storage and authorization.
 
 mod authorization;
-mod token;
+mod token_source;
 
 use authorization::OneDriveAuthorization;
 use chrono::{DateTime, Utc};
@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
-use token::{OneDriveTokenSource, jwt_expires_at};
+use token_source::{OneDriveTokenSource, jwt_expires_at};
 
 use crate::domain::storage::{
     ConnectStorageError, DirEntry, ReadDirError, ReadFileAtError, Storage,
@@ -30,7 +30,7 @@ pub enum Error {
     #[error("token access failed")]
     Token {
         #[source]
-        source: token::Error,
+        source: token_source::Error,
     },
 
     #[error("request failed for {url}")]
@@ -79,7 +79,7 @@ enum ConnectError {
     #[error("token access failed")]
     Token {
         #[source]
-        source: token::Error,
+        source: token_source::Error,
     },
 }
 

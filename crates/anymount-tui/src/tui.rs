@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use anymount::ConfigDir;
 
-use super::{app::App, service::AnymountMountService};
+use super::{app::App, mount_service::AnymountMountService};
 
 /// Configures the anymount terminal user interface.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

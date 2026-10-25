@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 
+use super::storage::ConnectStorageError;
 use super::{Mount, MountConfig};
 
 #[typetag::serde(tag = "type")]
@@ -23,9 +24,7 @@ pub trait Driver: Send + Sync {
     ) -> Result<Box<dyn Mount>, MountError>;
 
     /// Unregisters a mount. No-op if the mount is not registered.
-    async fn unmount(&self, _name: &str) -> Result<(), MountError> {
-        Ok(())
-    }
+    async fn unmount(&self, name: &str) -> Result<(), MountError>;
 
     fn kind(&self) -> &'static str {
         std::any::type_name::<Self>()
@@ -34,6 +33,10 @@ pub trait Driver: Send + Sync {
 
 #[derive(Debug, thiserror::Error)]
 pub enum MountError {
+    /// The storage configuration could not be connected.
+    #[error(transparent)]
+    CannotConnectStorage(#[from] ConnectStorageError),
+
     /// A path conflict. Typically the path is already mounted or not accessible
     /// in some way.
     #[error("failed to mount at {path}: {message}")]
@@ -54,67 +57,46 @@ inventory::collect!(DefaultDriverConfig);
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     use super::*;
-    use crate::domain::{
-        ConnectMountError, ConnectStorageError, DisconnectMountError, Mount,
-        MountConfig, Storage, StorageConfig,
-    };
+    use crate::test_utils::mocks::{EmptyStorageConfig, NoOpMount};
+    use async_trait::async_trait;
+    use mockall::mock;
 
-    #[derive(serde::Serialize, serde::Deserialize)]
-    struct EmptyStorageConfig;
+    mock! {
+        Driver {}
+        #[async_trait]
+        impl Driver for Driver {
+            async fn mount(
+                &self,
+                config: &MountConfig,
+            ) -> std::result::Result<Box<dyn Mount>, MountError>;
 
-    #[typetag::serde(name = "empty")]
-    impl StorageConfig for EmptyStorageConfig {
-        fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError> {
-            Ok(Box::new(EmptyStorage))
-        }
-    }
-
-    struct EmptyStorage;
-
-    impl Storage for EmptyStorage {}
-
-    struct TestMount;
-
-    impl Mount for TestMount {
-        fn name(&self) -> &str {
-            "test"
-        }
-
-        fn root(&self) -> &Path {
-            Path::new("/tmp/test")
-        }
-
-        fn is_connected(&self) -> bool {
-            true
-        }
-
-        fn connect(&self) -> Result<(), ConnectMountError> {
-            Ok(())
-        }
-
-        fn disconnect(&self) -> Result<(), DisconnectMountError> {
-            Ok(())
-        }
-    }
-
-    struct TestDriver;
-
-    #[async_trait]
-    impl Driver for TestDriver {
-        async fn mount(
-            &self,
-            _config: &MountConfig,
-        ) -> Result<Box<dyn Mount>, MountError> {
-            Ok(Box::new(TestMount))
+            async fn unmount(
+                &self,
+                name: &str,
+            ) -> std::result::Result<(), MountError>;
         }
     }
 
     #[test]
     fn driver_lifecycle_is_callable_through_trait_object() {
-        let driver: Box<dyn Driver> = Box::new(TestDriver);
+        let mut mock_driver = MockDriver::new();
+        mock_driver
+            .expect_mount()
+            .withf(|config| config.name == "test")
+            .times(1)
+            .returning(|_| {
+                let mount: Box<dyn Mount> = Box::new(NoOpMount);
+                Ok(mount)
+            });
+        mock_driver
+            .expect_unmount()
+            .withf(|name| name == "no-op")
+            .times(1)
+            .returning(|_| Ok(()));
+        let driver: Box<dyn Driver> = Box::new(mock_driver);
         let config = MountConfig {
             name: "test".to_owned(),
             path: PathBuf::from("/tmp/test"),

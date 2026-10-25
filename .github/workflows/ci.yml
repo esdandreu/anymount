@@ -99,6 +99,9 @@ jobs:
         steps:
             - uses: actions/checkout@v4
 
+            - name: Install macFUSE and pkg-config
+              run: brew install macfuse pkgconf
+
             - name: Install Rust
               uses: dtolnay/rust-toolchain@stable
               with:
