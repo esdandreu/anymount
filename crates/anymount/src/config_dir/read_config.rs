@@ -4,7 +4,7 @@ use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use crate::domain::driver::DriverConfig;
+use crate::domain::DriverConfig;
 use crate::domain::{Config, MountConfig, StorageConfig};
 
 pub fn read_config(path: &Path) -> Result<Config, ReadConfigError> {

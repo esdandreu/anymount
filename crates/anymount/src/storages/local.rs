@@ -4,7 +4,7 @@ use std::time::SystemTime;
 use cap_std::ambient_authority;
 use cap_std::fs::Dir;
 
-use crate::domain::storage::{
+use crate::domain::{
     DirEntry, ReadDirError, ReadFileAtError, Storage, StoragePath, WriteAt,
 };
 
@@ -170,7 +170,7 @@ impl Storage for LocalStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::storage::WriteAtError;
+    use crate::domain::WriteAtError;
     use crate::{read_dir, read_file_at};
     use tempfile::TempDir;
 

@@ -1,7 +1,7 @@
 use crate::domain::{ConnectStorageError, Storage, StorageConfig};
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-struct CannotConnectStorageConfig {
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CannotConnectStorageConfig {
     error_message: String,
 }
 

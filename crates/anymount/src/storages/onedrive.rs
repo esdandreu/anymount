@@ -1,7 +1,7 @@
 //! Implements OneDrive storage and authorization.
 
 mod authorization;
-mod token;
+mod token_source;
 
 use authorization::OneDriveAuthorization;
 use chrono::{DateTime, Utc};
@@ -9,13 +9,13 @@ use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
-use token::{OneDriveTokenSource, jwt_expires_at};
+use token_source::{OneDriveTokenSource, jwt_expires_at};
 
-use crate::domain::storage::{
+use crate::domain::{AuthStorageError, StartedAuthorization};
+use crate::domain::{
     ConnectStorageError, DirEntry, ReadDirError, ReadFileAtError, Storage,
     StorageConfig, StoragePath, WriteAt,
 };
-use crate::domain::{AuthStorageError, StartedAuthorization};
 
 /// Default buffer (seconds) before token expiry to trigger refresh when not set in config.
 const DEFAULT_TOKEN_EXPIRY_BUFFER_SECS: u64 = 60;
@@ -30,7 +30,7 @@ pub enum Error {
     #[error("token access failed")]
     Token {
         #[source]
-        source: token::Error,
+        source: token_source::Error,
     },
 
     #[error("request failed for {url}")]
@@ -79,7 +79,7 @@ enum ConnectError {
     #[error("token access failed")]
     Token {
         #[source]
-        source: token::Error,
+        source: token_source::Error,
     },
 }
 
@@ -487,7 +487,7 @@ fn parse_last_modified(s: &str) -> SystemTime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::storage::WriteAtError;
+    use crate::domain::WriteAtError;
 
     type DefaultStorage = OneDriveStorage<OneDriveTokenSource, UreqHttpGet>;
 

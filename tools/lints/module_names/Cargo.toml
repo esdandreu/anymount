@@ -1,0 +1,22 @@
+[package]
+name = "module_names"
+version = "0.1.0"
+authors = ["esdandreu"]
+description = "Dylint lint for module names and mock export conventions"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+dylint_linting = "=6.0.4"
+syn = { version = "2", features = ["full"] }
+
+[dev-dependencies]
+tempfile = "=3.27.0"
+
+[workspace]
+
+[package.metadata.rust-analyzer]
+rustc_private = true

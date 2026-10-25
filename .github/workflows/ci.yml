@@ -15,6 +15,9 @@ jobs:
         steps:
             - uses: actions/checkout@v4
 
+            - name: Install FUSE and pkg-config
+              run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev pkg-config
+
             - name: Install Rust
               uses: dtolnay/rust-toolchain@stable
               with:
@@ -74,10 +77,10 @@ jobs:
               uses: taiki-e/install-action@nextest
 
             - name: Run tests (JUnit for analytics)
-              run: cargo nextest run --all-features --profile ci
+              run: cargo nextest run --profile ci
 
             - name: Run tests with coverage
-              run: cargo llvm-cov --all-features --lcov --output-path lcov.info
+              run: cargo llvm-cov --lcov --output-path lcov.info
 
             - name: Upload coverage to Codecov
               uses: codecov/codecov-action@v5
@@ -98,6 +101,9 @@ jobs:
         runs-on: macos-latest
         steps:
             - uses: actions/checkout@v4
+
+            - name: Install macFUSE and pkg-config
+              run: brew install macfuse pkgconf
 
             - name: Install Rust
               uses: dtolnay/rust-toolchain@stable

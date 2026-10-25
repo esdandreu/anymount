@@ -1,8 +1,9 @@
 use crate::domain::{Config, Mount};
 use crate::drivers::{NoDefaultDriver, init_driver};
 
-pub fn mount(config: Config) -> Result<Box<dyn Mount>, MountError> {
-    Ok(init_driver(config.driver.as_deref())?.mount(&config.mount)?)
+pub async fn mount(config: Config) -> Result<Box<dyn Mount>, MountError> {
+    let driver = init_driver(config.driver.as_deref())?;
+    driver.mount(&config.mount).await.map_err(MountError::from)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -11,5 +12,5 @@ pub enum MountError {
     DriverSelection(#[from] NoDefaultDriver),
 
     #[error("failed to mount: {0}")]
-    CannotMount(#[from] crate::domain::driver::MountError),
+    CannotMount(#[from] crate::domain::MountError),
 }

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::domain::storage::{
+use crate::domain::{
     DirEntry, InvalidStoragePath, ReadDirError as StorageError, Storage,
 };
 
@@ -33,18 +33,18 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::mocks::MockStorage;
+    use crate::test_utils::mocks::NoOpStorage;
 
     #[test]
     fn rejects_invalid_storage_path() {
-        let result = read_dir(&MockStorage, PathBuf::from("../outside"));
+        let result = read_dir(&NoOpStorage, PathBuf::from("../outside"));
 
         assert!(matches!(result, Err(ReadDirError::InvalidPath(_))));
     }
 
     #[test]
     fn forwards_storage_error() {
-        let result = read_dir(&MockStorage, PathBuf::new());
+        let result = read_dir(&NoOpStorage, PathBuf::new());
 
         assert!(matches!(
             result,

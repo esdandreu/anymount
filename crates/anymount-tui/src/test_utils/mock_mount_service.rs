@@ -1,4 +1,5 @@
-use crate::{app::MountConfig, service::MountService};
+use crate::{app::MountConfig, mount_service::MountService};
+use async_trait::async_trait;
 
 pub struct MockMountService {
     pub mounts: Vec<MountConfig>,
@@ -16,12 +17,13 @@ impl MockMountService {
     }
 }
 
+#[async_trait(?Send)]
 impl MountService for MockMountService {
-    fn list(&self) -> color_eyre::Result<Vec<MountConfig>> {
+    async fn list(&self) -> color_eyre::Result<Vec<MountConfig>> {
         Ok(self.mounts.clone())
     }
 
-    fn connect(&mut self, name: &str) -> color_eyre::Result<()> {
+    async fn connect(&mut self, name: &str) -> color_eyre::Result<()> {
         self.connected.push(name.to_owned());
         if let Some(mount) =
             self.mounts.iter_mut().find(|mount| mount.name == name)
@@ -31,7 +33,7 @@ impl MountService for MockMountService {
         Ok(())
     }
 
-    fn disconnect(&mut self, name: &str) -> color_eyre::Result<()> {
+    async fn disconnect(&mut self, name: &str) -> color_eyre::Result<()> {
         self.disconnected.push(name.to_owned());
         if let Some(mount) =
             self.mounts.iter_mut().find(|mount| mount.name == name)

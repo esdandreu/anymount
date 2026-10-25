@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use super::event::{AppEvent, Event, EventHandler};
-use super::service::MountService;
+use super::mount_service::MountService;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
@@ -42,8 +42,8 @@ where
     S: MountService,
 {
     /// Constructs a new instance of [`App`].
-    pub fn new(service: S) -> color_eyre::Result<Self> {
-        let mounts = service.list()?;
+    pub async fn new(service: S) -> color_eyre::Result<Self> {
+        let mounts = service.list().await?;
         Ok(Self {
             running: true,
             events: EventHandler::new(),
@@ -54,19 +54,19 @@ where
     }
 
     /// Run the application's main loop.
-    pub fn run(
+    pub async fn run(
         mut self,
         mut terminal: DefaultTerminal,
     ) -> color_eyre::Result<()> {
         while self.running {
             terminal
                 .draw(|frame| frame.render_widget(&mut self, frame.area()))?;
-            self.handle_events()?;
+            self.handle_events().await?;
         }
         Ok(())
     }
 
-    fn handle_events(&mut self) -> color_eyre::Result<()> {
+    async fn handle_events(&mut self) -> color_eyre::Result<()> {
         match self.events.next()? {
             Event::Tick => self.tick(),
             Event::Crossterm(event) => match event {
@@ -82,8 +82,8 @@ where
                 AppEvent::SelectPrevious => self.select_previous(),
                 AppEvent::SelectNext => self.select_next(),
                 AppEvent::Quit => self.quit(),
-                AppEvent::Connect => self.connect_selected()?,
-                AppEvent::Disconnect => self.disconnect_selected()?,
+                AppEvent::Connect => self.connect_selected().await?,
+                AppEvent::Disconnect => self.disconnect_selected().await?,
                 AppEvent::Edit => {}
             },
         }
@@ -127,20 +127,20 @@ where
     /// needs to be updated at a fixed frame rate. E.g. polling a server, updating an animation.
     fn tick(&self) {}
 
-    fn connect_selected(&mut self) -> color_eyre::Result<()> {
+    async fn connect_selected(&mut self) -> color_eyre::Result<()> {
         let Some(name) = self.selected_mount_name() else {
             return Ok(());
         };
-        self.service.connect(&name)?;
-        self.refresh()
+        self.service.connect(&name).await?;
+        self.refresh().await
     }
 
-    fn disconnect_selected(&mut self) -> color_eyre::Result<()> {
+    async fn disconnect_selected(&mut self) -> color_eyre::Result<()> {
         let Some(name) = self.selected_mount_name() else {
             return Ok(());
         };
-        self.service.disconnect(&name)?;
-        self.refresh()
+        self.service.disconnect(&name).await?;
+        self.refresh().await
     }
 
     fn selected_mount_name(&self) -> Option<String> {
@@ -150,8 +150,8 @@ where
             .map(|mount| mount.name.clone())
     }
 
-    fn refresh(&mut self) -> color_eyre::Result<()> {
-        self.mounts = self.service.list()?;
+    async fn refresh(&mut self) -> color_eyre::Result<()> {
+        self.mounts = self.service.list().await?;
         Ok(())
     }
 
@@ -208,10 +208,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn loads_mount_configs() {
+    #[tokio::test]
+    async fn loads_mount_configs() {
         let app =
             App::new(MockMountService::new([mount("First"), mount("Second")]))
+                .await
                 .expect("application should be created");
 
         assert_eq!(app.mounts.len(), 2);
@@ -220,36 +221,41 @@ mod tests {
         assert!(!app.mounts[0].is_connected);
     }
 
-    #[test]
-    fn connects_selected_mount() {
+    #[tokio::test]
+    async fn connects_selected_mount() {
         let mut app =
             App::new(MockMountService::new([mount("First"), mount("Second")]))
+                .await
                 .expect("application should be created");
         app.select_next();
 
-        app.connect_selected().expect("connect should succeed");
+        app.connect_selected()
+            .await
+            .expect("connect should succeed");
 
         assert_eq!(app.service.connected, ["First"]);
         assert!(app.mounts[0].is_connected);
     }
 
-    #[test]
-    fn disconnects_selected_mount() {
+    #[tokio::test]
+    async fn disconnects_selected_mount() {
         let mut connected_mount = mount("First");
         connected_mount.is_connected = true;
         let mut app = App::new(MockMountService::new([connected_mount]))
+            .await
             .expect("application should be created");
         app.select_next();
 
         app.disconnect_selected()
+            .await
             .expect("disconnect should succeed");
 
         assert_eq!(app.service.disconnected, ["First"]);
         assert!(!app.mounts[0].is_connected);
     }
 
-    #[test]
-    fn test_mounts_list() {
+    #[tokio::test]
+    async fn test_mounts_list() {
         let mut service = MockMountService::new(
             [
                 "Hello first",
@@ -262,7 +268,9 @@ mod tests {
         );
         service.mounts[1].is_connected = true;
         service.mounts[2].is_connected = true;
-        let mut app = App::new(service).expect("application should be created");
+        let mut app = App::new(service)
+            .await
+            .expect("application should be created");
         let mut terminal = Terminal::new(TestBackend::new(80, 20))
             .expect("test terminal should be created");
         terminal

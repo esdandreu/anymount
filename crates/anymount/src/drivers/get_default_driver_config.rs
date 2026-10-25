@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 
+use crate::domain::DefaultDriverConfig;
 use crate::domain::DriverConfig;
-use crate::domain::driver::DefaultDriverConfig;
 
 /// Memoized default driver configuration.
 static DEFAULT_DRIVER_CONFIG: OnceLock<Option<&'static dyn DriverConfig>> =

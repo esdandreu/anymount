@@ -27,10 +27,10 @@ pub enum Command {
 }
 
 impl Cli {
-    pub fn run(self) -> color_eyre::Result<()> {
+    pub async fn run(self) -> color_eyre::Result<()> {
         match self.command {
             Some(Command::Connect(cmd)) => cmd.execute(),
-            None => anymount_tui::Tui::new(self.config_dir).run(),
+            None => anymount_tui::Tui::new(self.config_dir).run().await,
         }
     }
 }

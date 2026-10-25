@@ -1,16 +1,20 @@
-pub mod auth;
-pub mod config;
-pub mod driver;
-pub mod mount;
-pub mod storage;
+mod config;
+mod driver;
+mod mount;
+mod started_authorization;
+mod storage;
 
-pub use auth::{AuthStorageError, StartedAuthorization};
 pub use config::{Config, ConfigNotFound, ConfigRepository, MountConfig};
-pub use driver::{Driver, DriverConfig};
+pub use driver::{DefaultDriverConfig, Driver, DriverConfig, MountError};
 pub use mount::{
     ConnectMountError, DisconnectMountError, Mount, UnregisterMountError,
 };
+pub use started_authorization::{AuthStorageError, StartedAuthorization};
 pub use storage::{
-    ConnectStorageError, InvalidStoragePath, Storage, StorageConfig,
-    StoragePath,
+    ConnectStorageError, DirEntry, InvalidStoragePath, ReadDirError,
+    ReadFileAtError, Storage, StorageConfig, StoragePath, WriteAt,
+    WriteAtError,
 };
+
+#[cfg(test)]
+pub use storage::MockStorage;

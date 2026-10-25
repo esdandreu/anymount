@@ -1,6 +1,6 @@
 use std::{ops::Range, path::PathBuf};
 
-use crate::domain::storage::{
+use crate::domain::{
     InvalidStoragePath, ReadFileAtError as StorageError, Storage, WriteAt,
 };
 
@@ -35,8 +35,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::storage::WriteAtError;
-    use crate::test_utils::mocks::MockStorage;
+    use crate::domain::WriteAtError;
+    use crate::test_utils::mocks::NoOpStorage;
 
     struct TestWriter;
 
@@ -53,7 +53,7 @@ mod tests {
     #[test]
     fn rejects_invalid_storage_path() {
         let result = read_file_at(
-            &MockStorage,
+            &NoOpStorage,
             PathBuf::from("../outside"),
             &mut TestWriter,
             0..1,
@@ -65,7 +65,7 @@ mod tests {
     #[test]
     fn forwards_storage_error() {
         let result =
-            read_file_at(&MockStorage, PathBuf::new(), &mut TestWriter, 0..1);
+            read_file_at(&NoOpStorage, PathBuf::new(), &mut TestWriter, 0..1);
 
         assert!(matches!(
             result,

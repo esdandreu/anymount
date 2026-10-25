@@ -1,9 +1,9 @@
-use crate::domain::driver::{Driver, DriverConfig, MountError};
-use crate::domain::{Mount, Storage};
+use crate::domain::{Driver, DriverConfig, MountError};
+use crate::domain::{Mount, MountConfig};
 use crate::drivers::fuse::fuse_mount::FuseMount;
 use crate::drivers::fuse::{NoCacheFsCache, StorageFilesystem};
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
@@ -17,7 +17,7 @@ impl DriverConfig for FuseDriverConfig {
 }
 
 inventory::submit! {
-    crate::domain::driver::DefaultDriverConfig {
+    crate::domain::DefaultDriverConfig {
         priority: 0,
         config: &FuseDriverConfig,
     }
@@ -26,13 +26,15 @@ inventory::submit! {
 #[derive(Default)]
 pub struct FuseDriver;
 
+#[async_trait]
 impl Driver for FuseDriver {
-    fn mount(
+    async fn mount(
         &self,
-        name: String,
-        path: PathBuf,
-        storage: Box<dyn Storage>,
+        config: &MountConfig,
     ) -> Result<Box<dyn Mount>, MountError> {
+        let name = config.name.clone();
+        let path = config.path.clone();
+        let storage = config.storage.connect()?;
         std::fs::create_dir_all(&path).map_err(|source| {
             MountError::CannotMountAtPath {
                 path: path.clone(),
@@ -60,5 +62,9 @@ impl Driver for FuseDriver {
             },
         )?;
         Ok(Box::new(FuseMount::new(name, path, session)))
+    }
+
+    async fn unmount(&self, _name: &str) -> Result<(), MountError> {
+        Ok(())
     }
 }

@@ -4,10 +4,10 @@ pub use path::{InvalidStoragePath, StoragePath};
 
 use std::{ops::Range, time::SystemTime};
 
-use super::auth::{AuthStorageError, StartedAuthorization};
+use super::started_authorization::{AuthStorageError, StartedAuthorization};
 
 #[typetag::serde(tag = "type")]
-pub trait StorageConfig {
+pub trait StorageConfig: Send + Sync {
     fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError>;
 
     fn kind(&self) -> &'static str {
@@ -35,6 +35,7 @@ pub enum ConnectStorageError {
     Failed { kind: &'static str, message: String },
 }
 
+#[cfg_attr(test, mockall::automock)]
 pub trait Storage: Send + Sync {
     fn read_dir(
         &self,
