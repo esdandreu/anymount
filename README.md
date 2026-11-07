@@ -128,14 +128,14 @@ mise run test
 
 ## Roadmap
 
-- [ ] Terminal User Interface for mount management. List mounts, connect/disconnect, edit existing mounts and add new ones.
+- [ ] Storage write interface.
+- [ ] Storage auth interface.
 - [ ] Local storage.
 - [ ] FUSE driver.
-- [ ] Windows' CloudFilter driver.
 - [ ] OneDrive storage.
-- [ ] MacOS FileProvider driver.
 - [ ] S3 storage.
-- [ ] Optional mouse support for TUI.
+- [ ] GDrive storage.
+- [ ] Interface for mount management. List mounts, connect/disconnect, edit existing mounts and add new ones.
 
 ## License
 
