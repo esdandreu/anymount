@@ -1,0 +1,16 @@
+["examples:browser:test"]
+description = "Test the browser driver adapter"
+depends = ["examples:browser:registry-test"]
+run = "node --test examples/browser/driver.test.mjs"
+
+["examples:browser:registry-test"]
+description = "Test shared registries and mounting on WebAssembly"
+run = "wasm-pack test --node crates/anymount --test browser_registry --all-features"
+
+["examples:browser:build"]
+description = "Build the browser driver WebAssembly package"
+run = "wasm-pack build crates/anymount --target web --out-dir ../../examples/browser/pkg --out-name anymount_browser --release"
+
+["examples:browser:serve"]
+description = "Serve the static browser example on localhost"
+run = "python3 -m http.server 4173 --directory examples/browser"

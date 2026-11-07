@@ -6,6 +6,9 @@ pub use get_default_driver_config::{
 };
 pub use init_driver::init_driver;
 
+#[cfg(target_arch = "wasm32")]
+pub mod browser;
+
 #[cfg(target_os = "windows")]
 pub mod windows;
 
