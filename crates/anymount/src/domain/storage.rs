@@ -7,7 +7,7 @@ use std::{ops::Range, time::SystemTime};
 use super::started_authorization::{AuthStorageError, StartedAuthorization};
 
 #[typetag::serde(tag = "type")]
-pub trait StorageConfig: super::PlatformSendSync {
+pub trait StorageConfig: Send + Sync {
     fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError>;
 
     fn kind(&self) -> &'static str {
@@ -36,7 +36,7 @@ pub enum ConnectStorageError {
 }
 
 #[cfg_attr(test, mockall::automock)]
-pub trait Storage: super::PlatformSendSync {
+pub trait Storage: Send + Sync {
     fn read_dir(
         &self,
         _path: StoragePath,

@@ -93,7 +93,7 @@ impl<S: Storage + 'static> WindowsMount<S> {
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl<S: Storage + 'static> Mount for WindowsMount<S> {
     fn name(&self) -> &str {
         &self.name

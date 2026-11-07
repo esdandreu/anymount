@@ -1,7 +1,7 @@
 # Browser workspace POC
 
 This static example uses the Rust `Driver` and `Mount` traits through the
-`anymount-browser` WebAssembly adapter. Its browser-facing storage port uses the
+`anymount` WebAssembly adapter. Its browser-facing storage port uses the
 File System Access API for the selected directory. IndexedDB only remembers the
 directory handle; application data stays in `anymount-note.txt` in that
 directory.
@@ -42,7 +42,7 @@ This driver does not provide FUSE, Windows Cloud Filter, arbitrary filesystem
 access, cloud-provider access, or encryption. The existing native `Storage`
 interface remains synchronous for native filesystem callbacks. Browser file
 operations use async promises through a separate browser-facing storage port.
-The shared domain traits drop native `Send + Sync` bounds only for WebAssembly,
-where browser handles are single-threaded. The browser `Mount` represents a
+The shared `Driver` and `Mount` traits allow non-`Send` implementations and
+futures, including single-threaded browser handles. The browser `Mount` represents a
 logical user workspace; the native `Mount` implementations continue to expose
 operating-system mount points.

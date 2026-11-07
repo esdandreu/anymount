@@ -116,6 +116,7 @@ dependencies = [
  "fuser",
  "insta",
  "inventory",
+ "js-sys",
  "jsonwebtoken",
  "libc",
  "mockall",
@@ -143,20 +144,9 @@ dependencies = [
  "ureq",
  "url",
  "urlencoding",
- "windows",
-]
-
-[[package]]
-name = "anymount-browser"
-version = "0.1.0"
-dependencies = [
- "anymount",
- "async-trait",
- "js-sys",
- "serde",
- "typetag",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "windows",
 ]
 
 [[package]]

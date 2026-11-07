@@ -1,3 +1,5 @@
+#[cfg(target_arch = "wasm32")]
+mod browser_driver_api;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod config_dir;
 pub mod domain;

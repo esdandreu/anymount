@@ -25,7 +25,7 @@ inventory::submit! {
 /// Creates Windows CloudFilter mounts.
 pub struct WindowsDriver;
 
-#[async_trait]
+#[async_trait(?Send)]
 impl Driver for WindowsDriver {
     async fn mount(
         &self,

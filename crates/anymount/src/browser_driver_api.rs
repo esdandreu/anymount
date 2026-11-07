@@ -1,8 +1,6 @@
-#![cfg(target_arch = "wasm32")]
-
 //! Implements the browser workspace driver using user-authorized directory handles.
 
-use anymount::domain::{
+use crate::domain::{
     ConnectMountError, ConnectStorageError, DisconnectMountError, Driver,
     DriverConfig, Mount, MountConfig, MountError, Storage, StorageConfig,
     UnregisterMountError,
@@ -33,8 +31,7 @@ struct BrowserDriver {
     mounts: RefCell<HashMap<String, Rc<dyn BrowserStorage>>>,
 }
 
-#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
-#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[async_trait(?Send)]
 impl Driver for BrowserDriver {
     async fn mount(
         &self,
@@ -86,8 +83,7 @@ struct BrowserMount {
     storage: Rc<dyn BrowserStorage>,
 }
 
-#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
-#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[async_trait(?Send)]
 impl Mount for BrowserMount {
     fn name(&self) -> &str {
         &self.name
@@ -162,8 +158,7 @@ impl FileSystemAccessStorage {
     }
 }
 
-#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
-#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[async_trait(?Send)]
 impl BrowserStorage for FileSystemAccessStorage {
     async fn connect(&self, request_permission: bool) -> Result<bool, JsValue> {
         let options = Object::new();

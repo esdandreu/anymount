@@ -25,7 +25,7 @@ impl FuseMount {
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl Mount for FuseMount {
     fn name(&self) -> &str {
         &self.name
