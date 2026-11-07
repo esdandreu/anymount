@@ -21,12 +21,12 @@ exceptions, life cycle issues should likewise not be made the subject of some ma
 way they are needed, their disposal is governed by `Drop`, and only `Drop`.
 
 Regarding factories, at least the term should be avoided. While the concept `FooFactory` has its use, its canonical
-Rust name is `Builder` (compare [M-INIT-BUILDER](../libs/ux/#M-INIT-BUILDER)). A builder that can produce items repeatedly is still a builder.
+Rust name is `Builder` (compare M-INIT-BUILDER). A builder that can produce items repeatedly is still a builder.
 
 In addition, accepting factories (builders) as parameters is an unidiomatic import of OO concepts into Rust. If
 repeatable instantiation is required, functions should ask for an `impl Fn() -> Foo` over a `FooBuilder` or
 similar. In contrast, standalone builders have their use, but primarily to reduce parametric permutation complexity
-around optional values (again, [M-INIT-BUILDER](../libs/ux/#M-INIT-BUILDER)).
+around optional values (again, M-INIT-BUILDER).
 
 
 
@@ -93,9 +93,9 @@ pub async fn ping_server() {
 <version>0.1</version>
 
 Logging should use structured events with named properties and message templates following
-the [message templates](https://messagetemplates.org/) specification.
+the message templates specification.
 
-> **Note:** Examples use the [`tracing`](https://docs.rs/tracing/) crate's `event!` macro,
+> **Note:** Examples use the `tracing` crate's `event!` macro,
 but these principles apply to any logging API that supports structured logging (e.g., `log`,
 `slog`, custom telemetry systems).
 
@@ -146,7 +146,7 @@ Named events enable grouping and filtering across log entries.
 
 ### Follow OpenTelemetry Semantic Conventions
 
-Use [OTel semantic conventions](https://opentelemetry.io/docs/specs/semconv/) for common attributes if needed.
+Use OTel semantic conventions for common attributes if needed.
 This enables standardization and interoperability.
 
 ```rust,ignore
@@ -194,13 +194,13 @@ event!(
 ```
 
 Sensitive data includes email addresses, file paths revealing user identity, filenames containing secrets or tokens,
-file contents with PII, temporary file paths with session IDs and more. Consider using the [`data_privacy`](https://crates.io/crates/data_privacy) crate for consistent redaction.
+file contents with PII, temporary file paths with session IDs and more. Consider using the `data_privacy` crate for consistent redaction.
 
 ### Further Reading
 
-- [Message Templates Specification](https://messagetemplates.org/)
-- [OpenTelemetry Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/)
-- [OWASP Logging Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html)
+- Message Templates Specification
+- OpenTelemetry Semantic Conventions
+- OWASP Logging Cheat Sheet
 
 
 
@@ -211,7 +211,7 @@ file contents with PII, temporary file paths with session IDs and more. Consider
 
 Panics are not exceptions. Instead, they suggest immediate program termination.
 
-Although your code must be [panic-safe](https://doc.rust-lang.org/nomicon/exception-safety.html) (i.e., a survived panic may not lead to
+Although your code must be panic-safe (i.e., a survived panic may not lead to
 inconsistent state), invoking a panic means _this program should stop now_. It is not valid to:
 
 - use panics to communicate (errors) upstream,
@@ -241,7 +241,7 @@ Any of those are directly or indirectly linked to programming errors.
 <why>To avoid impossible error handling code and ensure runtime consistency.</why>
 <version>1.0</version>
 
-As an extension of [M-PANIC-IS-STOP] above, when an unrecoverable programming error has been
+As an extension of M-PANIC-IS-STOP above, when an unrecoverable programming error has been
 detected, libraries and applications must panic, i.e., request program termination.
 
 In these cases, no `Error` type should be introduced or returned, as any such error could not be acted upon at runtime.
@@ -276,10 +276,6 @@ fn parse_uri(s: &str) -> Result<Uri, ParseError> { };
 > While panicking on a detected programming error is the 'least bad option', your panic might still ruin someone's day.
 > For any user input or calling sequence that would otherwise panic, you should also explore if you can use the type
 > system to avoid panicking code paths altogether.
-
-[M-PANIC-IS-STOP]: ../universal/#M-PANIC-IS-STOP
-
-
 
 ## Public Types are Debug (M-PUBLIC-DEBUG) { #M-PUBLIC-DEBUG }
 
@@ -331,11 +327,7 @@ If your type is expected to be read by upstream consumers, be it developers or e
 - Wrappers around string-like data
 
 Implementations of `Display` should follow Rust customs; this includes rendering newlines and escape sequences.
-The handling of sensitive data outlined in [M-PUBLIC-DEBUG] applies analogously.
-
-[M-PUBLIC-DEBUG]: ./#M-PUBLIC-DEBUG
-
-
+The handling of sensitive data outlined in M-PUBLIC-DEBUG applies analogously.
 
 ## Prefer Regular over Associated Functions (M-REGULAR-FN) { #M-REGULAR-FN }
 
@@ -431,13 +423,13 @@ Functionality split for technical reasons (e.g., a `foo_proc` proc macro crate) 
 Projects should use the following static verification tools to help maintain the quality of the code. These tools can be
 configured to run on a developer's machine during normal work, and should be used as part of check-in gates.
 
-* [compiler lints](https://doc.rust-lang.org/rustc/lints/index.html) offer many lints to avoid bugs and improve code quality.
-* [clippy lints](https://doc.rust-lang.org/clippy/) contain hundreds of lints to avoid bugs and improve code quality.
-* [rustfmt](https://github.com/rust-lang/rustfmt) ensures consistent source formatting.
-* [cargo-audit](https://crates.io/crates/cargo-audit) verifies crate dependencies for security vulnerabilities.
-* [cargo-hack](https://crates.io/crates/cargo-hack) validates that all combinations of crate features work correctly.
-* [cargo-udeps](https://crates.io/crates/cargo-udeps) detects unused dependencies in Cargo.toml files.
-* [miri](https://github.com/rust-lang/miri) validates the correctness of unsafe code.
+* compiler lints offer many lints to avoid bugs and improve code quality.
+* clippy lints contain hundreds of lints to avoid bugs and improve code quality.
+* rustfmt ensures consistent source formatting.
+* cargo-audit verifies crate dependencies for security vulnerabilities.
+* cargo-hack validates that all combinations of crate features work correctly.
+* cargo-udeps detects unused dependencies in Cargo.toml files.
+* miri validates the correctness of unsafe code.
 
 ### Compiler Lints
 
@@ -512,23 +504,23 @@ literal_string_with_formatting_args = "allow"
 
 The guidelines in this book complement existing Rust guidelines, in particular:
 
-- [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/checklist.html)
-- [Rust Style Guide](https://doc.rust-lang.org/nightly/style-guide/)
-- [Rust Design Patterns](https://rust-unofficial.github.io/patterns//intro.html)
-- [Rust Reference - Undefined Behavior](https://doc.rust-lang.org/reference/behavior-considered-undefined.html)
+- Rust API Guidelines
+- Rust Style Guide
+- Rust Design Patterns
+- Rust Reference - Undefined Behavior
 
 We recommend you read through these as well, and apply them in addition to this book's items. Pay special attention to the ones below, as they are frequently forgotten:
 
-- [ ] [C-CONV](https://rust-lang.github.io/api-guidelines/naming.html#ad-hoc-conversions-follow-as_-to_-into_-conventions-c-conv) - Ad-hoc conversions
+- [ ] C-CONV - Ad-hoc conversions
   follow  `as_`, `to_`, `into_` conventions
-- [ ] [C-GETTER](https://rust-lang.github.io/api-guidelines/naming.html#getter-names-follow-rust-convention-c-getter) - Getter names follow Rust convention
-- [ ] [C-COMMON-TRAITS](https://rust-lang.github.io/api-guidelines/interoperability.html#c-common-traits) - Types eagerly implement common traits
+- [ ] C-GETTER - Getter names follow Rust convention
+- [ ] C-COMMON-TRAITS - Types eagerly implement common traits
   - `Copy`, `Clone`, `Eq`, `PartialEq`, `Ord`, `PartialOrd`, `Hash`, `Default`, `Debug`
   - `Display` where type wants to be displayed
-- [ ] [C-CTOR](https://rust-lang.github.io/api-guidelines/predictability.html?highlight=new#constructors-are-static-inherent-methods-c-ctor) -
+- [ ] C-CTOR -
   Constructors are static, inherent methods
   - In particular, have `Foo::new()`, even if you have `Foo::default()`
-- [ ] [C-FEATURE](https://rust-lang.github.io/api-guidelines/naming.html#feature-names-are-free-of-placeholder-words-c-feature) - Feature names
+- [ ] C-FEATURE - Feature names
   are free of placeholder words
 
 

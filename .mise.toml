@@ -4,6 +4,10 @@ rust = "latest"
 [env]
 _.file = [".env.default", ".env"]
 
+[tasks.fmt]
+description = "Format code"
+run = "cargo fmt"
+
 [tasks.test]
 description = "Run tests"
 depends = ["lint"]

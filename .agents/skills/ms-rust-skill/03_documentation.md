@@ -53,7 +53,7 @@ fn copy(src: File, dst: File) {}
 
 ### Related Reading
 
-- Function docs include error, panic, and safety considerations ([C-FAILURE](https://rust-lang.github.io/api-guidelines/documentation.html#c-failure))
+- Function docs include error, panic, and safety considerations (C-FAILURE)
 
 
 
@@ -63,9 +63,7 @@ fn copy(src: File, dst: File) {}
 <version>1.0</version>
 
 When publicly re-exporting crate items via `pub use foo::Foo` or `pub use foo::*`, they show up in an opaque re-export block. In most cases, this is not
-helpful to the reader:
-
-![TEXT](M-DOC-INLINE_BAD.png)
+helpful to the reader.
 
 Instead, you should annotate them with `#[doc(inline)]` at the `use` site, for them to be inlined organically:
 
@@ -80,17 +78,11 @@ pub use foo::*;
 pub use foo::Foo;
 ```
 
-![TEXT](M-DOC-INLINE_GOOD.png)
-
 This does not apply to `std` or 3rd party types; these should always be re-exported without inlining to make it clear they are external.
 
 > ### <alert></alert> Still avoid glob exports
 >
-> The `#[doc(inline)]` trick above does not change [M-NO-GLOB-REEXPORTS]; you generally should not re-export items via wildcards.
-
-[M-NO-GLOB-REEXPORTS]: ../libs/resilience/#M-NO-GLOB-REEXPORTS
-
-
+> The `#[doc(inline)]` trick above does not change M-NO-GLOB-REEXPORTS; you generally should not re-export items via wildcards.
 
 ## First Sentence is One Line; Approx. 15 Words (M-FIRST-DOC-SENTENCE) { #M-FIRST-DOC-SENTENCE }
 
@@ -110,15 +102,8 @@ fn some_item() { }
 Since Rust API documentation is rendered with a fixed max width, there is a naturally preferred sentence length you should not
 exceed to keep things tidy on most screens.
 
-If you keep things in a line, your docs will become easily skimmable. Compare, for example, the standard library:
-
-![TEXT](M-FIRST-DOC-SENTENCE_GOOD.png)
-
-Otherwise, you might end up with _widows_ and a generally unpleasant reading flow:
-
-![TEXT](M-FIRST-DOC-SENTENCE_BAD.png)
-
-As a rule of thumb, the first sentence should not exceed **15 words**.
+Keep the first sentence on one line and under **15 words** to make docs
+skimmable.
 
 
 
@@ -127,7 +112,6 @@ As a rule of thumb, the first sentence should not exceed **15 words**.
 <why>To allow for better API docs navigation.</why>
 <version>1.1</version>
 
-Any public library module must have `//!` module documentation, and the first sentence must follow [M-DOC-FIRST-SENTENCE].
 
 ```rust,edition2021,ignore
 pub mod ffi {
@@ -142,19 +126,16 @@ The rest of the module documentation should be comprehensive, i.e., cover the mo
 - what the module contains
 - when it should be used, possibly when not
 - examples
-- subsystem specifications (e.g., `std::fmt` [also describes its formatting language](https://doc.rust-lang.org/stable/std/fmt/index.html#formatting-parameters))
+- subsystem specifications (e.g., `std::fmt` also describes its formatting language)
 - observable side effects, including what guarantees are made about these, if any
 - relevant implementation details, e.g., the used system APIs
 
  Great examples include:
 
-- [`std::fmt`](https://doc.rust-lang.org/stable/std/fmt/index.html)
-- [`std::pin`](https://doc.rust-lang.org/stable/std/pin/index.html)
-- [`std::option`](https://doc.rust-lang.org/stable/std/option/index.html)
+- `std::fmt`
+- `std::pin`
+- `std::option`
 
 This does not mean every module should contain all of these items. But if there is something to say about the interaction of the contained types,
 their module documentation is the right place.
-
-[M-DOC-FIRST-SENTENCE]: ./#M-DOC-FIRST-SENTENCE
-
 

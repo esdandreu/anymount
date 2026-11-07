@@ -7,7 +7,7 @@
 <why>To reduce cognitive load and improve API ergonomics.</why>
 <version>1.0</version>
 
-As a specialization of [M-ABSTRACTIONS-DONT-NEST], generic wrappers and smart pointers like
+As a specialization of M-ABSTRACTIONS-DONT-NEST, generic wrappers and smart pointers like
 `Rc<T>`, `Arc<T>`, `Box<T>`, or `RefCell<T>` should be avoided in public APIs.
 
 From a user perspective these are mostly implementation details, and introduce infectious complexity that users have to
@@ -30,10 +30,6 @@ Smart pointers in APIs are acceptable when:
 - The smart pointer is fundamental to the API's purpose (e.g., a new container lib)
 
 - The smart pointer, based on benchmarks, significantly improves performance and the complexity is justified.
-
-[M-ABSTRACTIONS-DONT-NEST]: ./#M-ABSTRACTIONS-DONT-NEST
-
-
 
 ## Prefer Types over Generics, Generics over Dyn Traits (M-DI-HIERARCHY) { #M-DI-HIERARCHY }
 
@@ -59,19 +55,19 @@ async fn start_service(b: Rc<dyn Database>) { ... }
 ```
 
 Apart from not feeling idiomatic, this approach precludes other Rust constructs that conflict with object safety,
-can cause issues with asynchronous code, and exposes wrappers (compare [M-AVOID-WRAPPERS]).
+can cause issues with asynchronous code, and exposes wrappers (compare M-AVOID-WRAPPERS).
 
 Instead, when more than one implementation is needed, this _design escalation ladder_ should be followed:
 
 If the other implementation is only concerned with providing a _sans-io_ implementation for testing, implement your type as an
-enum, following [M-MOCKABLE-SYSCALLS] instead.
+enum, following M-MOCKABLE-SYSCALLS instead.
 
 If users are expected to provide custom implementations, you should introduce one or more traits, and implement them for your own types
 _on top_ of your inherent functions. Each trait should be relatively narrow, e.g., `StoreObject`, `LoadObject`. If eventually a single
 trait is needed it should be made a subtrait, e.g., `trait DataAccess: StoreObject + LoadObject {}`.
 
 Code working with these traits should ideally accept them as generic type parameters as long as their use does not contribute to significant nesting
-(compare [M-ABSTRACTIONS-DONT-NEST]).
+(compare M-ABSTRACTIONS-DONT-NEST).
 
 ```rust,ignore
 // Good, generic does not have infectious impact, uses only most specific trait
@@ -106,7 +102,7 @@ struct MyService {
 }
 ```
 
-The generic wrapper can also be combined with the enum approach from [M-MOCKABLE-SYSCALLS]:
+The generic wrapper can also be combined with the enum approach from M-MOCKABLE-SYSCALLS:
 
 ```rust,ignore
 enum DataAccess {
@@ -118,18 +114,12 @@ enum DataAccess {
 async fn read_database(x: &DataAccess) { ... }
 ```
 
-[M-AVOID-WRAPPERS]: ./#M-AVOID-WRAPPERS
-[M-MOCKABLE-SYSCALLS]: ../resilience/#M-MOCKABLE-SYSCALLS
-[M-ABSTRACTIONS-DONT-NEST]: ./#M-ABSTRACTIONS-DONT-NEST
-
-
-
 ## Error are Canonical Structs (M-ERRORS-CANONICAL-STRUCTS) { #M-ERRORS-CANONICAL-STRUCTS }
 
 <why>To harmonize the behavior of error types, and provide a consistent error handling.</why>
 <version>1.0</version>
 
-Errors should be a situation-specific `struct` that contain a [`Backtrace`](https://doc.rust-lang.org/stable/std/backtrace/struct.Backtrace.html),
+Errors should be a situation-specific `struct` that contain a `Backtrace`,
 a possible upstream error cause, and helper methods.
 
 Simple crates usually expose a single error type `Error`, complex crates may expose multiple types, for example
@@ -242,7 +232,7 @@ Lastly, if you happen to emit lots of errors from your crate, consider creating 
 > That said, they are a _development_ tool, not a _runtime_ diagnostic, and by default `Backtrace::capture()` will **not** capture
 > backtraces, as they have a large overhead, e.g., 4μs per capture on the author's PC.
 >
-> Instead, Rust evaluates a [set of environment variables](https://doc.rust-lang.org/stable/std/backtrace/index.html#environment-variables), such as
+> Instead, Rust evaluates a set of environment variables, such as
 > `RUST_BACKTRACE`, and only walks the call frame when explicitly asked. Otherwise it captures an empty trace, at the cost of only a few CPU instructions.
 
 
@@ -300,7 +290,7 @@ impl Download for HttpClient {
 <version>1.0</version>
 
 In **function** signatures, accept `impl AsRef<T>` for types that have a
-[clear reference hierarchy](https://doc.rust-lang.org/stable/std/convert/trait.AsRef.html#implementors), where you
+clear reference hierarchy, where you
 do not need to take ownership, or where object creation is relatively cheap.
 
 | Instead of ... | accept ... |
@@ -347,7 +337,7 @@ struct User {
 <why>To untangle business logic from I/O logic, and have N*M composability.</why>
 <version>0.1</version>
 
-Functions and types that only need to perform one-shot I/O during initialization should be written "[sans-io](https://www.firezone.dev/blog/sans-io)",
+Functions and types that only need to perform one-shot I/O during initialization should be written "sans-io",
 and accept some `impl T`, where `T` is the appropriate I/O trait, effectively outsourcing I/O work to another type:
 
 ```rust,ignore
@@ -367,14 +357,10 @@ fn parse_data(file: File) {}
 fn parse_data(data: impl std::io::Read) {}
 ```
 
-Synchronous functions should use [`std::io::Read`](https://doc.rust-lang.org/std/io/trait.Read.html) and
-[`std::io::Write`](https://doc.rust-lang.org/std/io/trait.Write.html). Asynchronous _functions_ targeting more than one runtime should use
-[`futures::io::AsyncRead`](https://docs.rs/futures/latest/futures/io/trait.AsyncRead.html) and similar.
-_Types_ that need to perform runtime-specific, continuous I/O should follow [M-RUNTIME-ABSTRACTED] instead.
-
-[M-RUNTIME-ABSTRACTED]: ./#M-RUNTIME-ABSTRACTED
-
-
+Synchronous functions should use `std::io::Read` and
+`std::io::Write`. Asynchronous _functions_ targeting more than one runtime should use
+`futures::io::AsyncRead` and similar.
+_Types_ that need to perform runtime-specific, continuous I/O should follow M-RUNTIME-ABSTRACTED instead.
 
 ## Accept `impl RangeBounds<>` Where Feasible (M-IMPL-RANGEBOUNDS) { #M-IMPL-RANGEBOUNDS }
 
@@ -483,7 +469,7 @@ This pattern allows for convenient usage:
 - `Foo::builder((logger, config))` - when both parameters are needed
 - `Foo::builder(FooDeps { logger, config })` - explicit struct construction
 
-Alternatively, you can use [`fundle`](https://docs.rs/fundle) to simplify the creation of `FooDeps`:
+Alternatively, you can use `fundle` to simplify the creation of `FooDeps`:
 
 ```rust, ignore
 #[derive(Debug, Clone)]
@@ -494,7 +480,7 @@ pub struct FooDeps {
 }
 ```
 
-This pattern enables "dependency injection", see [these docs](https://docs.rs/fundle/latest/fundle/attr.deps.html) for more details.
+This pattern enables "dependency injection", see these docs for more details.
 
 ### Runtime-Specific Builders
 
@@ -528,8 +514,8 @@ builder methods follow the pattern `builder_{runtime}(deps)` where `{runtime}` i
 
 ### Further Reading
 
-- [Builder pattern in Rust: self vs. &mut self, and method vs. associated function](https://users.rust-lang.org/t/builder-pattern-in-rust-self-vs-mut-self-and-method-vs-associated-function/72892)
-- [fundle](https://docs.rs/fundle)
+- Builder pattern in Rust: self vs. &mut self, and method vs. associated function
+- fundle
 
 
 
@@ -549,7 +535,7 @@ impl Deposit {
 ```
 
 Instead of providing a long parameter list, parameters should be grouped semantically. When applying this guideline,
-also check if [C-NEWTYPE] is applicable:
+also check if C-NEWTYPE is applicable:
 
 ```rust, ignore
 # struct Deposit;
@@ -565,10 +551,6 @@ impl Account {
     pub fn new_even_better(bank: Bank, customer: Customer) -> Self { }
 }
 ```
-
-[C-NEWTYPE]: https://rust-lang.github.io/api-guidelines/type-safety.html#c-newtype
-
-
 
 ## Services are Clone (M-SERVICES-CLONE) { #M-SERVICES-CLONE }
 
@@ -669,7 +651,7 @@ To decide whether type parameter nesting should be avoided, consider these facto
 
 - Will the type be **named** by your users?
   - Service-level types are always expected to be named (e.g., `Library<T>`),
-  - Utility types, such as the many [`std::iter`](https://doc.rust-lang.org/stable/std/iter/index.html) types like `Chain`, `Cloned`, `Cycle`, are not
+  - Utility types, such as the many `std::iter` types like `Chain`, `Cloned`, `Cycle`, are not
     expected to be named.
 - Does the type primarily compose with non-user types?
 - Do the used type parameters have complex bounds?
@@ -687,8 +669,8 @@ should be free to do so.
 > reduce friction users encounter when working with your code.
 >
 > However, when designing API patterns and ecosystems at large, there might be valid reasons to introduce intricate type magic to overall _lower_
-> the cognitive friction involved, [Bevy's ECS](https://docs.rs/bevy_ecs/latest/bevy_ecs/) or
-> [Axum's request handlers](https://docs.rs/axum/latest/axum/handler/trait.Handler.html) come to mind.
+> the cognitive friction involved, Bevy's ECS or
+> Axum's request handlers come to mind.
 >
 > The threshold where this pays off is high though. If there is any doubt about the utility of your creative use of generics, your users might be
 > better off without them.

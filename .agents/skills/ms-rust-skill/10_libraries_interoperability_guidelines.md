@@ -156,7 +156,6 @@ async fn foo() {
 >
 > <div style="background-color:white;">
 >
-> ![TEXT](M-TYPES-SEND.png)
 >
 > </div>
 >

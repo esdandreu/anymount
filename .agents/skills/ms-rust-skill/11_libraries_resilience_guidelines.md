@@ -116,7 +116,7 @@ impl Library {
 }
 ```
 
-Behind the scenes, `LibraryCore` is a non-public enum, similar to [M-RUNTIME-ABSTRACTED], that either dispatches
+Behind the scenes, `LibraryCore` is a non-public enum, similar to M-RUNTIME-ABSTRACTED, that either dispatches
 calls to the respective sys call, or to an mocking controller.
 
 ```rust, ignore
@@ -162,7 +162,7 @@ mod mock {
 }
 ```
 
-Runtime-aware libraries already build on top of the [M-RUNTIME-ABSTRACTED] pattern should extend their runtime enum instead:
+Runtime-aware libraries already build on top of the M-RUNTIME-ABSTRACTED pattern should extend their runtime enum instead:
 
 ```rust, ignore
 enum Runtime {
@@ -187,10 +187,6 @@ impl Library {
     pub fn new_mocked_bad(&mut MockCtrl) -> Self { ... } // prone to misuse
 }
 ```
-
-[M-RUNTIME-ABSTRACTED]: ../ux/#M-RUNTIME-ABSTRACTED
-
-
 
 ## Don't Glob Re-Export Items (M-NO-GLOB-REEXPORTS) { #M-NO-GLOB-REEXPORTS }
 
@@ -255,7 +251,7 @@ be regular numbers, not `Saturating<usize>`, `NonZero<usize>`, or similar.
 
 Testing functionality must be guarded behind a feature flag. This includes
 
-- mocking functionality ([M-MOCKABLE-SYSCALLS]),
+- mocking functionality (M-MOCKABLE-SYSCALLS),
 - the ability to inspect sensitive data,
 - safety check overrides,
 - fake data generation.
@@ -270,7 +266,4 @@ impl HttpClient {
     pub fn bypass_certificate_checks() { ... }
 }
 ```
-
-[M-MOCKABLE-SYSCALLS]: ./#M-MOCKABLE-SYSCALLS
-
 

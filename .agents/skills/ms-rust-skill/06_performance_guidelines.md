@@ -13,12 +13,12 @@ You should, early in the development process, identify if your crate is performa
 - regularly run a profiler collecting CPU and allocation insights,
 - document or communicate the most performance sensitive areas.
 
-For benchmarks we recommend [criterion](https://crates.io/crates/criterion) or [divan](https://crates.io/crates/divan).
+For benchmarks we recommend criterion or divan.
 If possible, benchmarks should not only measure elapsed wall time, but also used CPU time over all threads (this unfortunately
 requires manual work and is not supported out of the box by the common benchmark utils).
 
-Profiling Rust on Windows works out of the box with [Intel VTune](https://www.intel.com/content/www/us/en/developer/tools/oneapi/vtune-profiler.html)
-and [Superluminal](https://superluminal.eu/). However, to gain meaningful CPU insights you should enable debug symbols for benchmarks in your `Cargo.toml`:
+Profiling Rust on Windows works out of the box with Intel VTune
+and Superluminal. However, to gain meaningful CPU insights you should enable debug symbols for benchmarks in your `Cargo.toml`:
 
 ```toml
 [profile.bench]
@@ -30,7 +30,7 @@ sharing screenshots of your latest profiling hot spots.
 
 ### Further Reading
 
-- [Performance Tips](https://cheats.rs/#performance-tips)
+- Performance Tips
 
 > ### <tip></tip> How much faster?
 >
@@ -64,7 +64,7 @@ Ideally, you should
 - sleep or yield when no work is present,
 - design your own APIs for batched operations,
 - perform work via batched APIs where available,
-- yield within long individual items, or between chunks of batches (see [M-YIELD-POINTS]),
+- yield within long individual items, or between chunks of batches (see M-YIELD-POINTS),
 - exploit CPU caches, temporal and spatial locality.
 
 You should not:
@@ -74,10 +74,6 @@ You should not:
 - do work stealing or similar to balance individual items.
 
 Shared state should only be used if the cost of sharing is less than the cost of re-computation.
-
-[M-YIELD-POINTS]: ./#M-YIELD-POINTS
-
-
 
 ## Long-Running Tasks Should Have Yield Points. (M-YIELD-POINTS) { #M-YIELD-POINTS }
 
