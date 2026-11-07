@@ -13,7 +13,7 @@ pub use started_authorization::{AuthStorageError, StartedAuthorization};
 pub use storage::{
     ConnectStorageError, DirEntry, InvalidStoragePath, ReadDirError,
     ReadFileAtError, Storage, StorageConfig, StoragePath, WriteAt,
-    WriteAtError,
+    WriteAtError, WriteFileError,
 };
 
 #[cfg(test)]

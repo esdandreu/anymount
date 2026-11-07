@@ -8,6 +8,7 @@ mod read_file_at;
 pub mod storages;
 #[cfg(test)]
 pub mod test_utils;
+mod write_file;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use config_dir::ConfigDir;
@@ -15,3 +16,4 @@ pub use domain::{Config, ConfigRepository, Storage};
 pub use mount::{MountError, mount};
 pub use read_dir::{ReadDirError, read_dir};
 pub use read_file_at::{ReadFileAtError, read_file_at};
+pub use write_file::{WriteFileError, write_file};

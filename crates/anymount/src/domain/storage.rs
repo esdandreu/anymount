@@ -52,6 +52,28 @@ pub trait Storage: Send + Sync {
     ) -> Result<(), ReadFileAtError> {
         Err(ReadFileAtError::NotSupported)
     }
+
+    /// Creates or replaces a file with exactly `length` bytes from `reader`.
+    ///
+    /// Existing content is replaced, including when `length` is zero. The
+    /// reader is not consumed beyond `length` bytes. Parent directories must
+    /// already exist. An error may leave the destination changed, including
+    /// partially written. Atomic replacement and durable persistence are not
+    /// guaranteed.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Input` if reading fails. Premature EOF is reported as an
+    /// `Input` error with [`std::io::ErrorKind::UnexpectedEof`]. Returns an
+    /// error if the write cannot complete or is unsupported.
+    fn write_file(
+        &self,
+        _path: StoragePath,
+        _reader: &mut dyn std::io::Read,
+        _length: u64,
+    ) -> Result<(), WriteFileError> {
+        Err(WriteFileError::NotSupported)
+    }
 }
 
 impl<T> Storage for Box<T>
@@ -72,6 +94,15 @@ where
         range: Range<u64>,
     ) -> Result<(), ReadFileAtError> {
         (**self).read_file_at(path, writer, range)
+    }
+
+    fn write_file(
+        &self,
+        path: StoragePath,
+        reader: &mut dyn std::io::Read,
+        length: u64,
+    ) -> Result<(), WriteFileError> {
+        (**self).write_file(path, reader, length)
     }
 }
 
@@ -126,6 +157,31 @@ impl From<std::io::Error> for ReadDirError {
 pub enum WriteAtError {
     #[error("failed to write at offset {offset}: {message}")]
     Failed { offset: u64, message: String },
+}
+
+/// Reports a file-write failure.
+#[derive(Debug, thiserror::Error)]
+pub enum WriteFileError {
+    #[error("storage does not support writing a file")]
+    NotSupported,
+
+    #[error("parent directory not found")]
+    NotFound,
+
+    #[error("path is not a file")]
+    NotAFile,
+
+    #[error("permission denied")]
+    PermissionDenied,
+
+    #[error("storage is unavailable: {message}")]
+    Unavailable { message: String },
+
+    #[error("failed to read input: {0}")]
+    Input(#[source] std::io::Error),
+
+    #[error("failed to write file: {message}")]
+    Unknown { message: String },
 }
 
 #[derive(Debug, thiserror::Error)]
