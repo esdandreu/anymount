@@ -1,7 +1,7 @@
 ["examples:browser:test"]
 description = "Test the browser driver adapter"
 depends = ["examples:browser:registry-test"]
-run = "node --test examples/browser/driver.test.mjs"
+run = "node --test examples/note-editor/driver.test.mjs"
 
 ["examples:browser:registry-test"]
 description = "Test shared registries and mounting on WebAssembly"
@@ -9,8 +9,8 @@ run = "wasm-pack test --node crates/anymount --lib"
 
 ["examples:browser:build"]
 description = "Build the browser driver WebAssembly package"
-run = "wasm-pack build crates/anymount --target web --out-dir ../../examples/browser/pkg --out-name anymount_browser --release"
+run = "wasm-pack build crates/anymount --target web --out-dir ../../examples/note-editor/pkg --out-name anymount_browser --release"
 
 ["examples:browser:serve"]
 description = "Serve the static browser example on localhost"
-run = "python3 -m http.server 4173 --directory examples/browser"
+run = "python3 -m http.server 4173 --directory examples/note-editor"
