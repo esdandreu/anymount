@@ -9,7 +9,7 @@ resolver = "3"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "GPL-3.0"
+license = "LGPL-3.0-or-later"
 authors = ["esdandreu"]
 build = "build.rs"
 
