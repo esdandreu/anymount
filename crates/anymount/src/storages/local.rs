@@ -193,6 +193,7 @@ mod tests {
         }
     }
 
+    // private test util: Records writes in local storage tests.
     impl WriteAt for RecordingWriter {
         fn write_at(
             &mut self,

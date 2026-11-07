@@ -670,6 +670,7 @@ endpoint = "https://graph.microsoft.com/v1.0"
 
     struct StubToken(String);
 
+    // private test util: Supplies a token in OneDrive tests.
     impl BearerToken for StubToken {
         fn access_token(&self) -> Result<String> {
             Ok(self.0.clone())
@@ -681,6 +682,7 @@ endpoint = "https://graph.microsoft.com/v1.0"
         body: Vec<u8>,
     }
 
+    // private test util: Supplies HTTP responses in OneDrive tests.
     impl HttpGet for MockHttpGet {
         fn get(
             &self,
@@ -704,6 +706,7 @@ endpoint = "https://graph.microsoft.com/v1.0"
         }
     }
 
+    // private test util: Records writes in OneDrive tests.
     impl WriteAt for RecordingWriter {
         fn write_at(
             &mut self,

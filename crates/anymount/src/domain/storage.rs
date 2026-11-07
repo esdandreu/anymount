@@ -183,8 +183,10 @@ mod test {
 
     struct TestStorageConnection {}
 
+    // private test util: Tests the storage configuration contract.
     impl Storage for TestStorageConnection {}
 
+    // private test util: Tests storage defaults and deserialization.
     #[typetag::serde(name = "test")]
     impl StorageConfig for TestStorageConfig {
         fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError> {

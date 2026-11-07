@@ -74,6 +74,7 @@ mod tests {
 
     struct EmptyConfigRepository;
 
+    // private test util: Exercises an empty configuration repository.
     impl ConfigRepository for EmptyConfigRepository {
         type Iter<'a> = std::iter::Empty<Config>;
 

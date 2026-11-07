@@ -455,6 +455,7 @@ mod tests {
         accessed: SystemTime,
     }
 
+    // private test util: Supplies directory entries in FUSE tests.
     impl DirEntry for TestDirEntry {
         fn file_name(&self) -> String {
             self.file_name.clone()

@@ -24,4 +24,5 @@ libraries = [
     { path = "tools/lints/module_names" },
     { path = "tools/lints/no_cfg_abuse" },
     { path = "tools/lints/integration_tests" },
+    { path = "tools/lints/shared_test_utils" },
 ]

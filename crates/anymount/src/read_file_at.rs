@@ -40,6 +40,7 @@ mod tests {
 
     struct TestWriter;
 
+    // private test util: Supplies a writer for path validation tests.
     impl WriteAt for TestWriter {
         fn write_at(
             &mut self,

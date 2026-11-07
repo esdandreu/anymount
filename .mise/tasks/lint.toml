@@ -7,6 +7,7 @@ run = "cargo dylint --all --no-build"
 description = "Test custom Rust lints"
 run = '''
 cargo +nightly-2026-08-20 test --manifest-path tools/lints/integration_tests/Cargo.toml
+cargo +nightly-2026-08-20 test --manifest-path tools/lints/shared_test_utils/Cargo.toml
 cargo +nightly-2026-08-20 test --manifest-path tools/lints/no_cfg_abuse/Cargo.toml
 cargo +nightly-2026-08-20 test --manifest-path tools/lints/module_names/Cargo.toml
 cargo +nightly-2026-08-20 test --manifest-path tools/lints/no_pub_mod_domain/Cargo.toml

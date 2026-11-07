@@ -100,6 +100,7 @@ mod tests {
 
     struct MockSession;
 
+    // private test util: Provides a completed authorization session.
     impl StartedAuthSession for MockSession {
         fn message(&self) -> String {
             "Open example.com".to_owned()
@@ -120,6 +121,7 @@ mod tests {
 
     struct FailingUseCase;
 
+    // private test util: Exercises authorization error handling.
     impl AuthUseCase for FailingUseCase {
         fn start_onedrive_auth(
             &self,
@@ -133,6 +135,7 @@ mod tests {
 
     struct SuccessUseCase;
 
+    // private test util: Exercises successful authorization.
     impl AuthUseCase for SuccessUseCase {
         fn start_onedrive_auth(
             &self,
@@ -144,6 +147,7 @@ mod tests {
 
     struct NoOpUrlOpener;
 
+    // private test util: Avoids opening a browser during authorization tests.
     impl UrlOpener for NoOpUrlOpener {
         fn open(&self, _url: &str) -> Result<(), ()> {
             Ok(())
