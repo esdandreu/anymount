@@ -1,3 +1,3 @@
-mod browser_driver_api;
+mod browser_driver;
 
-pub use browser_driver_api::{BrowserDriverApi, BrowserDriverConfig};
+pub use browser_driver::{BrowserDriverApi, BrowserDriverConfig};
