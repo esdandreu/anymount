@@ -18,19 +18,19 @@ use syn::{Attribute, Meta, Token, punctuated::Punctuated};
 
 dylint_linting::dylint_library!();
 
-rustc_lint_defs::declare_lint!(pub NO_CFG, Deny, "conditional compilation attributes are restricted");
-rustc_lint_defs::declare_lint_pass!(NoCfg => [NO_CFG]);
+rustc_lint_defs::declare_lint!(pub NO_CFG_ABUSE, Deny, "conditional compilation attributes are restricted");
+rustc_lint_defs::declare_lint_pass!(NoCfgAbuse => [NO_CFG_ABUSE]);
 
 #[unsafe(no_mangle)]
 pub fn register_lints(
     _sess: &rustc_session::Session,
     lint_store: &mut rustc_lint::LintStore,
 ) {
-    lint_store.register_lints(&[NO_CFG]);
-    lint_store.register_late_lint_pass(Box::new(|_| Box::new(NoCfg)));
+    lint_store.register_lints(&[NO_CFG_ABUSE]);
+    lint_store.register_late_lint_pass(Box::new(|_| Box::new(NoCfgAbuse)));
 }
 
-impl<'tcx> LateLintPass<'tcx> for NoCfg {
+impl<'tcx> LateLintPass<'tcx> for NoCfgAbuse {
     fn check_crate(&mut self, cx: &LateContext<'tcx>) {
         if cx.tcx.crate_name(rustc_hir::def_id::LOCAL_CRATE).as_str()
             != "anymount"
@@ -46,7 +46,7 @@ impl<'tcx> LateLintPass<'tcx> for NoCfg {
         scan_dir(root, &root.join("crates"), &mut issues);
         for issue in issues {
             cx.opt_span_lint(
-                NO_CFG,
+                NO_CFG_ABUSE,
                 Some(rustc_span::DUMMY_SP),
                 rustc_errors::DiagDecorator(|diagnostic| {
                     diagnostic.primary_message(issue);

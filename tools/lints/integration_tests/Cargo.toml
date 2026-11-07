@@ -1,6 +1,8 @@
 [package]
-name = "no_cfg"
+name = "integration_tests"
 version = "0.1.0"
+authors = ["esdandreu"]
+description = "Dylint lint that forbids test directories"
 edition = "2024"
 publish = false
 
@@ -9,7 +11,9 @@ crate-type = ["cdylib"]
 
 [dependencies]
 dylint_linting = "=6.0.4"
-syn = { version = "2", features = ["full", "visit"] }
+
+[dev-dependencies]
+tempfile = "3"
 
 [workspace]
 

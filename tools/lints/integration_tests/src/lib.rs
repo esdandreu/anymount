@@ -14,19 +14,19 @@ use std::path::{Path, PathBuf};
 
 dylint_linting::dylint_library!();
 
-rustc_lint_defs::declare_lint!(pub NO_TEST_FOLDERS, Deny, "test directories are forbidden");
-rustc_lint_defs::declare_lint_pass!(NoTestFolders => [NO_TEST_FOLDERS]);
+rustc_lint_defs::declare_lint!(pub INTEGRATION_TESTS, Deny, "test directories are forbidden");
+rustc_lint_defs::declare_lint_pass!(IntegrationTests => [INTEGRATION_TESTS]);
 
 #[unsafe(no_mangle)]
 pub fn register_lints(
     _sess: &rustc_session::Session,
     lint_store: &mut rustc_lint::LintStore,
 ) {
-    lint_store.register_lints(&[NO_TEST_FOLDERS]);
-    lint_store.register_late_lint_pass(Box::new(|_| Box::new(NoTestFolders)));
+    lint_store.register_lints(&[INTEGRATION_TESTS]);
+    lint_store.register_late_lint_pass(Box::new(|_| Box::new(IntegrationTests)));
 }
 
-impl<'tcx> LateLintPass<'tcx> for NoTestFolders {
+impl<'tcx> LateLintPass<'tcx> for IntegrationTests {
     fn check_crate(&mut self, cx: &LateContext<'tcx>) {
         if cx.tcx.crate_name(rustc_hir::def_id::LOCAL_CRATE).as_str() != "anymount" {
             return;
@@ -70,7 +70,7 @@ fn find_test_folders(directory: &Path, folders: &mut Vec<PathBuf>) -> std::io::R
 
 fn emit_issue(cx: &LateContext<'_>, issue: String) {
     cx.opt_span_lint(
-        NO_TEST_FOLDERS,
+        INTEGRATION_TESTS,
         Some(rustc_span::DUMMY_SP),
         rustc_errors::DiagDecorator(|diagnostic| {
             diagnostic.primary_message(issue);
