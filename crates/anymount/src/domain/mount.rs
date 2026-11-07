@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-#[async_trait]
-pub trait Mount: Send + Sync {
+#[async_trait(?Send)]
+pub trait Mount {
     fn name(&self) -> &str;
 
     // Should it be just Path?

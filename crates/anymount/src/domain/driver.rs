@@ -15,8 +15,8 @@ pub trait DriverConfig: Send + Sync {
 }
 
 #[cfg_attr(test, mockall::automock)]
-#[async_trait]
-pub trait Driver: Send + Sync {
+#[async_trait(?Send)]
+pub trait Driver {
     /// Registers a mount. No-op if a mount was already registered with the same
     /// configuration.
     async fn mount(
@@ -61,7 +61,23 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::test_utils::mocks::{EmptyStorageConfig, NoOpMount};
+    use crate::test_utils::mocks::{EmptyStorageConfig, NoOpDriver, NoOpMount};
+
+    #[tokio::test]
+    async fn driver_and_mount_work_through_trait_objects() {
+        let driver: Box<dyn Driver> = Box::new(NoOpDriver::default());
+        let config = MountConfig {
+            name: "local".to_owned(),
+            path: PathBuf::from("/"),
+            storage: Box::new(EmptyStorageConfig),
+        };
+        let mount = driver.mount(&config).await.expect("mount should succeed");
+        mount.connect().await.expect("connect should succeed");
+        driver
+            .unmount(mount.name())
+            .await
+            .expect("unmount should succeed");
+    }
 
     #[tokio::test]
     async fn driver_lifecycle_is_callable_through_trait_object() {
@@ -71,7 +87,7 @@ mod tests {
             .withf(|config| config.name == "test")
             .times(1)
             .returning(|_| {
-                let mount: Box<dyn Mount> = Box::new(NoOpMount);
+                let mount: Box<dyn Mount> = Box::new(NoOpMount::default());
                 Ok(mount)
             });
         mock_driver

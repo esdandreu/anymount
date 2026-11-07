@@ -3,10 +3,12 @@ use crate::domain::{
 };
 use async_trait::async_trait;
 use std::path::Path;
+use std::rc::Rc;
 
-pub struct NoOpMount;
+#[derive(Default)]
+pub struct NoOpMount(Rc<()>);
 
-#[async_trait]
+#[async_trait(?Send)]
 impl Mount for NoOpMount {
     fn name(&self) -> &str {
         "no-op"
@@ -21,6 +23,8 @@ impl Mount for NoOpMount {
     }
 
     async fn connect(&self) -> Result<(), ConnectMountError> {
+        tokio::task::yield_now().await;
+        let _ = &self.0;
         Ok(())
     }
 

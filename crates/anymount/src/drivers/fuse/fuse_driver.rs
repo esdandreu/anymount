@@ -26,7 +26,7 @@ inventory::submit! {
 #[derive(Default)]
 pub struct FuseDriver;
 
-#[async_trait]
+#[async_trait(?Send)]
 impl Driver for FuseDriver {
     async fn mount(
         &self,
