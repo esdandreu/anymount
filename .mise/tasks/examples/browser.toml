@@ -5,7 +5,7 @@ run = "node --test examples/browser/driver.test.mjs"
 
 ["examples:browser:registry-test"]
 description = "Test shared registries and mounting on WebAssembly"
-run = "wasm-pack test --node crates/anymount --test browser_registry --all-features"
+run = "wasm-pack test --node crates/anymount --lib"
 
 ["examples:browser:build"]
 description = "Build the browser driver WebAssembly package"
