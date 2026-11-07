@@ -26,6 +26,13 @@ impl DriverConfig for BrowserDriverConfig {
     }
 }
 
+inventory::submit! {
+    crate::domain::DefaultDriverConfig {
+        priority: 0,
+        config: &BrowserDriverConfig,
+    }
+}
+
 #[derive(Default)]
 struct BrowserDriver {
     mounts: RefCell<HashMap<String, Rc<dyn BrowserStorage>>>,

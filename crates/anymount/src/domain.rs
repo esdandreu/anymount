@@ -1,5 +1,3 @@
-//! Defines platform-neutral driver, mount, and storage contracts.
-
 mod config;
 mod driver;
 mod mount;
@@ -7,9 +5,7 @@ mod started_authorization;
 mod storage;
 
 pub use config::{Config, ConfigNotFound, ConfigRepository, MountConfig};
-#[cfg(not(target_arch = "wasm32"))]
-pub use driver::DefaultDriverConfig;
-pub use driver::{Driver, DriverConfig, MountError};
+pub use driver::{DefaultDriverConfig, Driver, DriverConfig, MountError};
 pub use mount::{
     ConnectMountError, DisconnectMountError, Mount, UnregisterMountError,
 };
