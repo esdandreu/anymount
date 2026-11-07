@@ -7,18 +7,26 @@ authors.workspace = true
 
 [dependencies]
 async-trait = "0.1"
-cap-std = "4.0.2"
+serde = { version = "1.0", features = ["derive"] }
+inventory = "0.3"
+typetag = "0.2.22"
 thiserror = "1.0"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+cap-std = "4.0.2"
 bytes = "1.9"
 parking_lot = "0.12"
 oauth2 = { version = "5", default-features = false, features = ["ureq"] }
 ureq = "2.11"
 url = "2"
-serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
 toml = "0.8"
-inventory = "0.3"
 dirs = "6"
 chrono = "0.4"
 jsonwebtoken = "10"
@@ -49,7 +57,6 @@ tracing-opentelemetry = { version = "0.32.1", default-features = false, features
 ] }
 opentelemetry-appender-tracing = "0.31.1"
 opentelemetry-semantic-conventions = "0.31.0"
-typetag = "0.2.22"
 
 # Unix-specific dependencies (requires FUSE installed)
 [target.'cfg(unix)'.dependencies]
@@ -77,6 +84,12 @@ windows = { version = "0.58", features = [
 insta = "1.47.2"
 mockall = "0.15"
 tempfile = "3"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+serde_json = "1.0"
+tokio = { version = "1", features = ["rt", "macros", "sync"] }
+toml = "0.8"
+wasm-bindgen-test = "0.3.72"
 
 [features]
 default = []

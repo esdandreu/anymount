@@ -22,4 +22,5 @@ libraries = [
     { path = "tools/lints/no_extra_crates" },
     { path = "tools/lints/no_pub_mod_domain" },
     { path = "tools/lints/module_names" },
+    { path = "tools/lints/no_cfg" },
 ]
