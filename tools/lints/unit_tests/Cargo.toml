@@ -1,0 +1,18 @@
+[package]
+name = "no_tests_in_driver_module"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+dylint_linting = "=6.0.4"
+syn = { version = "2", features = ["full", "visit"] }
+
+
+[workspace]
+
+[package.metadata.rust-analyzer]
+rustc_private = true
