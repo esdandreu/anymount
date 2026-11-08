@@ -136,14 +136,8 @@ fn allowed_attribute(path: &Path, meta: &Meta) -> bool {
                 Meta::NameValue(value) if value.path.is_ident("target_arch") => {
                     is_wasm(&predicate)
                 }
-                Meta::List(list) if list.path.is_ident("all") => {
-                    let Ok(args) = Punctuated::<Meta, Token![,]>::parse_terminated
-                        .parse2(list.tokens.clone()) else {
-                        return false;
-                    };
-                    args.len() == 2
-                        && matches!(&args[0], Meta::Path(path) if path.is_ident("unix"))
-                        && matches!(&args[1], Meta::NameValue(value) if value.path.is_ident("feature") && matches!(&value.value, syn::Expr::Lit(expr) if matches!(&expr.lit, syn::Lit::Str(s) if s.value() == "fuse")))
+                Meta::NameValue(value) if value.path.is_ident("feature") => {
+                    matches!(&value.value, syn::Expr::Lit(expr) if matches!(&expr.lit, syn::Lit::Str(s) if s.value() == "fuse"))
                 }
                 _ => false,
             },
@@ -192,8 +186,9 @@ fn rejects_cfg_even_in_inactive_code() {
 #[test]
 fn accepts_only_explicit_exceptions() {
     assert_eq!(check_source(Path::new("crates/anymount/src/read_dir.rs"), "#[cfg(test)] mod tests {} #[cfg_attr(test, mockall::automock)] trait T {}").unwrap(), 0);
-    assert_eq!(check_source(Path::new("crates/anymount/src/drivers.rs"), "#[cfg(target_os = \"windows\")] mod windows; #[cfg(feature = \"fuse\")] mod fuse; #[cfg(unix)] mod other;").unwrap(), 2);
-    assert_eq!(check_source(Path::new("crates/anymount/src/drivers.rs"), "#[cfg(target_arch = \"wasm32\")] mod browser; #[cfg(all(unix, feature = \"fuse\"))] mod fuse; #[cfg(target_arch = \"arm\")] mod other;").unwrap(), 1);
+    assert_eq!(check_source(Path::new("crates/anymount/src/drivers.rs"), "#[cfg(target_os = \"windows\")] mod windows; #[cfg(feature = \"fuse\")] mod fuse; #[cfg(feature = \"other\")] mod other_feature; #[cfg(unix)] mod other;").unwrap(), 2);
+    assert_eq!(check_source(Path::new("other.rs"), "#[cfg(feature = \"fuse\")] mod fuse;").unwrap(), 1);
+    assert_eq!(check_source(Path::new("crates/anymount/src/drivers.rs"), "#[cfg(target_arch = \"wasm32\")] mod browser; #[cfg(all(unix, feature = \"fuse\"))] mod fuse; #[cfg(target_arch = \"arm\")] mod other;").unwrap(), 2);
     assert_eq!(check_source(Path::new("crates/anymount/src/storages.rs"), "#[cfg(not(target_arch = \"wasm32\"))] mod local; #[cfg(not(target_arch = \"arm\"))] mod other;").unwrap(), 1);
     assert_eq!(check_source(Path::new("crates/anymount/src/lib.rs"), "#[cfg(not(target_arch = \"wasm32\"))] mod config_dir; #[cfg(unix)] mod other;").unwrap(), 1);
     assert_eq!(check_source(Path::new("crates/anymount/tests/browser_registry.rs"), "#![cfg(target_arch = \"wasm32\")] #[cfg(unix)] fn other() {}").unwrap(), 1);
