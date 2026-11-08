@@ -43,11 +43,6 @@ pub enum ConnectStorageError {
 /// Maximum number of bytes a single range read may request.
 pub const MAX_READ_SIZE: usize = 65536;
 
-/// Provides asynchronous access to a user-authorized storage workspace.
-///
-/// Range reads write at most the requested bytes and return the number written.
-/// A short read indicates the end of the file. Providers may report unsupported
-/// operations and omit metadata they cannot determine.
 #[async_trait(?Send)]
 pub trait Storage: Any {
     async fn connect(
