@@ -1,8 +1,9 @@
 use super::{
-    BrowserDriver, BrowserMount, BrowserStorage, BrowserStorageConfig,
-    FileSystemAccessStorage,
+    BrowserDriver, BrowserMount, BrowserStorageConfig, FileSystemAccessStorage,
 };
-use crate::domain::{Driver, Mount, MountConfig};
+use crate::domain::{
+    AsyncStorage, AsyncStorageError, Driver, Mount, MountConfig, StoragePath,
+};
 use std::path::PathBuf;
 use std::rc::Rc;
 use wasm_bindgen::{JsValue, prelude::wasm_bindgen};
@@ -38,13 +39,19 @@ impl BrowserDriverApi {
             path: PathBuf::from(path),
             storage: Box::new(BrowserStorageConfig),
         };
+        let previous = self.driver.mounts.borrow().get(&config.name).cloned();
         let mount = Driver::mount(&self.driver, &config)
             .await
             .map_err(|error| JsValue::from_str(&error.to_string()))?;
         if let Err(error) = mount.connect().await {
-            if let Err(cleanup_error) =
-                Driver::unmount(&self.driver, &config.name).await
-            {
+            let cleanup = Driver::unmount(&self.driver, &config.name).await;
+            if let Some(previous) = previous {
+                self.driver
+                    .mounts
+                    .borrow_mut()
+                    .insert(config.name.clone(), previous);
+            }
+            if let Err(cleanup_error) = cleanup {
                 return Err(JsValue::from_str(&format!(
                     "{error}; cleanup failed: {cleanup_error}"
                 )));
@@ -65,27 +72,25 @@ impl BrowserDriverApi {
         path: String,
         handle: JsValue,
     ) -> Result<bool, JsValue> {
-        let storage: Rc<dyn BrowserStorage> =
+        let storage: Rc<dyn AsyncStorage> =
             Rc::new(FileSystemAccessStorage::new(handle));
-        self.driver
-            .mounts
-            .borrow_mut()
-            .insert(name.clone(), storage.clone());
         let mount = BrowserMount {
-            name,
+            name: name.clone(),
             path: PathBuf::from(path),
-            storage,
+            storage: storage.clone(),
         };
-        match mount.connect().await {
-            Ok(()) => Ok(true),
+        let connected = match mount.connect().await {
+            Ok(()) => true,
             Err(error)
                 if error.message
                     == "browser workspace permission is not granted" =>
             {
-                Ok(false)
+                false
             }
-            Err(error) => Err(JsValue::from_str(&error.to_string())),
-        }
+            Err(error) => return Err(JsValue::from_str(&error.to_string())),
+        };
+        self.driver.mounts.borrow_mut().insert(name, storage);
+        Ok(connected)
     }
 
     /// Connects a saved workspace and optionally requests permission.
@@ -99,7 +104,10 @@ impl BrowserDriverApi {
         request_permission: bool,
     ) -> Result<bool, JsValue> {
         let storage = self.storage(&name)?;
-        storage.connect(request_permission).await
+        storage
+            .connect(request_permission)
+            .await
+            .map_err(to_js_error)
     }
 
     /// Disconnects a workspace while keeping its selected handle available.
@@ -112,7 +120,7 @@ impl BrowserDriverApi {
         name: String,
     ) -> Result<(), JsValue> {
         let storage = self.storage(&name)?;
-        storage.disconnect().await
+        storage.disconnect().await.map_err(to_js_error)
     }
 
     /// Unregisters a browser workspace.
@@ -136,7 +144,12 @@ impl BrowserDriverApi {
         name: String,
         file_name: String,
     ) -> Result<String, JsValue> {
-        self.storage(&name)?.read_text(&file_name).await
+        let path = StoragePath::try_from(PathBuf::from(file_name))
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        let bytes =
+            self.storage(&name)?.read(path).await.map_err(to_js_error)?;
+        String::from_utf8(bytes)
+            .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
     /// Writes UTF-8 text to a file in the connected workspace.
@@ -150,7 +163,12 @@ impl BrowserDriverApi {
         file_name: String,
         value: String,
     ) -> Result<(), JsValue> {
-        self.storage(&name)?.write_text(&file_name, &value).await
+        let path = StoragePath::try_from(PathBuf::from(file_name))
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        self.storage(&name)?
+            .write(path, value.as_bytes())
+            .await
+            .map_err(to_js_error)
     }
 
     /// Returns the browser handle for a mounted workspace.
@@ -159,7 +177,14 @@ impl BrowserDriverApi {
     ///
     /// Returns an error if the workspace is not mounted.
     pub fn directory_handle(&self, name: String) -> Result<JsValue, JsValue> {
-        Ok(self.storage(&name)?.handle())
+        let storage = self.storage(&name)?;
+        let provider = storage
+            .as_any()
+            .downcast_ref::<FileSystemAccessStorage>()
+            .ok_or_else(|| {
+                JsValue::from_str("workspace is not a browser directory")
+            })?;
+        Ok(provider.handle.clone())
     }
 
     /// Reports whether a browser workspace is connected.
@@ -173,7 +198,7 @@ impl BrowserDriverApi {
 }
 
 impl BrowserDriverApi {
-    fn storage(&self, name: &str) -> Result<Rc<dyn BrowserStorage>, JsValue> {
+    fn storage(&self, name: &str) -> Result<Rc<dyn AsyncStorage>, JsValue> {
         self.driver
             .mounts
             .borrow()
@@ -183,4 +208,16 @@ impl BrowserDriverApi {
                 JsValue::from_str("browser workspace is not mounted")
             })
     }
+}
+
+fn to_js_error(error: AsyncStorageError) -> JsValue {
+    let result = js_sys::Error::new(&error.to_string());
+    match error {
+        AsyncStorageError::NotFound => result.set_name("NotFoundError"),
+        AsyncStorageError::PermissionDenied => {
+            result.set_name("NotAllowedError")
+        }
+        _ => {}
+    }
+    result.into()
 }

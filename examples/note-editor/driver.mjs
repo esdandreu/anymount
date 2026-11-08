@@ -34,7 +34,7 @@ export class DirectoryHandleStore {
     return new Promise((resolve, reject) => {
       const transaction = db.transaction("directory-handles", mode);
       const request = operation(transaction.objectStore("directory-handles"));
-      request.onsuccess = () => resolve(request.result);
+      transaction.oncomplete = () => resolve(request.result);
       request.onerror = () => reject(request.error);
       transaction.onabort = () => reject(transaction.error);
     });

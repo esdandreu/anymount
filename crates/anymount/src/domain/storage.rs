@@ -2,13 +2,34 @@ mod path;
 
 pub use path::{InvalidStoragePath, StoragePath};
 
-use std::{ops::Range, time::SystemTime};
+use std::{any::Any, future::Future, ops::Range, pin::Pin, time::SystemTime};
+
+use async_trait::async_trait;
 
 use super::started_authorization::{AuthStorageError, StartedAuthorization};
 
 #[typetag::serde(tag = "type")]
 pub trait StorageConfig: Send + Sync {
     fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError>;
+
+    /// Creates an asynchronous storage provider.
+    ///
+    /// Connect the returned provider before reading or writing files.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the provider cannot be opened.
+    fn connect_async(
+        &self,
+    ) -> StorageFuture<'_, Result<Box<dyn AsyncStorage>, ConnectStorageError>>
+    {
+        Box::pin(async {
+            Err(ConnectStorageError::Failed {
+                kind: self.kind(),
+                message: "asynchronous storage is not supported".to_owned(),
+            })
+        })
+    }
 
     fn kind(&self) -> &'static str {
         std::any::type_name::<Self>()
@@ -33,6 +54,85 @@ pub enum ConnectStorageError {
 
     #[error("failed to connect {kind} storage: {message}")]
     Failed { kind: &'static str, message: String },
+}
+
+/// A future that can run on single-threaded platforms.
+pub type StorageFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
+
+/// A storage provider with asynchronous byte operations.
+///
+/// Call `connect` before I/O. Requesting permission may require a user gesture.
+#[async_trait(?Send)]
+pub trait AsyncStorage: Any {
+    /// Queries access and optionally requests permission from the user.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the permission operation fails.
+    async fn connect(
+        &self,
+        request_permission: bool,
+    ) -> Result<bool, AsyncStorageError>;
+    /// Disconnects this connection without deleting its data.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the provider cannot disconnect.
+    async fn disconnect(&self) -> Result<(), AsyncStorageError>;
+    /// Reports the last known connection state.
+    fn is_connected(&self) -> bool;
+    /// Lists the entries in a directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be listed.
+    async fn read_dir(
+        &self,
+        path: StoragePath,
+    ) -> Result<Vec<StorageEntry>, AsyncStorageError>;
+    /// Reads the entire file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read.
+    async fn read(
+        &self,
+        path: StoragePath,
+    ) -> Result<Vec<u8>, AsyncStorageError>;
+    /// Replaces the entire file with the supplied bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be written.
+    async fn write(
+        &self,
+        path: StoragePath,
+        bytes: &[u8],
+    ) -> Result<(), AsyncStorageError>;
+    /// Exposes the provider for platform-specific handle interoperation.
+    fn as_any(&self) -> &dyn Any;
+}
+
+/// A file or directory within a storage directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StorageEntry {
+    /// The entry's name within its parent directory.
+    pub name: String,
+    /// Whether the entry is a directory.
+    pub is_directory: bool,
+}
+
+/// An asynchronous storage operation failed.
+#[derive(Debug, thiserror::Error)]
+pub enum AsyncStorageError {
+    #[error("storage entry not found")]
+    NotFound,
+    #[error("storage is disconnected")]
+    Disconnected,
+    #[error("storage permission denied")]
+    PermissionDenied,
+    #[error("storage operation failed: {message}")]
+    Failed { message: String },
 }
 
 #[cfg_attr(test, mockall::automock)]
@@ -192,6 +292,21 @@ mod test {
         fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError> {
             Ok(Box::new(TestStorageConnection {}))
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn async_connection_is_unsupported_by_default() {
+        let config: Box<dyn StorageConfig> = Box::new(TestStorageConfig {
+            endpoint: None,
+            bucket: "documents".to_owned(),
+            username: "user".to_owned(),
+            password: "secret".to_owned(),
+        });
+
+        assert!(matches!(
+            config.connect_async().await,
+            Err(ConnectStorageError::Failed { .. })
+        ));
     }
 
     #[test]

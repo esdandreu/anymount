@@ -11,7 +11,7 @@ function installIndexedDbMock() {
   const database = {
     createObjectStore() {},
     transaction() {
-      return {
+      const transaction = {
         objectStore() {
           return {
             get(name) {
@@ -19,6 +19,7 @@ function installIndexedDbMock() {
               queueMicrotask(() => {
                 request.result = handles.get(name);
                 request.onsuccess?.();
+                transaction.oncomplete?.();
               });
               return request;
             },
@@ -28,12 +29,14 @@ function installIndexedDbMock() {
                 handles.set(name, handle);
                 request.result = name;
                 request.onsuccess?.();
+                transaction.oncomplete?.();
               });
               return request;
             },
           };
         },
       };
+      return transaction;
     },
   };
   globalThis.indexedDB = {
@@ -94,4 +97,38 @@ test("browser workspace feature detection requires a secure supported API", () =
   } else {
     globalThis.indexedDB = previous.indexedDB;
   }
+});
+
+test("handle writes reject if the transaction aborts after the request", async () => {
+  globalThis.indexedDB = {
+    open() {
+      const request = {};
+      queueMicrotask(() => {
+        request.result = {
+          transaction() {
+            const transaction = {
+              error: new Error("commit failed"),
+              objectStore() {
+                return {
+                  put() {
+                    const request = {};
+                    queueMicrotask(() => {
+                      request.onsuccess?.();
+                      transaction.onabort?.();
+                    });
+                    return request;
+                  },
+                };
+              },
+            };
+            return transaction;
+          },
+        };
+        request.onsuccess?.();
+      });
+      return request;
+    },
+  };
+
+  await assert.rejects(new DirectoryHandleStore().put("workspace", {}), /commit failed/);
 });

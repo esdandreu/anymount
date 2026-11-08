@@ -37,6 +37,14 @@ function setWorkspace(nextMount) {
   saveButton.disabled = !connected;
 }
 
+function showError(error) {
+  if (error.name === "NotAllowedError" && mount) {
+    setWorkspace(mount);
+    return;
+  }
+  status.textContent = error.message ?? String(error);
+}
+
 workspaceButton.addEventListener("click", async () => {
   try {
     await driver.mount_workspace("workspace", "workspace");
@@ -47,7 +55,7 @@ workspaceButton.addEventListener("click", async () => {
     setWorkspace(browserMount());
     await loadNote();
   } catch (error) {
-    status.textContent = error.message;
+    showError(error);
   }
 });
 
@@ -58,7 +66,7 @@ reconnectButton.addEventListener("click", async () => {
       await loadNote();
     }
   } catch (error) {
-    status.textContent = error.message;
+    showError(error);
   }
 });
 
@@ -69,7 +77,7 @@ saveButton.addEventListener("click", async () => {
     await mount.writeText(content.value);
     status.textContent = "Saved to the selected workspace.";
   } catch (error) {
-    status.textContent = error.message;
+    showError(error);
   }
 });
 
@@ -83,7 +91,7 @@ async function loadNote() {
       status.textContent = "No saved note yet. Write something and save.";
       return;
     }
-    status.textContent = error.message;
+    showError(error);
   }
 }
 
@@ -111,7 +119,7 @@ async function restoreWorkspace() {
       await loadNote();
     }
   } catch (error) {
-    status.textContent = error.message;
+    showError(error);
   }
 }
 
