@@ -10,7 +10,7 @@ use crate::domain::{
     DisconnectMountError, DisconnectStorageError, Driver, DriverConfig, Mount,
     MountConfig, MountError, ReadDirError, ReadFileAtError, Storage,
     StorageConfig, StorageEntry, StoragePath, UnregisterMountError,
-    WriteStorageError,
+    WriteFileError,
 };
 use async_trait::async_trait;
 use js_sys::{Array, Function, Object, Promise, Reflect, Uint8Array};
@@ -318,13 +318,13 @@ impl Storage for FileSystemAccessStorage {
         Ok(offset - range.start)
     }
 
-    async fn write(
+    async fn write_file(
         &self,
         path: StoragePath,
         value: &[u8],
-    ) -> Result<(), WriteStorageError> {
+    ) -> Result<(), WriteFileError> {
         if !self.is_connected() {
-            return Err(WriteStorageError::Disconnected);
+            return Err(WriteFileError::Disconnected);
         }
         let file_handle = self
             .file_handle(path, true)
@@ -388,12 +388,12 @@ impl FileSystemAccessStorage {
         }
     }
 
-    fn write_error(&self, error: JsValue) -> WriteStorageError {
+    fn write_error(&self, error: JsValue) -> WriteFileError {
         match self.error_name(&error).as_deref() {
-            Some("NotFoundError") => WriteStorageError::NotFound,
-            Some("NotAllowedError") => WriteStorageError::PermissionDenied,
-            Some("TypeMismatchError") => WriteStorageError::NotAFile,
-            _ => WriteStorageError::Failed {
+            Some("NotFoundError") => WriteFileError::NotFound,
+            Some("NotAllowedError") => WriteFileError::PermissionDenied,
+            Some("TypeMismatchError") => WriteFileError::NotAFile,
+            _ => WriteFileError::Failed {
                 message: js_message(&error),
             },
         }
@@ -658,7 +658,7 @@ mod tests {
             Err(ReadFileAtError::NotFound)
         ));
         storage
-            .write(path.clone(), &[0, 255, 42])
+            .write_file(path.clone(), &[0, 255, 42])
             .await
             .expect("write");
         assert_eq!(
@@ -788,7 +788,7 @@ mod tests {
     #[wasm_bindgen_test]
     async fn browser_write_permission_failure_disconnects_storage() {
         use super::FileSystemAccessStorage;
-        use crate::domain::{Storage, StoragePath, WriteStorageError};
+        use crate::domain::{Storage, StoragePath, WriteFileError};
 
         let handle = Function::new_no_args(
             "return { queryPermission: async () => 'granted', getFileHandle: async () => { throw new DOMException('denied', 'NotAllowedError'); } }",
@@ -797,18 +797,18 @@ mod tests {
         let path =
             StoragePath::try_from(PathBuf::from("note.bin")).expect("path");
         assert!(matches!(
-            storage.write(path.clone(), &[]).await,
-            Err(WriteStorageError::Disconnected)
+            storage.write_file(path.clone(), &[]).await,
+            Err(WriteFileError::Disconnected)
         ));
         assert!(storage.connect(false).await.expect("connect"));
         assert!(matches!(
-            storage.write(path.clone(), &[]).await,
-            Err(WriteStorageError::PermissionDenied)
+            storage.write_file(path.clone(), &[]).await,
+            Err(WriteFileError::PermissionDenied)
         ));
         assert!(!storage.is_connected());
         assert!(matches!(
-            storage.write(path, &[]).await,
-            Err(WriteStorageError::Disconnected)
+            storage.write_file(path, &[]).await,
+            Err(WriteFileError::Disconnected)
         ));
     }
 
@@ -985,7 +985,7 @@ mod tests {
         assert!(storage.connect(false).await.expect("connect"));
         let path =
             StoragePath::try_from(PathBuf::from("note.bin")).expect("path");
-        assert!(storage.write(path, &[1, 2]).await.is_err());
+        assert!(storage.write_file(path, &[1, 2]).await.is_err());
         assert_eq!(
             Reflect::get(&handle, &JsValue::from_str("aborts"))
                 .expect("abort count")

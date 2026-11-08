@@ -76,12 +76,12 @@ pub trait Storage: Any {
     ) -> Result<u64, ReadFileAtError> {
         Err(ReadFileAtError::NotSupported)
     }
-    async fn write(
+    async fn write_file(
         &self,
         _path: StoragePath,
         _bytes: &[u8],
-    ) -> Result<(), WriteStorageError> {
-        Err(WriteStorageError::NotSupported)
+    ) -> Result<(), WriteFileError> {
+        Err(WriteFileError::NotSupported)
     }
     fn as_any(&self) -> &dyn Any;
 }
@@ -135,7 +135,7 @@ pub enum DisconnectStorageError {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum WriteStorageError {
+pub enum WriteFileError {
     #[error("storage operation is not supported")]
     NotSupported,
     #[error("storage entry not found")]
@@ -182,12 +182,12 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
     ) -> Result<u64, ReadFileAtError> {
         (**self).read_file_at(path, writer, range).await
     }
-    async fn write(
+    async fn write_file(
         &self,
         path: StoragePath,
         data: &[u8],
-    ) -> Result<(), WriteStorageError> {
-        (**self).write(path, data).await
+    ) -> Result<(), WriteFileError> {
+        (**self).write_file(path, data).await
     }
     fn as_any(&self) -> &dyn Any {
         (**self).as_any()

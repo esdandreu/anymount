@@ -3,7 +3,7 @@ use super::{
 };
 use crate::domain::{
     ConnectPermissionError, DisconnectStorageError, Driver, Mount, MountConfig,
-    Storage, StoragePath, WriteStorageError,
+    Storage, StoragePath, WriteFileError,
 };
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -191,7 +191,7 @@ impl BrowserDriverApi {
         let path = StoragePath::try_from(PathBuf::from(file_name))
             .map_err(|error| JsValue::from_str(&error.to_string()))?;
         self.storage(&name)?
-            .write(path, value.as_bytes())
+            .write_file(path, value.as_bytes())
             .await
             .map_err(write_js_error)
     }
@@ -247,10 +247,10 @@ fn disconnect_js_error(error: DisconnectStorageError) -> JsValue {
     js_error(&error.to_string(), None)
 }
 
-fn write_js_error(error: WriteStorageError) -> JsValue {
+fn write_js_error(error: WriteFileError) -> JsValue {
     let name = match error {
-        WriteStorageError::NotFound => Some("NotFoundError"),
-        WriteStorageError::PermissionDenied => Some("NotAllowedError"),
+        WriteFileError::NotFound => Some("NotFoundError"),
+        WriteFileError::PermissionDenied => Some("NotAllowedError"),
         _ => None,
     };
     js_error(&error.to_string(), name)
@@ -289,17 +289,17 @@ mod tests {
                 "storage is disconnected",
             ),
             (
-                write_js_error(WriteStorageError::NotFound),
+                write_js_error(WriteFileError::NotFound),
                 "NotFoundError",
                 "storage entry not found",
             ),
             (
-                write_js_error(WriteStorageError::PermissionDenied),
+                write_js_error(WriteFileError::PermissionDenied),
                 "NotAllowedError",
                 "storage permission denied",
             ),
             (
-                write_js_error(WriteStorageError::NotAFile),
+                write_js_error(WriteFileError::NotAFile),
                 "Error",
                 "path is not a file",
             ),
