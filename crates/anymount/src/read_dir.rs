@@ -1,18 +1,6 @@
 use std::path::PathBuf;
 
-use crate::domain::{DirEntry, InvalidStoragePath, Storage, StorageError};
-
-/// Reports a directory-read operation failure.
-#[derive(Debug, thiserror::Error)]
-pub enum ReadDirError {
-    #[error("invalid storage path")]
-    InvalidPath(#[from] InvalidStoragePath),
-
-    #[error(transparent)]
-    Storage(#[from] StorageError),
-    #[error(transparent)]
-    Native(#[from] crate::domain::ReadDirError),
-}
+use crate::domain::{DirEntry, ReadDirError, Storage};
 
 /// Lists a directory after validating its storage-relative path.
 ///
@@ -65,9 +53,6 @@ mod tests {
     async fn forwards_storage_error() {
         let result = read_dir(&NoOpStorage, PathBuf::new()).await;
 
-        assert!(matches!(
-            result,
-            Err(ReadDirError::Storage(StorageError::NotSupported))
-        ));
+        assert!(matches!(result, Err(ReadDirError::NotSupported)));
     }
 }

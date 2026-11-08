@@ -426,8 +426,7 @@ impl StorageFilesystem {
                 path.clone()
                     .try_into()
                     .map_err(crate::ReadDirError::InvalidPath)?,
-            )
-            .map_err(crate::ReadDirError::Native)?
+            )?
             .map(|entry| CachedDirEntry {
                 file_name: entry.file_name(),
                 is_dir: entry.is_dir(),

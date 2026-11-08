@@ -14,7 +14,7 @@ use token_source::{OneDriveTokenSource, jwt_expires_at};
 use crate::domain::{AuthStorageError, StartedAuthorization};
 use crate::domain::{
     ConnectStorageError, DirEntry, ReadDirError, ReadFileAtError, Storage,
-    StorageConfig, StorageError, StoragePath, WriteAt,
+    StorageConfig, StoragePath, WriteAt,
 };
 
 /// Default buffer (seconds) before token expiry to trigger refresh when not set in config.
@@ -534,22 +534,13 @@ impl<T: BearerToken, F: HttpGet> Storage for OneDriveStorage<T, F> {
     async fn read_dir(
         &self,
         path: StoragePath,
-    ) -> std::result::Result<Vec<Box<dyn DirEntry>>, StorageError> {
+    ) -> std::result::Result<Vec<Box<dyn DirEntry>>, ReadDirError> {
         let storage = self.clone();
         tokio::task::spawn_blocking(move || {
-            let entries = storage.read_dir(path).map_err(|e| match e {
-                ReadDirError::NotFound => StorageError::NotFound,
-                ReadDirError::PermissionDenied => {
-                    StorageError::PermissionDenied
-                }
-                _ => StorageError::Failed {
-                    message: e.to_string(),
-                },
-            })?;
-            Ok(entries.collect())
+            storage.read_dir(path).map(|entries| entries.collect())
         })
         .await
-        .map_err(|e| StorageError::Failed {
+        .map_err(|e| ReadDirError::Unknown {
             message: e.to_string(),
         })?
     }
@@ -558,12 +549,11 @@ impl<T: BearerToken, F: HttpGet> Storage for OneDriveStorage<T, F> {
         path: StoragePath,
         writer: &mut dyn WriteAt,
         range: std::ops::Range<u64>,
-    ) -> std::result::Result<u64, crate::ReadFileAtError> {
+    ) -> std::result::Result<u64, ReadFileAtError> {
         if range.start > range.end {
-            return Err(StorageError::Failed {
+            return Err(ReadFileAtError::Unknown {
                 message: "invalid range".into(),
-            }
-            .into());
+            });
         }
         let mut offset = range.start;
         while offset < range.end {
@@ -576,21 +566,13 @@ impl<T: BearerToken, F: HttpGet> Storage for OneDriveStorage<T, F> {
                 let result =
                     storage.read_file_at(path, &mut writer, offset..end);
                 if matches!(result, Err(ReadFileAtError::RangeNotSatisfiable)) {
-                    return Ok::<_, StorageError>(Vec::new());
+                    return Ok::<_, ReadFileAtError>(Vec::new());
                 }
-                result.map_err(|e| match e {
-                    ReadFileAtError::NotFound => StorageError::NotFound,
-                    ReadFileAtError::PermissionDenied => {
-                        StorageError::PermissionDenied
-                    }
-                    _ => StorageError::Failed {
-                        message: e.to_string(),
-                    },
-                })?;
+                result?;
                 Ok(writer.0)
             })
             .await
-            .map_err(|e| StorageError::Failed {
+            .map_err(|e| ReadFileAtError::Unknown {
                 message: e.to_string(),
             })??;
             if bytes.is_empty() {
@@ -664,6 +646,19 @@ mod tests {
         assert_eq!(status, 200);
         assert_eq!(body.len(), crate::domain::MAX_READ_SIZE + 1);
         server.join().expect("server thread");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn async_operations_preserve_unavailable_errors() {
+        let storage = storage_with_response(503, b"temporarily unavailable");
+        assert!(matches!(
+            Storage::read_dir(&storage, StoragePath::root()).await,
+            Err(ReadDirError::Unavailable { message }) if message == "temporarily unavailable"
+        ));
+        assert!(matches!(
+            Storage::read_file_at(&storage, storage_path("file"), &mut BytesWriter(Vec::new()), 0..1).await,
+            Err(ReadFileAtError::Unavailable { message }) if message == "temporarily unavailable"
+        ));
     }
 
     #[test]

@@ -6,10 +6,11 @@ mod browser_driver_api;
 pub use browser_driver_api::BrowserDriverApi;
 
 use crate::domain::{
-    ConnectMountError, ConnectStorageError, DirEntry, DisconnectMountError,
-    Driver, DriverConfig, Mount, MountConfig, MountError, Storage,
-    StorageConfig, StorageEntry, StorageError, StoragePath,
-    UnregisterMountError,
+    ConnectMountError, ConnectPermissionError, ConnectStorageError, DirEntry,
+    DisconnectMountError, DisconnectStorageError, Driver, DriverConfig, Mount,
+    MountConfig, MountError, ReadDirError, ReadFileAtError, Storage,
+    StorageConfig, StorageEntry, StoragePath, UnregisterMountError,
+    WriteStorageError,
 };
 use async_trait::async_trait;
 use js_sys::{Array, Function, Object, Promise, Reflect, Uint8Array};
@@ -174,7 +175,7 @@ impl Storage for FileSystemAccessStorage {
     async fn connect(
         &self,
         request_permission: bool,
-    ) -> Result<bool, StorageError> {
+    ) -> Result<bool, ConnectPermissionError> {
         self.connected.set(false);
         let options = Object::new();
         Reflect::set(
@@ -182,11 +183,11 @@ impl Storage for FileSystemAccessStorage {
             &JsValue::from_str("mode"),
             &JsValue::from_str("readwrite"),
         )
-        .map_err(storage_error)?;
+        .map_err(connect_permission_error)?;
         let mut permission =
             call_async(&self.handle, "queryPermission", &Array::of1(&options))
                 .await
-                .map_err(storage_error)?;
+                .map_err(connect_permission_error)?;
         if permission.as_string().as_deref() != Some("granted")
             && request_permission
         {
@@ -196,14 +197,14 @@ impl Storage for FileSystemAccessStorage {
                 &Array::of1(&options),
             )
             .await
-            .map_err(storage_error)?;
+            .map_err(connect_permission_error)?;
         }
         let connected = permission.as_string().as_deref() == Some("granted");
         self.connected.set(connected);
         Ok(connected)
     }
 
-    async fn disconnect(&self) -> Result<(), StorageError> {
+    async fn disconnect(&self) -> Result<(), DisconnectStorageError> {
         self.connected.set(false);
         Ok(())
     }
@@ -211,44 +212,46 @@ impl Storage for FileSystemAccessStorage {
     async fn read_dir(
         &self,
         path: StoragePath,
-    ) -> Result<Vec<Box<dyn DirEntry>>, StorageError> {
-        self.ensure_connected()?;
+    ) -> Result<Vec<Box<dyn DirEntry>>, ReadDirError> {
+        if !self.is_connected() {
+            return Err(ReadDirError::Disconnected);
+        }
         let parts: Vec<_> = path.as_path().iter().collect();
         let directory = self
             .directory_handle(&parts)
             .await
-            .map_err(|error| self.io_error(error))?;
+            .map_err(|error| self.read_dir_error(error))?;
         let iterator = call(&directory, "values", &Array::new())
-            .map_err(|error| self.io_error(error))?;
+            .map_err(|error| self.read_dir_error(error))?;
         let mut entries: Vec<Box<dyn DirEntry>> = Vec::new();
         loop {
             let next = call_async(&iterator, "next", &Array::new())
                 .await
-                .map_err(|error| self.io_error(error))?;
+                .map_err(|error| self.read_dir_error(error))?;
             let done = Reflect::get(&next, &JsValue::from_str("done"))
-                .map_err(|error| self.io_error(error))?;
+                .map_err(|error| self.read_dir_error(error))?;
             if done.as_bool().unwrap_or(false) {
                 break;
             }
             let entry = Reflect::get(&next, &JsValue::from_str("value"))
-                .map_err(|error| self.io_error(error))?;
+                .map_err(|error| self.read_dir_error(error))?;
             let name = Reflect::get(&entry, &JsValue::from_str("name"))
-                .map_err(|error| self.io_error(error))?
+                .map_err(|error| self.read_dir_error(error))?
                 .as_string()
-                .ok_or_else(|| StorageError::Failed {
+                .ok_or_else(|| ReadDirError::Unknown {
                     message: "directory entry has no name".to_owned(),
                 })?;
             let kind = Reflect::get(&entry, &JsValue::from_str("kind"))
-                .map_err(|error| self.io_error(error))?
+                .map_err(|error| self.read_dir_error(error))?
                 .as_string()
-                .ok_or_else(|| StorageError::Failed {
+                .ok_or_else(|| ReadDirError::Unknown {
                     message: "directory entry has no kind".to_owned(),
                 })?;
             let is_directory = match kind.as_str() {
                 "directory" => true,
                 "file" => false,
                 _ => {
-                    return Err(StorageError::Failed {
+                    return Err(ReadDirError::Unknown {
                         message: format!(
                             "unknown directory entry kind: {kind}"
                         ),
@@ -270,21 +273,20 @@ impl Storage for FileSystemAccessStorage {
         path: StoragePath,
         writer: &mut dyn crate::domain::WriteAt,
         range: std::ops::Range<u64>,
-    ) -> Result<u64, crate::ReadFileAtError> {
-        self.ensure_connected()?;
+    ) -> Result<u64, ReadFileAtError> {
+        if !self.is_connected() {
+            return Err(ReadFileAtError::Disconnected);
+        }
         if range.start > range.end || range.end > 9_007_199_254_740_991 {
-            return Err(StorageError::Failed {
-                message: "invalid range".into(),
-            }
-            .into());
+            return Err(ReadFileAtError::RangeNotSatisfiable);
         }
         let file_handle = self
             .file_handle(path, false)
             .await
-            .map_err(|error| self.io_error(error))?;
+            .map_err(|error| self.read_file_error(error))?;
         let file = call_async(&file_handle, "getFile", &Array::new())
             .await
-            .map_err(|error| self.io_error(error))?;
+            .map_err(|error| self.read_file_error(error))?;
         let mut offset = range.start;
         while offset < range.end {
             let end = offset
@@ -297,19 +299,18 @@ impl Storage for FileSystemAccessStorage {
                     &JsValue::from_f64(end as f64),
                 ),
             )
-            .map_err(|error| self.io_error(error))?;
+            .map_err(|error| self.read_file_error(error))?;
             let buffer = call_async(&slice, "arrayBuffer", &Array::new())
                 .await
-                .map_err(|error| self.io_error(error))?;
+                .map_err(|error| self.read_file_error(error))?;
             let bytes = Uint8Array::new(&buffer).to_vec();
             if bytes.is_empty() {
                 break;
             }
             if bytes.len() as u64 > end - offset {
-                return Err(StorageError::Failed {
+                return Err(ReadFileAtError::Unknown {
                     message: "provider returned too much data".into(),
-                }
-                .into());
+                });
             }
             writer.write_at(&bytes, offset)?;
             offset += bytes.len() as u64;
@@ -321,16 +322,18 @@ impl Storage for FileSystemAccessStorage {
         &self,
         path: StoragePath,
         value: &[u8],
-    ) -> Result<(), StorageError> {
-        self.ensure_connected()?;
+    ) -> Result<(), WriteStorageError> {
+        if !self.is_connected() {
+            return Err(WriteStorageError::Disconnected);
+        }
         let file_handle = self
             .file_handle(path, true)
             .await
-            .map_err(|error| self.io_error(error))?;
+            .map_err(|error| self.write_error(error))?;
         let writable =
             call_async(&file_handle, "createWritable", &Array::new())
                 .await
-                .map_err(|error| self.io_error(error))?;
+                .map_err(|error| self.write_error(error))?;
         let result = async {
             let bytes = Uint8Array::from(value);
             call_async(&writable, "write", &Array::of1(&bytes)).await?;
@@ -339,7 +342,7 @@ impl Storage for FileSystemAccessStorage {
         .await;
         if let Err(error) = result {
             let _ = call_async(&writable, "abort", &Array::new()).await;
-            return Err(self.io_error(error));
+            return Err(self.write_error(error));
         }
         Ok(())
     }
@@ -353,12 +356,47 @@ impl Storage for FileSystemAccessStorage {
 }
 
 impl FileSystemAccessStorage {
-    fn io_error(&self, error: JsValue) -> StorageError {
-        let error = storage_error(error);
-        if matches!(error, StorageError::PermissionDenied) {
+    fn error_name(&self, error: &JsValue) -> Option<String> {
+        let name = Reflect::get(error, &JsValue::from_str("name"))
+            .ok()
+            .and_then(|value| value.as_string());
+        if name.as_deref() == Some("NotAllowedError") {
             self.connected.set(false);
         }
-        error
+        name
+    }
+
+    fn read_dir_error(&self, error: JsValue) -> ReadDirError {
+        match self.error_name(&error).as_deref() {
+            Some("NotFoundError") => ReadDirError::NotFound,
+            Some("NotAllowedError") => ReadDirError::PermissionDenied,
+            Some("TypeMismatchError") => ReadDirError::NotADirectory,
+            _ => ReadDirError::Unknown {
+                message: js_message(&error),
+            },
+        }
+    }
+
+    fn read_file_error(&self, error: JsValue) -> ReadFileAtError {
+        match self.error_name(&error).as_deref() {
+            Some("NotFoundError") => ReadFileAtError::NotFound,
+            Some("NotAllowedError") => ReadFileAtError::PermissionDenied,
+            Some("TypeMismatchError") => ReadFileAtError::NotAFile,
+            _ => ReadFileAtError::Unknown {
+                message: js_message(&error),
+            },
+        }
+    }
+
+    fn write_error(&self, error: JsValue) -> WriteStorageError {
+        match self.error_name(&error).as_deref() {
+            Some("NotFoundError") => WriteStorageError::NotFound,
+            Some("NotAllowedError") => WriteStorageError::PermissionDenied,
+            Some("TypeMismatchError") => WriteStorageError::NotAFile,
+            _ => WriteStorageError::Failed {
+                message: js_message(&error),
+            },
+        }
     }
 
     async fn directory_handle(
@@ -405,14 +443,6 @@ impl FileSystemAccessStorage {
             &Array::of2(&JsValue::from_str(name), &options),
         )
         .await
-    }
-
-    fn ensure_connected(&self) -> Result<(), StorageError> {
-        if self.is_connected() {
-            Ok(())
-        } else {
-            Err(StorageError::Disconnected)
-        }
     }
 }
 
@@ -477,15 +507,14 @@ fn call(
     function.apply(receiver, args)
 }
 
-fn storage_error(error: JsValue) -> StorageError {
+fn connect_permission_error(error: JsValue) -> ConnectPermissionError {
     match Reflect::get(&error, &JsValue::from_str("name"))
         .ok()
-        .and_then(|v| v.as_string())
+        .and_then(|value| value.as_string())
         .as_deref()
     {
-        Some("NotFoundError") => StorageError::NotFound,
-        Some("NotAllowedError") => StorageError::PermissionDenied,
-        _ => StorageError::Failed {
+        Some("NotAllowedError") => ConnectPermissionError::PermissionDenied,
+        _ => ConnectPermissionError::Failed {
             message: js_message(&error),
         },
     }
@@ -570,7 +599,7 @@ mod tests {
     }
     #[wasm_bindgen_test]
     async fn browser_storage_round_trips_bytes_and_reconnects() {
-        use crate::domain::{StorageError, StoragePath};
+        use crate::domain::{ReadFileAtError, StoragePath};
         let create_handle = Function::new_no_args(
             r#"
             let data;
@@ -619,14 +648,14 @@ mod tests {
             storage
                 .read_file_at(path.clone(), &mut writer, 0..65536)
                 .await,
-            Err(crate::ReadFileAtError::Storage(StorageError::Disconnected))
+            Err(ReadFileAtError::Disconnected)
         ));
         assert!(storage.connect(true).await.expect("request"));
         assert!(matches!(
             storage
                 .read_file_at(path.clone(), &mut writer, 0..65536)
                 .await,
-            Err(crate::ReadFileAtError::Storage(StorageError::NotFound))
+            Err(ReadFileAtError::NotFound)
         ));
         storage
             .write(path.clone(), &[0, 255, 42])
@@ -684,9 +713,7 @@ mod tests {
             storage
                 .read_file_at(path.clone(), &mut writer, 0..65536)
                 .await,
-            Err(crate::ReadFileAtError::Storage(
-                StorageError::PermissionDenied
-            ))
+            Err(ReadFileAtError::PermissionDenied)
         ));
         assert!(!storage.is_connected());
         assert!(storage.connect(true).await.expect("request again"));
@@ -709,7 +736,7 @@ mod tests {
     #[wasm_bindgen_test]
     async fn browser_storage_lists_root_and_nested_directories() {
         use super::FileSystemAccessStorage;
-        use crate::domain::{Storage, StorageError, StoragePath};
+        use crate::domain::{ReadDirError, Storage, StoragePath};
 
         let handle = Function::new_no_args(
             r#"
@@ -734,7 +761,7 @@ mod tests {
         let storage = FileSystemAccessStorage::new(handle);
         assert!(matches!(
             storage.read_dir(StoragePath::root()).await,
-            Err(StorageError::Disconnected)
+            Err(ReadDirError::Disconnected)
         ));
         assert!(storage.connect(false).await.expect("connect"));
         let root = storage.read_dir(StoragePath::root()).await.expect("root");
@@ -754,7 +781,34 @@ mod tests {
             StoragePath::try_from(PathBuf::from("missing")).expect("path");
         assert!(matches!(
             storage.read_dir(missing).await,
-            Err(StorageError::NotFound)
+            Err(ReadDirError::NotFound)
+        ));
+    }
+
+    #[wasm_bindgen_test]
+    async fn browser_write_permission_failure_disconnects_storage() {
+        use super::FileSystemAccessStorage;
+        use crate::domain::{Storage, StoragePath, WriteStorageError};
+
+        let handle = Function::new_no_args(
+            "return { queryPermission: async () => 'granted', getFileHandle: async () => { throw new DOMException('denied', 'NotAllowedError'); } }",
+        ).call0(&JsValue::NULL).expect("create handle");
+        let storage = FileSystemAccessStorage::new(handle);
+        let path =
+            StoragePath::try_from(PathBuf::from("note.bin")).expect("path");
+        assert!(matches!(
+            storage.write(path.clone(), &[]).await,
+            Err(WriteStorageError::Disconnected)
+        ));
+        assert!(storage.connect(false).await.expect("connect"));
+        assert!(matches!(
+            storage.write(path.clone(), &[]).await,
+            Err(WriteStorageError::PermissionDenied)
+        ));
+        assert!(!storage.is_connected());
+        assert!(matches!(
+            storage.write(path, &[]).await,
+            Err(WriteStorageError::Disconnected)
         ));
     }
 

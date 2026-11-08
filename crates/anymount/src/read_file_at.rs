@@ -1,20 +1,6 @@
 use std::{ops::Range, path::PathBuf};
 
-use crate::domain::{
-    InvalidStoragePath, Storage, StorageError, WriteAt, WriteAtError,
-};
-
-/// Reports a file-read operation failure.
-#[derive(Debug, thiserror::Error)]
-pub enum ReadFileAtError {
-    #[error("invalid storage path")]
-    InvalidPath(#[from] InvalidStoragePath),
-
-    #[error(transparent)]
-    Storage(#[from] StorageError),
-    #[error(transparent)]
-    Writer(#[from] WriteAtError),
-}
+use crate::domain::{ReadFileAtError, Storage, WriteAt};
 
 /// Reads a file range after validating its storage-relative path.
 ///
@@ -32,19 +18,13 @@ where
     S: Storage + ?Sized,
 {
     if range.start > range.end {
-        return Err(StorageError::Failed {
-            message: "invalid range".into(),
-        }
-        .into());
+        return Err(ReadFileAtError::RangeNotSatisfiable);
     }
     let path: crate::domain::StoragePath = path.try_into()?;
     let expected = range.end - range.start;
     let count = storage.read_file_at(path, writer, range).await?;
     if count != expected {
-        return Err(StorageError::Failed {
-            message: "range extends beyond end of file".into(),
-        }
-        .into());
+        return Err(ReadFileAtError::RangeNotSatisfiable);
     }
     Ok(())
 }
@@ -82,15 +62,25 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn rejects_reversed_range() {
+        let result = read_file_at(
+            &NoOpStorage,
+            PathBuf::new(),
+            &mut TestWriter,
+            Range { start: 2, end: 1 },
+        )
+        .await;
+
+        assert!(matches!(result, Err(ReadFileAtError::RangeNotSatisfiable)));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn forwards_storage_error() {
         let result =
             read_file_at(&NoOpStorage, PathBuf::new(), &mut TestWriter, 0..1)
                 .await;
 
-        assert!(matches!(
-            result,
-            Err(ReadFileAtError::Storage(StorageError::NotSupported))
-        ));
+        assert!(matches!(result, Err(ReadFileAtError::NotSupported)));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -103,9 +93,6 @@ mod tests {
             0..2,
         )
         .await;
-        assert!(matches!(
-            result,
-            Err(ReadFileAtError::Storage(StorageError::Failed { .. }))
-        ));
+        assert!(matches!(result, Err(ReadFileAtError::RangeNotSatisfiable)));
     }
 }

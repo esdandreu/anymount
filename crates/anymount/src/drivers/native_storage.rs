@@ -1,6 +1,6 @@
 use crate::domain::{
     ConnectStorageError, DirEntry, ReadDirError, ReadFileAtError,
-    StorageConfig, StorageError, StoragePath, WriteAt,
+    StorageConfig, StoragePath, WriteAt,
 };
 use std::{ops::Range, sync::mpsc};
 
@@ -10,13 +10,13 @@ pub struct NativeStorage {
 enum Request {
     ReadDir(
         StoragePath,
-        mpsc::Sender<Result<Vec<Box<dyn DirEntry>>, StorageError>>,
+        mpsc::Sender<Result<Vec<Box<dyn DirEntry>>, ReadDirError>>,
     ),
     ReadRange(
         StoragePath,
         u64,
         usize,
-        mpsc::Sender<Result<Vec<u8>, StorageError>>,
+        mpsc::Sender<Result<Vec<u8>, ReadFileAtError>>,
     ),
 }
 struct ChunkWriter {
@@ -116,23 +116,14 @@ impl NativeStorage {
                                         offset..offset + length as u64,
                                     )
                                     .await;
-                                let _ = reply.send(
-                                    result.and_then(|count| {
-                                        if count != writer.bytes.len() as u64 {
-                                            return Err(StorageError::Failed { message: "provider reported incorrect byte count".into() }.into());
-                                        }
-                                        Ok(writer.bytes)
-                                    }).map_err(|error| {
-                                        match error {
-                                            crate::ReadFileAtError::Storage(
-                                                error,
-                                            ) => error,
-                                            other => StorageError::Failed {
-                                                message: other.to_string(),
-                                            },
-                                        }
-                                    }),
-                                );
+                                let _ = reply.send(result.and_then(|count| {
+                                    if count != writer.bytes.len() as u64 {
+                                        return Err(ReadFileAtError::Unknown {
+                                            message: "provider reported incorrect byte count".into(),
+                                        });
+                                    }
+                                    Ok(writer.bytes)
+                                }));
                             }
                         }
                     }
@@ -163,12 +154,12 @@ impl NativeStorage {
             .map_err(|error| ReadDirError::Unavailable {
                 message: error.to_string(),
             })?;
-        let entries = response
-            .recv()
-            .map_err(|error| ReadDirError::Unavailable {
-                message: error.to_string(),
-            })?
-            .map_err(map_dir_error)?;
+        let entries =
+            response
+                .recv()
+                .map_err(|error| ReadDirError::Unavailable {
+                    message: error.to_string(),
+                })??;
         if entries
             .iter()
             .any(|e| e.size().is_none() || e.accessed().is_none())
@@ -205,12 +196,11 @@ impl NativeStorage {
                 .map_err(|error| ReadFileAtError::Unavailable {
                     message: error.to_string(),
                 })?;
-            let bytes = response
-                .recv()
-                .map_err(|error| ReadFileAtError::Unavailable {
+            let bytes = response.recv().map_err(|error| {
+                ReadFileAtError::Unavailable {
                     message: error.to_string(),
-                })?
-                .map_err(map_read_error)?;
+                }
+            })??;
             if bytes.len() > length {
                 return Err(ReadFileAtError::Unknown {
                     message: "provider returned too much data".into(),
@@ -225,35 +215,6 @@ impl NativeStorage {
         Ok(())
     }
 }
-fn map_dir_error(error: StorageError) -> ReadDirError {
-    match error {
-        StorageError::NotSupported => ReadDirError::NotSupported,
-        StorageError::NotFound => ReadDirError::NotFound,
-        StorageError::NotADirectory => ReadDirError::NotADirectory,
-        StorageError::PermissionDenied => ReadDirError::PermissionDenied,
-        StorageError::Unavailable { message } => {
-            ReadDirError::Unavailable { message }
-        }
-        other => ReadDirError::Unknown {
-            message: other.to_string(),
-        },
-    }
-}
-fn map_read_error(error: StorageError) -> ReadFileAtError {
-    match error {
-        StorageError::NotSupported => ReadFileAtError::NotSupported,
-        StorageError::NotFound => ReadFileAtError::NotFound,
-        StorageError::NotAFile => ReadFileAtError::NotAFile,
-        StorageError::PermissionDenied => ReadFileAtError::PermissionDenied,
-        StorageError::Unavailable { message } => {
-            ReadFileAtError::Unavailable { message }
-        }
-        other => ReadFileAtError::Unknown {
-            message: other.to_string(),
-        },
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,6 +226,76 @@ mod tests {
     };
     use std::time::Duration;
     use std::time::SystemTime;
+
+    #[test]
+    fn preserves_disconnected_errors() {
+        let storage = NativeStorage::from_factory(|| {
+            let mut storage = MockStorage::new();
+            storage
+                .expect_read_dir()
+                .returning(|_| Err(ReadDirError::Disconnected));
+            storage
+        })
+        .expect("create worker");
+        assert!(matches!(
+            storage.read_dir(StoragePath::root()),
+            Err(ReadDirError::Disconnected)
+        ));
+
+        let (requests, mut receiver) = tokio::sync::mpsc::channel(1);
+        let worker = std::thread::spawn(move || {
+            if let Some(Request::ReadRange(_, _, _, reply)) =
+                receiver.blocking_recv()
+            {
+                let _ = reply.send(Err(ReadFileAtError::Disconnected));
+            }
+        });
+        let storage = NativeStorage { requests };
+        let mut writer = ChunkWriter {
+            bytes: Vec::new(),
+            start: 0,
+            limit: 1,
+        };
+        assert!(matches!(
+            storage.read_file_at(StoragePath::root(), &mut writer, 0..1),
+            Err(ReadFileAtError::Disconnected)
+        ));
+        worker.join().expect("join worker");
+    }
+
+    #[test]
+    fn preserves_range_and_writer_errors() {
+        for error in [
+            ReadFileAtError::RangeNotSatisfiable,
+            ReadFileAtError::WriteAt(crate::domain::WriteAtError::Failed {
+                offset: 0,
+                message: "write failed".into(),
+            }),
+        ] {
+            let expected = std::mem::discriminant(&error);
+            let (requests, mut receiver) = tokio::sync::mpsc::channel(1);
+            let worker = std::thread::spawn(move || {
+                if let Some(Request::ReadRange(_, _, _, reply)) =
+                    receiver.blocking_recv()
+                {
+                    let _ = reply.send(Err(error));
+                }
+            });
+            let storage = NativeStorage { requests };
+            let mut writer = ChunkWriter {
+                bytes: Vec::new(),
+                start: 0,
+                limit: 1,
+            };
+            let result =
+                storage.read_file_at(StoragePath::root(), &mut writer, 0..1);
+            assert_eq!(
+                std::mem::discriminant(&result.expect_err("read error")),
+                expected
+            );
+            worker.join().expect("join worker");
+        }
+    }
 
     #[test]
     fn worker_drives_background_tasks_between_requests() {

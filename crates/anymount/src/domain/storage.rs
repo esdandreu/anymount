@@ -53,10 +53,10 @@ pub trait Storage: Any {
     async fn connect(
         &self,
         _request_permission: bool,
-    ) -> Result<bool, StorageError> {
+    ) -> Result<bool, ConnectPermissionError> {
         Ok(true)
     }
-    async fn disconnect(&self) -> Result<(), StorageError> {
+    async fn disconnect(&self) -> Result<(), DisconnectStorageError> {
         Ok(())
     }
     fn is_connected(&self) -> bool {
@@ -65,23 +65,23 @@ pub trait Storage: Any {
     async fn read_dir(
         &self,
         _path: StoragePath,
-    ) -> Result<Vec<Box<dyn DirEntry>>, StorageError> {
-        Err(StorageError::NotSupported)
+    ) -> Result<Vec<Box<dyn DirEntry>>, ReadDirError> {
+        Err(ReadDirError::NotSupported)
     }
     async fn read_file_at(
         &self,
         _path: StoragePath,
         _writer: &mut dyn WriteAt,
         _range: std::ops::Range<u64>,
-    ) -> Result<u64, crate::ReadFileAtError> {
-        Err(StorageError::NotSupported.into())
+    ) -> Result<u64, ReadFileAtError> {
+        Err(ReadFileAtError::NotSupported)
     }
     async fn write(
         &self,
         _path: StoragePath,
         _bytes: &[u8],
-    ) -> Result<(), StorageError> {
-        Err(StorageError::NotSupported)
+    ) -> Result<(), WriteStorageError> {
+        Err(WriteStorageError::NotSupported)
     }
     fn as_any(&self) -> &dyn Any;
 }
@@ -111,8 +111,31 @@ impl DirEntry for StorageEntry {
 }
 
 #[derive(Debug, thiserror::Error)]
-/// Reports a storage operation failure.
-pub enum StorageError {
+pub enum ConnectPermissionError {
+    #[error("storage operation is not supported")]
+    NotSupported,
+    #[error("storage permission denied")]
+    PermissionDenied,
+    #[error("storage is unavailable: {message}")]
+    Unavailable { message: String },
+    #[error("storage operation failed: {message}")]
+    Failed { message: String },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum DisconnectStorageError {
+    #[error("storage operation is not supported")]
+    NotSupported,
+    #[error("storage is disconnected")]
+    Disconnected,
+    #[error("storage is unavailable: {message}")]
+    Unavailable { message: String },
+    #[error("storage operation failed: {message}")]
+    Failed { message: String },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum WriteStorageError {
     #[error("storage operation is not supported")]
     NotSupported,
     #[error("storage entry not found")]
@@ -121,22 +144,25 @@ pub enum StorageError {
     NotADirectory,
     #[error("path is not a file")]
     NotAFile,
-    #[error("storage is unavailable: {message}")]
-    Unavailable { message: String },
-    #[error("storage is disconnected")]
-    Disconnected,
     #[error("storage permission denied")]
     PermissionDenied,
+    #[error("storage is disconnected")]
+    Disconnected,
+    #[error("storage is unavailable: {message}")]
+    Unavailable { message: String },
     #[error("storage operation failed: {message}")]
     Failed { message: String },
 }
 
 #[async_trait(?Send)]
 impl<T: Storage + ?Sized> Storage for Box<T> {
-    async fn connect(&self, request: bool) -> Result<bool, StorageError> {
+    async fn connect(
+        &self,
+        request: bool,
+    ) -> Result<bool, ConnectPermissionError> {
         (**self).connect(request).await
     }
-    async fn disconnect(&self) -> Result<(), StorageError> {
+    async fn disconnect(&self) -> Result<(), DisconnectStorageError> {
         (**self).disconnect().await
     }
     fn is_connected(&self) -> bool {
@@ -145,7 +171,7 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
     async fn read_dir(
         &self,
         path: StoragePath,
-    ) -> Result<Vec<Box<dyn DirEntry>>, StorageError> {
+    ) -> Result<Vec<Box<dyn DirEntry>>, ReadDirError> {
         (**self).read_dir(path).await
     }
     async fn read_file_at(
@@ -153,14 +179,14 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
         path: StoragePath,
         writer: &mut dyn WriteAt,
         range: std::ops::Range<u64>,
-    ) -> Result<u64, crate::ReadFileAtError> {
+    ) -> Result<u64, ReadFileAtError> {
         (**self).read_file_at(path, writer, range).await
     }
     async fn write(
         &self,
         path: StoragePath,
         data: &[u8],
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), WriteStorageError> {
         (**self).write(path, data).await
     }
     fn as_any(&self) -> &dyn Any {
@@ -183,6 +209,9 @@ pub trait WriteAt {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReadDirError {
+    #[error("invalid storage path")]
+    InvalidPath(#[from] InvalidStoragePath),
+
     #[error("storage does not support listing a directory")]
     NotSupported,
 
@@ -194,6 +223,9 @@ pub enum ReadDirError {
 
     #[error("permission denied")]
     PermissionDenied,
+
+    #[error("storage is disconnected")]
+    Disconnected,
 
     #[error("storage is unavailable: {message}")]
     Unavailable { message: String },
@@ -223,6 +255,9 @@ pub enum WriteAtError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReadFileAtError {
+    #[error("invalid storage path")]
+    InvalidPath(#[from] InvalidStoragePath),
+
     #[error("storage does not support reading a file")]
     NotSupported,
 
@@ -234,6 +269,9 @@ pub enum ReadFileAtError {
 
     #[error("permission denied")]
     PermissionDenied,
+
+    #[error("storage is disconnected")]
+    Disconnected,
 
     #[error("range extends beyond end of file")]
     RangeNotSatisfiable,
@@ -335,7 +373,7 @@ password = "secret"
         assert!(connection.as_any().is::<TestStorageConnection>());
         assert!(matches!(
             connection.read_dir(StoragePath::root()).await,
-            Err(StorageError::NotSupported)
+            Err(ReadDirError::NotSupported)
         ));
     }
 
@@ -354,7 +392,7 @@ password = "secret"
         let connection = config.connect().await.expect("connect test storage");
         assert!(matches!(
             connection.read_dir(StoragePath::root()).await,
-            Err(StorageError::NotSupported)
+            Err(ReadDirError::NotSupported)
         ));
     }
 }

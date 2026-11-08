@@ -4,11 +4,11 @@ use std::time::SystemTime;
 use cap_std::ambient_authority;
 use cap_std::fs::Dir;
 
-use crate::domain::{
-    DirEntry, ReadDirError, Storage, StorageError, StoragePath,
-};
 #[cfg(test)]
-use crate::domain::{ReadFileAtError, WriteAt};
+use crate::domain::WriteAt;
+use crate::domain::{
+    DirEntry, ReadDirError, ReadFileAtError, Storage, StoragePath,
+};
 
 pub const DEFAULT_LOCAL_CHUNK_SIZE: usize = 65536;
 
@@ -178,27 +178,13 @@ impl Storage for LocalStorage {
     async fn read_dir(
         &self,
         path: StoragePath,
-    ) -> Result<Vec<Box<dyn DirEntry>>, StorageError> {
+    ) -> Result<Vec<Box<dyn DirEntry>>, ReadDirError> {
         let storage = self.clone();
         tokio::task::spawn_blocking(move || {
-            let entries = storage.read_dir(path).map_err(|e| match e {
-                ReadDirError::NotFound => StorageError::NotFound,
-                ReadDirError::NotADirectory => StorageError::NotADirectory,
-                ReadDirError::PermissionDenied => {
-                    StorageError::PermissionDenied
-                }
-                ReadDirError::Unavailable { message } => {
-                    StorageError::Unavailable { message }
-                }
-                ReadDirError::NotSupported => StorageError::NotSupported,
-                other => StorageError::Failed {
-                    message: other.to_string(),
-                },
-            })?;
-            Ok(entries.collect())
+            storage.read_dir(path).map(|entries| entries.collect())
         })
         .await
-        .map_err(|e| StorageError::Failed {
+        .map_err(|e| ReadDirError::Unknown {
             message: e.to_string(),
         })?
     }
@@ -207,42 +193,24 @@ impl Storage for LocalStorage {
         path: StoragePath,
         writer: &mut dyn crate::domain::WriteAt,
         range: std::ops::Range<u64>,
-    ) -> Result<u64, crate::ReadFileAtError> {
+    ) -> Result<u64, ReadFileAtError> {
         if range.start > range.end {
-            return Err(StorageError::Failed {
+            return Err(ReadFileAtError::Unknown {
                 message: "invalid range".into(),
-            }
-            .into());
+            });
         }
         if range.is_empty() {
             return Ok(0);
         }
         let storage = self.clone();
         let file = tokio::task::spawn_blocking(move || {
-            let root = storage.root.as_ref().map_err(|e| match e.kind {
-                std::io::ErrorKind::NotFound => StorageError::NotFound,
-                std::io::ErrorKind::PermissionDenied => {
-                    StorageError::PermissionDenied
-                }
-                _ => StorageError::Failed {
-                    message: e.message.clone(),
-                },
-            })?;
+            let root = storage.root.as_ref().map_err(root_io_error)?;
             let file =
-                root.open(path.as_path()).map_err(|e| match e.kind() {
-                    std::io::ErrorKind::NotFound => StorageError::NotFound,
-                    std::io::ErrorKind::PermissionDenied => {
-                        StorageError::PermissionDenied
-                    }
-                    std::io::ErrorKind::IsADirectory => StorageError::NotAFile,
-                    _ => StorageError::Failed {
-                        message: e.to_string(),
-                    },
-                })?;
-            Ok::<_, StorageError>(std::sync::Arc::new(file.into_std()))
+                root.open(path.as_path()).map_err(ReadFileAtError::from)?;
+            Ok::<_, ReadFileAtError>(std::sync::Arc::new(file.into_std()))
         })
         .await
-        .map_err(|e| StorageError::Failed {
+        .map_err(|e| ReadFileAtError::Unknown {
             message: e.to_string(),
         })??;
         let mut offset = range.start;
@@ -263,14 +231,12 @@ impl Storage for LocalStorage {
                     use std::os::windows::fs::FileExt;
                     file.seek_read(&mut bytes, offset)
                 };
-                let count = count.map_err(|e| StorageError::Failed {
-                    message: e.to_string(),
-                })?;
+                let count = count.map_err(ReadFileAtError::from)?;
                 bytes.truncate(count);
-                Ok::<_, StorageError>(bytes)
+                Ok::<_, ReadFileAtError>(bytes)
             })
             .await
-            .map_err(|e| StorageError::Failed {
+            .map_err(|e| ReadFileAtError::Unknown {
                 message: e.to_string(),
             })??;
             if bytes.is_empty() {
@@ -398,7 +364,7 @@ mod tests {
         writer.fail_after = Some(2);
         let result =
             Storage::read_file_at(&storage, path, &mut writer, 0..start).await;
-        assert!(matches!(result, Err(crate::ReadFileAtError::Writer(_))));
+        assert!(matches!(result, Err(ReadFileAtError::WriteAt(_))));
         assert_eq!(writer.calls, 2);
         assert_eq!(writer.total, 2 * crate::domain::MAX_READ_SIZE as u64);
     }
@@ -410,11 +376,11 @@ mod tests {
         let storage = LocalStorage::new(dir.path().to_path_buf());
         assert!(matches!(
             Storage::read_dir(&storage, storage_path("missing")).await,
-            Err(StorageError::NotFound)
+            Err(ReadDirError::NotFound)
         ));
         assert!(matches!(
             Storage::read_dir(&storage, storage_path("file")).await,
-            Err(StorageError::NotADirectory)
+            Err(ReadDirError::NotADirectory)
         ));
     }
 

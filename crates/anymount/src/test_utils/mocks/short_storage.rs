@@ -9,7 +9,7 @@ impl Storage for ShortStorage {
         _path: StoragePath,
         _writer: &mut dyn crate::domain::WriteAt,
         _range: std::ops::Range<u64>,
-    ) -> Result<u64, crate::ReadFileAtError> {
+    ) -> Result<u64, crate::domain::ReadFileAtError> {
         Ok(1)
     }
     fn as_any(&self) -> &dyn std::any::Any {

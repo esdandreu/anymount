@@ -2,7 +2,8 @@ use super::{
     BrowserDriver, BrowserMount, BrowserStorageConfig, FileSystemAccessStorage,
 };
 use crate::domain::{
-    Driver, Mount, MountConfig, Storage, StorageError, StoragePath,
+    ConnectPermissionError, DisconnectStorageError, Driver, Mount, MountConfig,
+    Storage, StoragePath, WriteStorageError,
 };
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -107,7 +108,7 @@ impl BrowserDriverApi {
         storage
             .connect(request_permission)
             .await
-            .map_err(to_js_error)
+            .map_err(connect_js_error)
     }
 
     /// Disconnects a workspace while keeping its selected handle available.
@@ -120,7 +121,7 @@ impl BrowserDriverApi {
         name: String,
     ) -> Result<(), JsValue> {
         let storage = self.storage(&name)?;
-        storage.disconnect().await.map_err(to_js_error)
+        storage.disconnect().await.map_err(disconnect_js_error)
     }
 
     /// Unregisters a browser workspace.
@@ -192,7 +193,7 @@ impl BrowserDriverApi {
         self.storage(&name)?
             .write(path, value.as_bytes())
             .await
-            .map_err(to_js_error)
+            .map_err(write_js_error)
     }
 
     /// Returns the browser handle for a mounted workspace.
@@ -234,12 +235,79 @@ impl BrowserDriverApi {
     }
 }
 
-fn to_js_error(error: StorageError) -> JsValue {
-    let result = js_sys::Error::new(&error.to_string());
-    match error {
-        StorageError::NotFound => result.set_name("NotFoundError"),
-        StorageError::PermissionDenied => result.set_name("NotAllowedError"),
-        _ => {}
+fn connect_js_error(error: ConnectPermissionError) -> JsValue {
+    let name = match error {
+        ConnectPermissionError::PermissionDenied => Some("NotAllowedError"),
+        _ => None,
+    };
+    js_error(&error.to_string(), name)
+}
+
+fn disconnect_js_error(error: DisconnectStorageError) -> JsValue {
+    js_error(&error.to_string(), None)
+}
+
+fn write_js_error(error: WriteStorageError) -> JsValue {
+    let name = match error {
+        WriteStorageError::NotFound => Some("NotFoundError"),
+        WriteStorageError::PermissionDenied => Some("NotAllowedError"),
+        _ => None,
+    };
+    js_error(&error.to_string(), name)
+}
+
+fn js_error(message: &str, name: Option<&str>) -> JsValue {
+    let result = js_sys::Error::new(message);
+    if let Some(name) = name {
+        result.set_name(name);
     }
     result.into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    #[wasm_bindgen_test]
+    fn operation_errors_preserve_names_and_messages() {
+        let cases = [
+            (
+                connect_js_error(ConnectPermissionError::PermissionDenied),
+                "NotAllowedError",
+                "storage permission denied",
+            ),
+            (
+                connect_js_error(ConnectPermissionError::NotSupported),
+                "Error",
+                "storage operation is not supported",
+            ),
+            (
+                disconnect_js_error(DisconnectStorageError::Disconnected),
+                "Error",
+                "storage is disconnected",
+            ),
+            (
+                write_js_error(WriteStorageError::NotFound),
+                "NotFoundError",
+                "storage entry not found",
+            ),
+            (
+                write_js_error(WriteStorageError::PermissionDenied),
+                "NotAllowedError",
+                "storage permission denied",
+            ),
+            (
+                write_js_error(WriteStorageError::NotAFile),
+                "Error",
+                "path is not a file",
+            ),
+        ];
+        for (value, name, message) in cases {
+            let error: js_sys::Error = value.unchecked_into();
+            assert_eq!(error.name(), name);
+            assert_eq!(error.message(), message);
+        }
+    }
 }
