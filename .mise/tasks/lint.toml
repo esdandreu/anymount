@@ -51,15 +51,20 @@ for library in target/lint-libraries/release/lib*.$extension; do
 done
 '''
 run_windows = '''
+#!/usr/bin/env pwsh
+$ErrorActionPreference = 'Stop'
+foreach ($manifest in Get-ChildItem "tools/lints/*/Cargo.toml") {
+  cargo +nightly-2026-08-20 build --release --target-dir target/lint-libraries --manifest-path $manifest.FullName
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
 $hostTriple = (rustc +nightly-2026-08-20 -vV | Select-String '^host:').ToString().Split(' ')[1]
 $toolchain = "nightly-2026-08-20-$hostTriple"
 $cache = "target/dylint/libraries/$toolchain/release"
 $staging = "target/lint-libraries/dylint"
 Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $cache, $staging | Out-Null
-foreach ($library in Get-ChildItem "target/lint-libraries/release/lib*.dll") {
-  $name = $library.BaseName.Substring(3)
-  $suffixed = "lib$name@$toolchain.dll"
+foreach ($library in Get-ChildItem "target/lint-libraries/release/*.dll") {
+  $suffixed = "$($library.BaseName)@$toolchain.dll"
   Copy-Item $library.FullName "$cache/$suffixed"
   Copy-Item $library.FullName "$staging/$suffixed"
 }
