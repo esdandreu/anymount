@@ -11,8 +11,8 @@ directory.
 Build the WebAssembly package and start the static file server:
 
 ```sh
-mise run examples:browser:build
-mise run examples:browser:serve
+mise run examples:note-editor:build
+mise run examples:note-editor:serve
 ```
 
 Open `http://localhost:4173`. Choose a workspace, write a note, and save it.
@@ -22,7 +22,7 @@ you to reconnect if permission did not persist.
 Run the adapter tests with:
 
 ```sh
-mise run examples:browser:test
+mise run examples:note-editor:test
 ```
 
 ## Compatibility and limits
