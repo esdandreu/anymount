@@ -13,5 +13,5 @@ pub use started_authorization::{AuthStorageError, StartedAuthorization};
 pub use storage::{
     ConnectStorageError, DirEntry, InvalidStoragePath, MAX_READ_SIZE,
     ReadDirError, ReadFileAtError, Storage, StorageConfig, StorageEntry,
-    StorageError, StorageFuture, StoragePath, WriteAt, WriteAtError,
+    StorageError, StoragePath, WriteAt, WriteAtError,
 };

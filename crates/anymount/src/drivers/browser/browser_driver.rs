@@ -8,8 +8,7 @@ pub use browser_driver_api::BrowserDriverApi;
 use crate::domain::{
     ConnectMountError, ConnectStorageError, DisconnectMountError, Driver,
     DriverConfig, Mount, MountConfig, MountError, Storage, StorageConfig,
-    StorageEntry, StorageError, StorageFuture, StoragePath,
-    UnregisterMountError,
+    StorageEntry, StorageError, StoragePath, UnregisterMountError,
 };
 use async_trait::async_trait;
 use js_sys::{Array, Function, Object, Promise, Reflect, Uint8Array};
@@ -421,37 +420,33 @@ impl FileSystemAccessStorage {
 pub struct BrowserStorageConfig;
 
 #[typetag::serde(name = "browser")]
+#[async_trait(?Send)]
 impl StorageConfig for BrowserStorageConfig {
     fn clone_config(&self) -> Box<dyn StorageConfig> {
         Box::new(self.clone())
     }
-    fn connect(
-        &self,
-    ) -> StorageFuture<'_, Result<Box<dyn Storage>, ConnectStorageError>> {
-        Box::pin(async {
-            let options = Object::new();
-            Reflect::set(
-                &options,
-                &JsValue::from_str("mode"),
-                &JsValue::from_str("readwrite"),
-            )
-            .map_err(|error| ConnectStorageError::Failed {
-                kind: self.kind(),
-                message: js_message(&error),
-            })?;
-            let handle = call_async(
-                &js_sys::global(),
-                "showDirectoryPicker",
-                &Array::of1(&options),
-            )
-            .await
-            .map_err(|error| ConnectStorageError::Failed {
-                kind: self.kind(),
-                message: js_message(&error),
-            })?;
-            Ok(Box::new(FileSystemAccessStorage::new(handle))
-                as Box<dyn Storage>)
-        })
+    async fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError> {
+        let options = Object::new();
+        Reflect::set(
+            &options,
+            &JsValue::from_str("mode"),
+            &JsValue::from_str("readwrite"),
+        )
+        .map_err(|error| ConnectStorageError::Failed {
+            kind: self.kind(),
+            message: js_message(&error),
+        })?;
+        let handle = call_async(
+            &js_sys::global(),
+            "showDirectoryPicker",
+            &Array::of1(&options),
+        )
+        .await
+        .map_err(|error| ConnectStorageError::Failed {
+            kind: self.kind(),
+            message: js_message(&error),
+        })?;
+        Ok(Box::new(FileSystemAccessStorage::new(handle)) as Box<dyn Storage>)
     }
 }
 

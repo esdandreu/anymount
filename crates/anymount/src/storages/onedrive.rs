@@ -296,20 +296,16 @@ impl OneDriveConfig {
 }
 
 #[typetag::serde(name = "onedrive")]
+#[async_trait::async_trait(?Send)]
 impl StorageConfig for OneDriveConfig {
     fn clone_config(&self) -> Box<dyn StorageConfig> {
         Box::new(self.clone())
     }
-    fn connect(
+    async fn connect(
         &self,
-    ) -> crate::domain::StorageFuture<
-        '_,
-        std::result::Result<Box<dyn Storage>, ConnectStorageError>,
-    > {
-        Box::pin(async move {
-            OneDriveConfig::connect(self.clone())
-                .map(|storage| Box::new(storage) as Box<dyn Storage>)
-        })
+    ) -> std::result::Result<Box<dyn Storage>, ConnectStorageError> {
+        OneDriveConfig::connect(self.clone())
+            .map(|storage| Box::new(storage) as Box<dyn Storage>)
     }
 
     fn start_authorization(

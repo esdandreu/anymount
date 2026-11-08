@@ -1,3 +1,0 @@
-["test:fuse"]
-description = "Test the workspace with FUSE enabled"
-run = "cargo test --all --features anymount/fuse"

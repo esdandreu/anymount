@@ -2,17 +2,16 @@ mod path;
 
 pub use path::{InvalidStoragePath, StoragePath};
 
-use std::{any::Any, future::Future, pin::Pin, time::SystemTime};
+use std::{any::Any, time::SystemTime};
 
 use async_trait::async_trait;
 
 use super::started_authorization::{AuthStorageError, StartedAuthorization};
 
 #[typetag::serde(tag = "type")]
+#[async_trait(?Send)]
 pub trait StorageConfig: Send + Sync {
-    fn connect(
-        &self,
-    ) -> StorageFuture<'_, Result<Box<dyn Storage>, ConnectStorageError>>;
+    async fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError>;
 
     fn clone_config(&self) -> Box<dyn StorageConfig>;
 
@@ -40,9 +39,6 @@ pub enum ConnectStorageError {
     #[error("failed to connect {kind} storage: {message}")]
     Failed { kind: &'static str, message: String },
 }
-
-/// A future that can run on single-threaded platforms.
-pub type StorageFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
 /// Maximum number of bytes a single range read may request.
 pub const MAX_READ_SIZE: usize = 65536;
@@ -275,17 +271,15 @@ mod test {
 
     // private test util: Tests storage defaults and deserialization.
     #[typetag::serde(name = "test")]
+    #[async_trait(?Send)]
     impl StorageConfig for TestStorageConfig {
         fn clone_config(&self) -> Box<dyn StorageConfig> {
             Box::new(self.clone())
         }
-        fn connect(
+        async fn connect(
             &self,
-        ) -> StorageFuture<'_, Result<Box<dyn Storage>, ConnectStorageError>>
-        {
-            Box::pin(async {
-                Ok(Box::new(TestStorageConnection {}) as Box<dyn Storage>)
-            })
+        ) -> Result<Box<dyn Storage>, ConnectStorageError> {
+            Ok(Box::new(TestStorageConnection {}))
         }
     }
 
@@ -317,7 +311,13 @@ password = "secret"
         )
         .expect("deserialize storage config");
 
-        let connection = config.connect().await.expect("connect test storage");
+        let serialized =
+            toml::to_string(&config).expect("serialize storage config");
+        let restored: Box<dyn StorageConfig> = toml::from_str(&serialized)
+            .expect("deserialize serialized storage config");
+        let cloned = restored.clone_config();
+        let connection = cloned.connect().await.expect("connect test storage");
+        assert!(connection.as_any().is::<TestStorageConnection>());
         assert!(matches!(
             connection.read_dir(StoragePath::root()).await,
             Err(StorageError::NotSupported)
