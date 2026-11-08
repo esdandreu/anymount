@@ -14,7 +14,7 @@ use token_source::{OneDriveTokenSource, jwt_expires_at};
 use crate::domain::{AuthStorageError, StartedAuthorization};
 use crate::domain::{
     ConnectStorageError, DirEntry, ReadDirError, ReadFileAtError, Storage,
-    StorageConfig, StorageEntry, StorageError, StoragePath, WriteAt,
+    StorageConfig, StorageError, StoragePath, WriteAt,
 };
 
 /// Default buffer (seconds) before token expiry to trigger refresh when not set in config.
@@ -383,11 +383,11 @@ impl DirEntry for OneDriveDirEntry {
     fn is_dir(&self) -> bool {
         self.is_dir
     }
-    fn size(&self) -> u64 {
-        self.size
+    fn size(&self) -> Option<u64> {
+        Some(self.size)
     }
-    fn accessed(&self) -> SystemTime {
-        self.accessed
+    fn accessed(&self) -> Option<SystemTime> {
+        Some(self.accessed)
     }
 }
 
@@ -534,7 +534,7 @@ impl<T: BearerToken, F: HttpGet> Storage for OneDriveStorage<T, F> {
     async fn read_dir(
         &self,
         path: StoragePath,
-    ) -> std::result::Result<Vec<StorageEntry>, StorageError> {
+    ) -> std::result::Result<Vec<Box<dyn DirEntry>>, StorageError> {
         let storage = self.clone();
         tokio::task::spawn_blocking(move || {
             let entries = storage.read_dir(path).map_err(|e| match e {
@@ -546,14 +546,7 @@ impl<T: BearerToken, F: HttpGet> Storage for OneDriveStorage<T, F> {
                     message: e.to_string(),
                 },
             })?;
-            Ok(entries
-                .map(|entry| StorageEntry {
-                    name: entry.file_name(),
-                    is_directory: entry.is_dir(),
-                    size: Some(entry.size()),
-                    accessed: Some(entry.accessed()),
-                })
-                .collect())
+            Ok(entries.collect())
         })
         .await
         .map_err(|e| StorageError::Failed {
@@ -890,7 +883,7 @@ endpoint = "https://graph.microsoft.com/v1.0"
         let entries: Vec<_> = iter.collect();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].file_name(), "f.txt");
-        assert_eq!(entries[0].size(), 100);
+        assert_eq!(entries[0].size(), Some(100));
         assert!(!entries[0].is_dir());
     }
 

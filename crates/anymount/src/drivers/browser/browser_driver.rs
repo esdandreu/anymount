@@ -6,9 +6,10 @@ mod browser_driver_api;
 pub use browser_driver_api::BrowserDriverApi;
 
 use crate::domain::{
-    ConnectMountError, ConnectStorageError, DisconnectMountError, Driver,
-    DriverConfig, Mount, MountConfig, MountError, Storage, StorageConfig,
-    StorageEntry, StorageError, StoragePath, UnregisterMountError,
+    ConnectMountError, ConnectStorageError, DirEntry, DisconnectMountError,
+    Driver, DriverConfig, Mount, MountConfig, MountError, Storage,
+    StorageConfig, StorageEntry, StorageError, StoragePath,
+    UnregisterMountError,
 };
 use async_trait::async_trait;
 use js_sys::{Array, Function, Object, Promise, Reflect, Uint8Array};
@@ -210,7 +211,7 @@ impl Storage for FileSystemAccessStorage {
     async fn read_dir(
         &self,
         path: StoragePath,
-    ) -> Result<Vec<StorageEntry>, StorageError> {
+    ) -> Result<Vec<Box<dyn DirEntry>>, StorageError> {
         self.ensure_connected()?;
         let parts: Vec<_> = path.as_path().iter().collect();
         let directory = self
@@ -219,7 +220,7 @@ impl Storage for FileSystemAccessStorage {
             .map_err(|error| self.io_error(error))?;
         let iterator = call(&directory, "values", &Array::new())
             .map_err(|error| self.io_error(error))?;
-        let mut entries = Vec::new();
+        let mut entries: Vec<Box<dyn DirEntry>> = Vec::new();
         loop {
             let next = call_async(&iterator, "next", &Array::new())
                 .await
@@ -254,12 +255,12 @@ impl Storage for FileSystemAccessStorage {
                     });
                 }
             };
-            entries.push(StorageEntry {
+            entries.push(Box::new(StorageEntry {
                 name,
                 is_directory,
                 size: None,
                 accessed: None,
-            });
+            }));
         }
         Ok(entries)
     }
@@ -708,7 +709,7 @@ mod tests {
     #[wasm_bindgen_test]
     async fn browser_storage_lists_root_and_nested_directories() {
         use super::FileSystemAccessStorage;
-        use crate::domain::{Storage, StorageEntry, StorageError, StoragePath};
+        use crate::domain::{Storage, StorageError, StoragePath};
 
         let handle = Function::new_no_args(
             r#"
@@ -736,25 +737,19 @@ mod tests {
             Err(StorageError::Disconnected)
         ));
         assert!(storage.connect(false).await.expect("connect"));
-        assert_eq!(
-            storage.read_dir(StoragePath::root()).await.expect("root"),
-            vec![StorageEntry {
-                name: "notes".into(),
-                is_directory: true,
-                size: None,
-                accessed: None
-            }]
-        );
+        let root = storage.read_dir(StoragePath::root()).await.expect("root");
+        assert_eq!(root.len(), 1);
+        assert_eq!(root[0].file_name(), "notes");
+        assert!(root[0].is_dir());
+        assert_eq!(root[0].size(), None);
+        assert_eq!(root[0].accessed(), None);
         let path = StoragePath::try_from(PathBuf::from("notes")).expect("path");
-        assert_eq!(
-            storage.read_dir(path).await.expect("nested"),
-            vec![StorageEntry {
-                name: "note.txt".into(),
-                is_directory: false,
-                size: None,
-                accessed: None
-            }]
-        );
+        let nested = storage.read_dir(path).await.expect("nested");
+        assert_eq!(nested.len(), 1);
+        assert_eq!(nested[0].file_name(), "note.txt");
+        assert!(!nested[0].is_dir());
+        assert_eq!(nested[0].size(), None);
+        assert_eq!(nested[0].accessed(), None);
         let missing =
             StoragePath::try_from(PathBuf::from("missing")).expect("path");
         assert!(matches!(

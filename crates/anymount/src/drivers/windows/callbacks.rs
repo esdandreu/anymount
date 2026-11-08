@@ -118,8 +118,16 @@ impl SyncFilter for Callbacks {
                         } else {
                             Metadata::file()
                         })
-                        .size(entry.size())
-                        .accessed(system_time_to_file_time(entry.accessed())),
+                        .size(
+                            entry
+                                .size()
+                                .expect("native storage validates size"),
+                        )
+                        .accessed(
+                            system_time_to_file_time(entry.accessed().expect(
+                                "native storage validates access time",
+                            )),
+                        ),
                     )
                     .mark_in_sync()
                     .overwrite()

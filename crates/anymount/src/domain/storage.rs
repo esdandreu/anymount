@@ -65,7 +65,7 @@ pub trait Storage: Any {
     async fn read_dir(
         &self,
         _path: StoragePath,
-    ) -> Result<Vec<StorageEntry>, StorageError> {
+    ) -> Result<Vec<Box<dyn DirEntry>>, StorageError> {
         Err(StorageError::NotSupported)
     }
     async fn read_file_at(
@@ -93,6 +93,21 @@ pub struct StorageEntry {
     pub is_directory: bool,
     pub size: Option<u64>,
     pub accessed: Option<SystemTime>,
+}
+
+impl DirEntry for StorageEntry {
+    fn file_name(&self) -> String {
+        self.name.clone()
+    }
+    fn is_dir(&self) -> bool {
+        self.is_directory
+    }
+    fn size(&self) -> Option<u64> {
+        self.size
+    }
+    fn accessed(&self) -> Option<SystemTime> {
+        self.accessed
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -130,7 +145,7 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
     async fn read_dir(
         &self,
         path: StoragePath,
-    ) -> Result<Vec<StorageEntry>, StorageError> {
+    ) -> Result<Vec<Box<dyn DirEntry>>, StorageError> {
         (**self).read_dir(path).await
     }
     async fn read_file_at(
@@ -157,8 +172,8 @@ pub trait DirEntry: Send + Sync {
     // Should be &str
     fn file_name(&self) -> String;
     fn is_dir(&self) -> bool;
-    fn size(&self) -> u64;
-    fn accessed(&self) -> SystemTime;
+    fn size(&self) -> Option<u64>;
+    fn accessed(&self) -> Option<SystemTime>;
 }
 
 pub trait WriteAt {

@@ -431,8 +431,10 @@ impl StorageFilesystem {
             .map(|entry| CachedDirEntry {
                 file_name: entry.file_name(),
                 is_dir: entry.is_dir(),
-                size: entry.size(),
-                accessed: entry.accessed(),
+                size: entry.size().expect("native storage validates size"),
+                accessed: entry
+                    .accessed()
+                    .expect("native storage validates access time"),
             })
             .collect();
         self.cache.sync_metadata_placeholders(&path, &entries)?;
@@ -462,12 +464,12 @@ mod tests {
             .expect_read_dir()
             .times(read_dir_calls)
             .returning(|_| {
-                Ok(vec![crate::domain::StorageEntry {
+                Ok(vec![Box::new(crate::domain::StorageEntry {
                     name: "alpha.txt".to_string(),
                     is_directory: false,
                     size: Some(5),
                     accessed: Some(SystemTime::UNIX_EPOCH),
-                }])
+                })])
             });
         storage
     }

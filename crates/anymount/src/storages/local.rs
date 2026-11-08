@@ -5,7 +5,7 @@ use cap_std::ambient_authority;
 use cap_std::fs::Dir;
 
 use crate::domain::{
-    DirEntry, ReadDirError, Storage, StorageEntry, StorageError, StoragePath,
+    DirEntry, ReadDirError, Storage, StorageError, StoragePath,
 };
 #[cfg(test)]
 use crate::domain::{ReadFileAtError, WriteAt};
@@ -111,11 +111,11 @@ impl DirEntry for LocalDirEntry {
     fn is_dir(&self) -> bool {
         self.is_dir
     }
-    fn size(&self) -> u64 {
-        self.size
+    fn size(&self) -> Option<u64> {
+        Some(self.size)
     }
-    fn accessed(&self) -> SystemTime {
-        self.accessed
+    fn accessed(&self) -> Option<SystemTime> {
+        Some(self.accessed)
     }
 }
 
@@ -178,7 +178,7 @@ impl Storage for LocalStorage {
     async fn read_dir(
         &self,
         path: StoragePath,
-    ) -> Result<Vec<StorageEntry>, StorageError> {
+    ) -> Result<Vec<Box<dyn DirEntry>>, StorageError> {
         let storage = self.clone();
         tokio::task::spawn_blocking(move || {
             let entries = storage.read_dir(path).map_err(|e| match e {
@@ -195,14 +195,7 @@ impl Storage for LocalStorage {
                     message: other.to_string(),
                 },
             })?;
-            Ok(entries
-                .map(|entry| StorageEntry {
-                    name: entry.file_name(),
-                    is_directory: entry.is_dir(),
-                    size: Some(entry.size()),
-                    accessed: Some(entry.accessed()),
-                })
-                .collect())
+            Ok(entries.collect())
         })
         .await
         .map_err(|e| StorageError::Failed {
@@ -347,9 +340,9 @@ mod tests {
             .expect("list");
         let entry = entries
             .iter()
-            .find(|entry| entry.name == "note")
+            .find(|entry| entry.file_name() == "note")
             .expect("entry");
-        assert_eq!(entry.size, Some(4));
+        assert_eq!(entry.size(), Some(4));
         let path = storage_path("note");
         let mut writer = RecordingWriter::new();
         let count =
@@ -481,7 +474,7 @@ mod tests {
             .expect("test file entry should exist");
         assert_eq!(file_entry.file_name(), "f.txt");
         assert!(!file_entry.is_dir());
-        assert_eq!(file_entry.size(), content.len() as u64);
+        assert_eq!(file_entry.size(), Some(content.len() as u64));
 
         let dir_entry = entries
             .iter()

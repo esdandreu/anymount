@@ -1,8 +1,8 @@
 use crate::domain::{
     ConnectStorageError, DirEntry, ReadDirError, ReadFileAtError,
-    StorageConfig, StorageEntry, StorageError, StoragePath, WriteAt,
+    StorageConfig, StorageError, StoragePath, WriteAt,
 };
-use std::{ops::Range, sync::mpsc, time::SystemTime};
+use std::{ops::Range, sync::mpsc};
 
 pub struct NativeStorage {
     requests: tokio::sync::mpsc::Sender<Request>,
@@ -10,7 +10,7 @@ pub struct NativeStorage {
 enum Request {
     ReadDir(
         StoragePath,
-        mpsc::Sender<Result<Vec<StorageEntry>, StorageError>>,
+        mpsc::Sender<Result<Vec<Box<dyn DirEntry>>, StorageError>>,
     ),
     ReadRange(
         StoragePath,
@@ -40,21 +40,6 @@ impl WriteAt for ChunkWriter {
         }
         self.bytes.extend_from_slice(bytes);
         Ok(())
-    }
-}
-struct Entry(StorageEntry);
-impl DirEntry for Entry {
-    fn file_name(&self) -> String {
-        self.0.name.clone()
-    }
-    fn is_dir(&self) -> bool {
-        self.0.is_directory
-    }
-    fn size(&self) -> u64 {
-        self.0.size.unwrap_or(0)
-    }
-    fn accessed(&self) -> SystemTime {
-        self.0.accessed.unwrap_or(SystemTime::UNIX_EPOCH)
     }
 }
 impl NativeStorage {
@@ -186,14 +171,10 @@ impl NativeStorage {
             .map_err(map_dir_error)?;
         if entries
             .iter()
-            .any(|e| e.size.is_none() || e.accessed.is_none())
+            .any(|e| e.size().is_none() || e.accessed().is_none())
         {
             return Err(ReadDirError::NotSupported);
         }
-        let entries: Vec<Box<dyn DirEntry>> = entries
-            .into_iter()
-            .map(|e| Box::new(Entry(e)) as Box<dyn DirEntry>)
-            .collect();
         Ok(Box::new(entries.into_iter()))
     }
     pub fn read_file_at(
@@ -276,12 +257,14 @@ fn map_read_error(error: StorageError) -> ReadFileAtError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::StorageEntry;
     use crate::test_utils::mocks::MockStorage;
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     };
     use std::time::Duration;
+    use std::time::SystemTime;
 
     #[test]
     fn worker_drives_background_tasks_between_requests() {
@@ -328,12 +311,12 @@ mod tests {
             let mut storage = MockStorage::new();
             storage.expect_read_dir().returning_st(move |_| {
                 counter.set(counter.get() + 1);
-                Ok(vec![StorageEntry {
+                Ok(vec![Box::new(StorageEntry {
                     name: counter.get().to_string(),
                     is_directory: false,
                     size: Some(0),
                     accessed: Some(SystemTime::UNIX_EPOCH),
-                }])
+                })])
             });
             storage
         })
@@ -350,6 +333,31 @@ mod tests {
             .expect("second entry");
         assert_eq!(first.file_name(), "1");
         assert_eq!(second.file_name(), "2");
+    }
+
+    #[test]
+    fn rejects_entries_with_missing_metadata() {
+        for (size, accessed) in
+            [(None, Some(SystemTime::UNIX_EPOCH)), (Some(1), None)]
+        {
+            let storage = NativeStorage::from_factory(move || {
+                let mut storage = MockStorage::new();
+                storage.expect_read_dir().returning(move |_| {
+                    Ok(vec![Box::new(StorageEntry {
+                        name: "note".into(),
+                        is_directory: false,
+                        size,
+                        accessed,
+                    })])
+                });
+                storage
+            })
+            .expect("create worker");
+            assert!(matches!(
+                storage.read_dir(StoragePath::root()),
+                Err(ReadDirError::NotSupported)
+            ));
+        }
     }
 
     #[test]
