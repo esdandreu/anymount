@@ -564,47 +564,53 @@ impl<T: BearerToken, F: HttpGet> Storage for OneDriveStorage<T, F> {
             message: e.to_string(),
         })?
     }
-    async fn read_range(
+    async fn read_file_at(
         &self,
         path: StoragePath,
-        offset: u64,
-        length: usize,
-    ) -> std::result::Result<Vec<u8>, StorageError> {
-        if length > crate::domain::MAX_READ_SIZE {
+        writer: &mut dyn WriteAt,
+        range: std::ops::Range<u64>,
+    ) -> std::result::Result<u64, crate::ReadFileAtError> {
+        if range.start > range.end {
             return Err(StorageError::Failed {
-                message: "read range exceeds limit".into(),
-            });
-        }
-        if length == 0 {
-            return Ok(Vec::new());
-        }
-        let end = offset.checked_add(length as u64).ok_or_else(|| {
-            StorageError::Failed {
-                message: "range overflow".into(),
+                message: "invalid range".into(),
             }
-        })?;
-        let storage = self.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut writer = BytesWriter(Vec::new());
-            let result = storage.read_file_at(path, &mut writer, offset..end);
-            if matches!(result, Err(ReadFileAtError::RangeNotSatisfiable)) {
-                return Ok(Vec::new());
-            }
-            result.map_err(|e| match e {
-                ReadFileAtError::NotFound => StorageError::NotFound,
-                ReadFileAtError::PermissionDenied => {
-                    StorageError::PermissionDenied
+            .into());
+        }
+        let mut offset = range.start;
+        while offset < range.end {
+            let end = offset
+                + (range.end - offset).min(crate::domain::MAX_READ_SIZE as u64);
+            let path = path.clone();
+            let storage = self.clone();
+            let bytes = tokio::task::spawn_blocking(move || {
+                let mut writer = BytesWriter(Vec::new());
+                let result =
+                    storage.read_file_at(path, &mut writer, offset..end);
+                if matches!(result, Err(ReadFileAtError::RangeNotSatisfiable)) {
+                    return Ok::<_, StorageError>(Vec::new());
                 }
-                _ => StorageError::Failed {
-                    message: e.to_string(),
-                },
-            })?;
-            Ok(writer.0)
-        })
-        .await
-        .map_err(|e| StorageError::Failed {
-            message: e.to_string(),
-        })?
+                result.map_err(|e| match e {
+                    ReadFileAtError::NotFound => StorageError::NotFound,
+                    ReadFileAtError::PermissionDenied => {
+                        StorageError::PermissionDenied
+                    }
+                    _ => StorageError::Failed {
+                        message: e.to_string(),
+                    },
+                })?;
+                Ok(writer.0)
+            })
+            .await
+            .map_err(|e| StorageError::Failed {
+                message: e.to_string(),
+            })??;
+            if bytes.is_empty() {
+                break;
+            }
+            writer.write_at(&bytes, offset)?;
+            offset += bytes.len() as u64;
+        }
+        Ok(offset - range.start)
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -907,26 +913,17 @@ endpoint = "https://graph.microsoft.com/v1.0"
     async fn async_range_returns_backend_bytes_and_rejects_invalid_ranges() {
         let storage = storage_with_response(206, &[1, 2, 3]);
         let path = storage_path("f");
-        assert_eq!(
-            Storage::read_range(&storage, path.clone(), 10, 2)
+        let mut writer = RecordingWriter::new();
+        let count =
+            Storage::read_file_at(&storage, path.clone(), &mut writer, 10..12)
                 .await
-                .expect("range"),
-            [1, 2]
-        );
+                .expect("range");
+        assert_eq!(count, 2);
+        assert_eq!(writer.writes[0], (10, vec![1, 2]));
         assert!(
-            Storage::read_range(&storage, path.clone(), u64::MAX, 2)
+            Storage::read_file_at(&storage, path, &mut writer, 2..1)
                 .await
                 .is_err()
-        );
-        assert!(
-            Storage::read_range(
-                &storage,
-                path,
-                0,
-                crate::domain::MAX_READ_SIZE + 1
-            )
-            .await
-            .is_err()
         );
     }
 

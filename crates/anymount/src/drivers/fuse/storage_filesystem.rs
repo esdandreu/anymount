@@ -448,10 +448,10 @@ mod tests {
         DOT_ENTRY_OFFSET, FIRST_CHILD_ENTRY_OFFSET, NativeStorage,
         StorageFilesystem,
     };
-    use crate::domain::MockStorage;
     use crate::drivers::fuse::NoCacheFsCache;
     use crate::drivers::fuse::cached_dir::MockCachePort as MockCache;
     use crate::drivers::fuse::error::Error;
+    use crate::test_utils::mocks::MockStorage;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::{Duration, SystemTime};

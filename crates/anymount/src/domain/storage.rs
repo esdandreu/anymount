@@ -49,10 +49,9 @@ pub const MAX_READ_SIZE: usize = 65536;
 
 /// Provides asynchronous access to a user-authorized storage workspace.
 ///
-/// Range reads return at most the requested length and may return fewer bytes.
-/// An empty result indicates the end of the file. Providers may report
-/// unsupported operations and omit metadata they cannot determine.
-#[cfg_attr(test, mockall::automock)]
+/// Range reads write at most the requested bytes and return the number written.
+/// A short read indicates the end of the file. Providers may report unsupported
+/// operations and omit metadata they cannot determine.
 #[async_trait(?Send)]
 pub trait Storage: Any {
     async fn connect(
@@ -73,13 +72,13 @@ pub trait Storage: Any {
     ) -> Result<Vec<StorageEntry>, StorageError> {
         Err(StorageError::NotSupported)
     }
-    async fn read_range(
+    async fn read_file_at(
         &self,
         _path: StoragePath,
-        _offset: u64,
-        _length: usize,
-    ) -> Result<Vec<u8>, StorageError> {
-        Err(StorageError::NotSupported)
+        _writer: &mut dyn WriteAt,
+        _range: std::ops::Range<u64>,
+    ) -> Result<u64, crate::ReadFileAtError> {
+        Err(StorageError::NotSupported.into())
     }
     async fn write(
         &self,
@@ -138,13 +137,13 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
     ) -> Result<Vec<StorageEntry>, StorageError> {
         (**self).read_dir(path).await
     }
-    async fn read_range(
+    async fn read_file_at(
         &self,
         path: StoragePath,
-        offset: u64,
-        length: usize,
-    ) -> Result<Vec<u8>, StorageError> {
-        (**self).read_range(path, offset, length).await
+        writer: &mut dyn WriteAt,
+        range: std::ops::Range<u64>,
+    ) -> Result<u64, crate::ReadFileAtError> {
+        (**self).read_file_at(path, writer, range).await
     }
     async fn write(
         &self,

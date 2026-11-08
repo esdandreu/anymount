@@ -1,0 +1,18 @@
+use crate::domain::{Storage, StoragePath};
+
+pub struct ShortStorage;
+
+#[async_trait::async_trait(?Send)]
+impl Storage for ShortStorage {
+    async fn read_file_at(
+        &self,
+        _path: StoragePath,
+        _writer: &mut dyn crate::domain::WriteAt,
+        _range: std::ops::Range<u64>,
+    ) -> Result<u64, crate::ReadFileAtError> {
+        Ok(1)
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}

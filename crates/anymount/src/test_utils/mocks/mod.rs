@@ -1,13 +1,21 @@
+mod bytes_writer;
 mod cannot_connect_storage_config;
+mod counting_writer;
 mod empty_storage_config;
+mod mock_storage;
 mod no_op_driver;
 mod no_op_driver_config;
 mod no_op_mount;
 mod no_op_storage;
+mod short_storage;
 
+pub use bytes_writer::BytesWriter;
 pub use cannot_connect_storage_config::CannotConnectStorageConfig;
+pub use counting_writer::CountingWriter;
 pub use empty_storage_config::EmptyStorageConfig;
+pub use mock_storage::MockStorage;
 pub use no_op_driver::NoOpDriver;
 pub use no_op_driver_config::NoOpDriverConfig;
 pub use no_op_mount::NoOpMount;
 pub use no_op_storage::NoOpStorage;
+pub use short_storage::ShortStorage;

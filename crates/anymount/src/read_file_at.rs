@@ -38,23 +38,13 @@ where
         .into());
     }
     let path: crate::domain::StoragePath = path.try_into()?;
-    let mut pos = range.start;
-    while pos < range.end {
-        let count = (range.end - pos).min(65536) as usize;
-        let bytes = storage.read_range(path.clone(), pos, count).await?;
-        if bytes.len() > count {
-            return Err(ReadFileAtError::Storage(StorageError::Failed {
-                message: "provider returned too much data".into(),
-            }));
+    let expected = range.end - range.start;
+    let count = storage.read_file_at(path, writer, range).await?;
+    if count != expected {
+        return Err(StorageError::Failed {
+            message: "range extends beyond end of file".into(),
         }
-        if bytes.is_empty() {
-            return Err(StorageError::Failed {
-                message: "range extends beyond end of file".into(),
-            }
-            .into());
-        }
-        writer.write_at(&bytes, pos)?;
-        pos += bytes.len() as u64;
+        .into());
     }
     Ok(())
 }
@@ -105,10 +95,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn reports_early_end_of_file() {
-        let mut storage = crate::domain::MockStorage::new();
-        storage.expect_read_range().returning(|_, offset, _| {
-            Ok(if offset == 0 { vec![1] } else { vec![] })
-        });
+        let storage = crate::test_utils::mocks::ShortStorage;
         let result = read_file_at(
             &storage,
             PathBuf::from("file"),

@@ -19,6 +19,29 @@ enum Request {
         mpsc::Sender<Result<Vec<u8>, StorageError>>,
     ),
 }
+struct ChunkWriter {
+    bytes: Vec<u8>,
+    start: u64,
+    limit: usize,
+}
+impl WriteAt for ChunkWriter {
+    fn write_at(
+        &mut self,
+        bytes: &[u8],
+        offset: u64,
+    ) -> Result<(), crate::domain::WriteAtError> {
+        if offset != self.start + self.bytes.len() as u64
+            || bytes.len() > self.limit - self.bytes.len()
+        {
+            return Err(crate::domain::WriteAtError::Failed {
+                offset,
+                message: "provider wrote outside requested range".into(),
+            });
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(())
+    }
+}
 struct Entry(StorageEntry);
 impl DirEntry for Entry {
     fn file_name(&self) -> String {
@@ -100,10 +123,30 @@ impl NativeStorage {
                                     reply.send(storage.read_dir(path).await);
                             }
                             Request::ReadRange(path, offset, length, reply) => {
+                                let mut writer = ChunkWriter { bytes: Vec::new(), start: offset, limit: length };
+                                let result = storage
+                                    .read_file_at(
+                                        path,
+                                        &mut writer,
+                                        offset..offset + length as u64,
+                                    )
+                                    .await;
                                 let _ = reply.send(
-                                    storage
-                                        .read_range(path, offset, length)
-                                        .await,
+                                    result.and_then(|count| {
+                                        if count != writer.bytes.len() as u64 {
+                                            return Err(StorageError::Failed { message: "provider reported incorrect byte count".into() }.into());
+                                        }
+                                        Ok(writer.bytes)
+                                    }).map_err(|error| {
+                                        match error {
+                                            crate::ReadFileAtError::Storage(
+                                                error,
+                                            ) => error,
+                                            other => StorageError::Failed {
+                                                message: other.to_string(),
+                                            },
+                                        }
+                                    }),
                                 );
                             }
                         }
@@ -233,7 +276,7 @@ fn map_read_error(error: StorageError) -> ReadFileAtError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::MockStorage;
+    use crate::test_utils::mocks::MockStorage;
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},

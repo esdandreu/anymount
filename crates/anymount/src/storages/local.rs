@@ -209,21 +209,23 @@ impl Storage for LocalStorage {
             message: e.to_string(),
         })?
     }
-    async fn read_range(
+    async fn read_file_at(
         &self,
         path: StoragePath,
-        offset: u64,
-        length: usize,
-    ) -> Result<Vec<u8>, StorageError> {
-        if length > crate::domain::MAX_READ_SIZE
-            || offset.checked_add(length as u64).is_none()
-        {
+        writer: &mut dyn crate::domain::WriteAt,
+        range: std::ops::Range<u64>,
+    ) -> Result<u64, crate::ReadFileAtError> {
+        if range.start > range.end {
             return Err(StorageError::Failed {
-                message: "invalid read range".into(),
-            });
+                message: "invalid range".into(),
+            }
+            .into());
+        }
+        if range.is_empty() {
+            return Ok(0);
         }
         let storage = self.clone();
-        tokio::task::spawn_blocking(move || {
+        let file = tokio::task::spawn_blocking(move || {
             let root = storage.root.as_ref().map_err(|e| match e.kind {
                 std::io::ErrorKind::NotFound => StorageError::NotFound,
                 std::io::ErrorKind::PermissionDenied => {
@@ -233,9 +235,8 @@ impl Storage for LocalStorage {
                     message: e.message.clone(),
                 },
             })?;
-            let file = root
-                .open(path.as_path())
-                .map_err(|e| match e.kind() {
+            let file =
+                root.open(path.as_path()).map_err(|e| match e.kind() {
                     std::io::ErrorKind::NotFound => StorageError::NotFound,
                     std::io::ErrorKind::PermissionDenied => {
                         StorageError::PermissionDenied
@@ -244,29 +245,48 @@ impl Storage for LocalStorage {
                     _ => StorageError::Failed {
                         message: e.to_string(),
                     },
-                })?
-                .into_std();
-            let mut bytes = vec![0; length];
-            #[cfg(unix)]
-            let count = {
-                use std::os::unix::fs::FileExt;
-                file.read_at(&mut bytes, offset)
-            };
-            #[cfg(windows)]
-            let count = {
-                use std::os::windows::fs::FileExt;
-                file.seek_read(&mut bytes, offset)
-            };
-            let count = count.map_err(|e| StorageError::Failed {
-                message: e.to_string(),
-            })?;
-            bytes.truncate(count);
-            Ok(bytes)
+                })?;
+            Ok::<_, StorageError>(std::sync::Arc::new(file.into_std()))
         })
         .await
         .map_err(|e| StorageError::Failed {
             message: e.to_string(),
-        })?
+        })??;
+        let mut offset = range.start;
+        while offset < range.end {
+            let length = (range.end - offset)
+                .min(self.chunk_size.max(1).min(crate::domain::MAX_READ_SIZE)
+                    as u64) as usize;
+            let file = file.clone();
+            let bytes = tokio::task::spawn_blocking(move || {
+                let mut bytes = vec![0; length];
+                #[cfg(unix)]
+                let count = {
+                    use std::os::unix::fs::FileExt;
+                    file.read_at(&mut bytes, offset)
+                };
+                #[cfg(windows)]
+                let count = {
+                    use std::os::windows::fs::FileExt;
+                    file.seek_read(&mut bytes, offset)
+                };
+                let count = count.map_err(|e| StorageError::Failed {
+                    message: e.to_string(),
+                })?;
+                bytes.truncate(count);
+                Ok::<_, StorageError>(bytes)
+            })
+            .await
+            .map_err(|e| StorageError::Failed {
+                message: e.to_string(),
+            })??;
+            if bytes.is_empty() {
+                break;
+            }
+            writer.write_at(&bytes, offset)?;
+            offset += bytes.len() as u64;
+        }
+        Ok(offset - range.start)
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -331,39 +351,63 @@ mod tests {
             .expect("entry");
         assert_eq!(entry.size, Some(4));
         let path = storage_path("note");
-        assert_eq!(
-            Storage::read_range(&storage, path.clone(), 1, 2)
+        let mut writer = RecordingWriter::new();
+        let count =
+            Storage::read_file_at(&storage, path.clone(), &mut writer, 1..3)
                 .await
-                .expect("range"),
-            [1, 254]
-        );
+                .expect("range");
+        assert_eq!(count, 2);
+        assert_eq!(writer.flat_bytes(), [1, 254]);
+        let mut writer = RecordingWriter::new();
         assert_eq!(
-            Storage::read_range(&storage, path.clone(), 3, 4)
+            Storage::read_file_at(&storage, path.clone(), &mut writer, 3..7)
                 .await
                 .expect("short range"),
-            [255]
+            1
         );
-        assert!(
-            Storage::read_range(&storage, path.clone(), 4, 1)
+        assert_eq!(writer.flat_bytes(), [255]);
+        assert_eq!(
+            Storage::read_file_at(&storage, path.clone(), &mut writer, 4..5)
                 .await
-                .expect("EOF")
-                .is_empty()
+                .expect("EOF"),
+            0
         );
         assert!(
-            Storage::read_range(&storage, path.clone(), u64::MAX, 2)
+            Storage::read_file_at(&storage, path, &mut writer, 2..1)
                 .await
                 .is_err()
         );
-        assert!(
-            Storage::read_range(
-                &storage,
-                path,
-                0,
-                crate::domain::MAX_READ_SIZE + 1
-            )
-            .await
-            .is_err()
-        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn large_sparse_reads_are_chunked_and_writer_errors_stop_reads() {
+        let dir = TempDir::new().expect("temporary directory");
+        let file = std::fs::File::create(dir.path().join("sparse"))
+            .expect("create sparse file");
+        let start = 1_u64 << 40;
+        file.set_len(start + 131_073).expect("extend sparse file");
+        let storage = LocalStorage::new(dir.path().to_path_buf());
+        let path = storage_path("sparse");
+        let mut writer = crate::test_utils::mocks::CountingWriter::new(start);
+        let count = Storage::read_file_at(
+            &storage,
+            path.clone(),
+            &mut writer,
+            start..start + 131_073,
+        )
+        .await
+        .expect("read sparse range");
+        assert_eq!(count, 131_073);
+        assert_eq!(writer.total, count);
+        assert!(writer.max_chunk <= crate::domain::MAX_READ_SIZE);
+        assert_eq!(writer.calls, 3);
+        let mut writer = crate::test_utils::mocks::CountingWriter::new(0);
+        writer.fail_after = Some(2);
+        let result =
+            Storage::read_file_at(&storage, path, &mut writer, 0..start).await;
+        assert!(matches!(result, Err(crate::ReadFileAtError::Writer(_))));
+        assert_eq!(writer.calls, 2);
+        assert_eq!(writer.total, 2 * crate::domain::MAX_READ_SIZE as u64);
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -393,9 +437,14 @@ mod tests {
             .expect("symlink");
         let storage = LocalStorage::new(root.path().to_path_buf());
         assert!(
-            Storage::read_range(&storage, storage_path("link"), 0, 6)
-                .await
-                .is_err()
+            Storage::read_file_at(
+                &storage,
+                storage_path("link"),
+                &mut RecordingWriter::new(),
+                0..6
+            )
+            .await
+            .is_err()
         );
     }
 

@@ -147,18 +147,31 @@ impl BrowserDriverApi {
         let path = StoragePath::try_from(PathBuf::from(file_name))
             .map_err(|error| JsValue::from_str(&error.to_string()))?;
         let storage = self.storage(&name)?;
-        let mut bytes = Vec::new();
+        struct TextWriter(Vec<u8>);
+        impl crate::domain::WriteAt for TextWriter {
+            fn write_at(
+                &mut self,
+                bytes: &[u8],
+                _offset: u64,
+            ) -> Result<(), crate::domain::WriteAtError> {
+                self.0.extend_from_slice(bytes);
+                Ok(())
+            }
+        }
+        let mut writer = TextWriter(Vec::new());
+        let mut offset = 0;
         loop {
-            let chunk = storage
-                .read_range(path.clone(), bytes.len() as u64, 65536)
+            let end = offset + 65536;
+            let count = storage
+                .read_file_at(path.clone(), &mut writer, offset..end)
                 .await
-                .map_err(to_js_error)?;
-            let length = chunk.len();
-            bytes.extend(chunk);
-            if length == 0 {
+                .map_err(|error| JsValue::from_str(&error.to_string()))?;
+            offset += count;
+            if count < 65536 {
                 break;
             }
         }
+        let bytes = writer.0;
         String::from_utf8(bytes)
             .map_err(|error| JsValue::from_str(&error.to_string()))
     }

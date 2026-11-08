@@ -265,24 +265,19 @@ impl Storage for FileSystemAccessStorage {
         Ok(entries)
     }
 
-    async fn read_range(
+    async fn read_file_at(
         &self,
         path: StoragePath,
-        offset: u64,
-        length: usize,
-    ) -> Result<Vec<u8>, StorageError> {
-        if length > crate::domain::MAX_READ_SIZE {
-            return Err(StorageError::Failed {
-                message: "read range exceeds limit".into(),
-            });
-        }
+        writer: &mut dyn crate::domain::WriteAt,
+        range: std::ops::Range<u64>,
+    ) -> Result<u64, crate::ReadFileAtError> {
         self.ensure_connected()?;
-        let end = offset
-            .checked_add(length as u64)
-            .filter(|end| *end <= 9_007_199_254_740_991)
-            .ok_or_else(|| StorageError::Failed {
+        if range.start > range.end || range.end > 9_007_199_254_740_991 {
+            return Err(StorageError::Failed {
                 message: "invalid range".into(),
-            })?;
+            }
+            .into());
+        }
         let file_handle = self
             .file_handle(path, false)
             .await
@@ -290,19 +285,36 @@ impl Storage for FileSystemAccessStorage {
         let file = call_async(&file_handle, "getFile", &Array::new())
             .await
             .map_err(|error| self.io_error(error))?;
-        let slice = call(
-            &file,
-            "slice",
-            &Array::of2(
-                &JsValue::from_f64(offset as f64),
-                &JsValue::from_f64(end as f64),
-            ),
-        )
-        .map_err(|error| self.io_error(error))?;
-        let buffer = call_async(&slice, "arrayBuffer", &Array::new())
-            .await
+        let mut offset = range.start;
+        while offset < range.end {
+            let end = offset
+                + (range.end - offset).min(crate::domain::MAX_READ_SIZE as u64);
+            let slice = call(
+                &file,
+                "slice",
+                &Array::of2(
+                    &JsValue::from_f64(offset as f64),
+                    &JsValue::from_f64(end as f64),
+                ),
+            )
             .map_err(|error| self.io_error(error))?;
-        Ok(Uint8Array::new(&buffer).to_vec())
+            let buffer = call_async(&slice, "arrayBuffer", &Array::new())
+                .await
+                .map_err(|error| self.io_error(error))?;
+            let bytes = Uint8Array::new(&buffer).to_vec();
+            if bytes.is_empty() {
+                break;
+            }
+            if bytes.len() as u64 > end - offset {
+                return Err(StorageError::Failed {
+                    message: "provider returned too much data".into(),
+                }
+                .into());
+            }
+            writer.write_at(&bytes, offset)?;
+            offset += bytes.len() as u64;
+        }
+        Ok(offset - range.start)
     }
 
     async fn write(
@@ -503,6 +515,8 @@ mod tests {
     use wasm_bindgen::JsValue;
     use wasm_bindgen_test::wasm_bindgen_test;
 
+    use crate::test_utils::mocks::BytesWriter as TestWriter;
+
     #[wasm_bindgen_test]
     fn browser_driver_is_public_and_implements_driver() {
         let driver = BrowserDriver::default();
@@ -603,15 +617,20 @@ mod tests {
         let storage = config.connect().await.expect("select directory");
         let path =
             StoragePath::try_from(PathBuf::from("note.bin")).expect("path");
+        let mut writer = TestWriter::default();
         assert!(!storage.connect(false).await.expect("query"));
         assert!(matches!(
-            storage.read_range(path.clone(), 0, 65536).await,
-            Err(StorageError::Disconnected)
+            storage
+                .read_file_at(path.clone(), &mut writer, 0..65536)
+                .await,
+            Err(crate::ReadFileAtError::Storage(StorageError::Disconnected))
         ));
         assert!(storage.connect(true).await.expect("request"));
         assert!(matches!(
-            storage.read_range(path.clone(), 0, 65536).await,
-            Err(StorageError::NotFound)
+            storage
+                .read_file_at(path.clone(), &mut writer, 0..65536)
+                .await,
+            Err(crate::ReadFileAtError::Storage(StorageError::NotFound))
         ));
         storage
             .write(path.clone(), &[0, 255, 42])
@@ -619,56 +638,71 @@ mod tests {
             .expect("write");
         assert_eq!(
             storage
-                .read_range(path.clone(), 1, 1)
+                .read_file_at(path.clone(), &mut writer, 1..2)
                 .await
                 .expect("bounded read"),
-            vec![255]
+            1
         );
-        assert!(
+        assert_eq!(writer.0, vec![255]);
+        writer.0.clear();
+        assert_eq!(
             storage
-                .read_range(path.clone(), 3, 1)
+                .read_file_at(path.clone(), &mut writer, 3..4)
                 .await
-                .expect("end of file")
-                .is_empty()
+                .expect("EOF"),
+            0
         );
-        assert!(storage.read_range(path.clone(), u64::MAX, 1).await.is_err());
         assert!(
             storage
-                .read_range(path.clone(), 9_007_199_254_740_991, 1)
+                .read_file_at(
+                    path.clone(),
+                    &mut writer,
+                    9_007_199_254_740_991..9_007_199_254_740_992
+                )
                 .await
                 .is_err()
         );
-        assert!(
+        assert_eq!(
             storage
-                .read_range(path.clone(), 0, crate::domain::MAX_READ_SIZE + 1)
+                .read_file_at(path.clone(), &mut writer, 0..65537)
                 .await
-                .is_err()
+                .expect("read across chunks"),
+            3
         );
+        assert_eq!(writer.0, vec![0, 255, 42]);
+        writer.0.clear();
         storage.disconnect().await.expect("disconnect");
         assert!(storage.connect(false).await.expect("reconnect"));
         assert_eq!(
             storage
-                .read_range(path.clone(), 0, 65536)
+                .read_file_at(path.clone(), &mut writer, 0..65536)
                 .await
                 .expect("read"),
-            vec![0, 255, 42]
+            3
         );
+        assert_eq!(writer.0, vec![0, 255, 42]);
         Function::new_with_args("handle", "handle.revoke()")
             .call1(&JsValue::NULL, &handle)
             .expect("revoke permission");
         assert!(matches!(
-            storage.read_range(path.clone(), 0, 65536).await,
-            Err(StorageError::PermissionDenied)
+            storage
+                .read_file_at(path.clone(), &mut writer, 0..65536)
+                .await,
+            Err(crate::ReadFileAtError::Storage(
+                StorageError::PermissionDenied
+            ))
         ));
         assert!(!storage.is_connected());
         assert!(storage.connect(true).await.expect("request again"));
+        writer.0.clear();
         assert_eq!(
             storage
-                .read_range(path, 0, 65536)
+                .read_file_at(path, &mut writer, 0..65536)
                 .await
                 .expect("read again"),
-            vec![0, 255, 42]
+            3
         );
+        assert_eq!(writer.0, vec![0, 255, 42]);
         Reflect::delete_property(
             &global,
             &JsValue::from_str("showDirectoryPicker"),
