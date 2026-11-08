@@ -38,11 +38,11 @@ function setWorkspace(nextMount) {
 }
 
 function showError(error) {
-  if (error.name === "NotAllowedError" && mount) {
+  if (error?.name === "NotAllowedError" && mount) {
     setWorkspace(mount);
     return;
   }
-  status.textContent = error.message ?? String(error);
+  status.textContent = error?.message ?? String(error);
 }
 
 workspaceButton.addEventListener("click", async () => {
@@ -86,7 +86,7 @@ async function loadNote() {
     content.value = await mount.readText();
     status.textContent = "Loaded anymount-note.txt from the workspace.";
   } catch (error) {
-    if (error.name === "NotFoundError") {
+    if (error?.name === "NotFoundError") {
       content.value = "";
       status.textContent = "No saved note yet. Write something and save.";
       return;

@@ -36,7 +36,10 @@ export class DirectoryHandleStore {
       const request = operation(transaction.objectStore("directory-handles"));
       transaction.oncomplete = () => resolve(request.result);
       request.onerror = () => reject(request.error);
-      transaction.onabort = () => reject(transaction.error);
+      transaction.onabort = () =>
+        reject(
+          transaction.error ?? new Error("Handle store transaction aborted."),
+        );
     });
   }
 }

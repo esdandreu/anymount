@@ -99,7 +99,7 @@ test("browser workspace feature detection requires a secure supported API", () =
   }
 });
 
-test("handle writes reject if the transaction aborts after the request", async () => {
+function installAbortingIndexedDb(error) {
   globalThis.indexedDB = {
     open() {
       const request = {};
@@ -107,7 +107,7 @@ test("handle writes reject if the transaction aborts after the request", async (
         request.result = {
           transaction() {
             const transaction = {
-              error: new Error("commit failed"),
+              error,
               objectStore() {
                 return {
                   put() {
@@ -129,6 +129,20 @@ test("handle writes reject if the transaction aborts after the request", async (
       return request;
     },
   };
+}
 
-  await assert.rejects(new DirectoryHandleStore().put("workspace", {}), /commit failed/);
+test("handle writes reject if the transaction aborts after the request", async () => {
+  installAbortingIndexedDb(new Error("commit failed"));
+  await assert.rejects(
+    new DirectoryHandleStore().put("workspace", {}),
+    /commit failed/,
+  );
+});
+
+test("handle writes report an abort without a transaction error", async () => {
+  installAbortingIndexedDb(null);
+  await assert.rejects(
+    new DirectoryHandleStore().put("workspace", {}),
+    /Handle store transaction aborted/,
+  );
 });
