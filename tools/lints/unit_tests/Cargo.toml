@@ -1,5 +1,5 @@
 [package]
-name = "no_tests_in_driver_module"
+name = "unit_tests"
 version = "0.1.0"
 edition = "2024"
 publish = false
