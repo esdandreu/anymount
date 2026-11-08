@@ -2,7 +2,7 @@ mod path;
 
 pub use path::{InvalidStoragePath, StoragePath};
 
-use std::{any::Any, future::Future, ops::Range, pin::Pin, time::SystemTime};
+use std::{any::Any, future::Future, pin::Pin, time::SystemTime};
 
 use async_trait::async_trait;
 
@@ -10,26 +10,11 @@ use super::started_authorization::{AuthStorageError, StartedAuthorization};
 
 #[typetag::serde(tag = "type")]
 pub trait StorageConfig: Send + Sync {
-    fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError>;
-
-    /// Creates an asynchronous storage provider.
-    ///
-    /// Connect the returned provider before reading or writing files.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the provider cannot be opened.
-    fn connect_async(
+    fn connect(
         &self,
-    ) -> StorageFuture<'_, Result<Box<dyn AsyncStorage>, ConnectStorageError>>
-    {
-        Box::pin(async {
-            Err(ConnectStorageError::Failed {
-                kind: self.kind(),
-                message: "asynchronous storage is not supported".to_owned(),
-            })
-        })
-    }
+    ) -> StorageFuture<'_, Result<Box<dyn Storage>, ConnectStorageError>>;
+
+    fn clone_config(&self) -> Box<dyn StorageConfig>;
 
     fn kind(&self) -> &'static str {
         std::any::type_name::<Self>()
@@ -59,74 +44,75 @@ pub enum ConnectStorageError {
 /// A future that can run on single-threaded platforms.
 pub type StorageFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
-/// A storage provider with asynchronous byte operations.
+/// Maximum number of bytes a single range read may request.
+pub const MAX_READ_SIZE: usize = 65536;
+
+/// Provides asynchronous access to a user-authorized storage workspace.
 ///
-/// Call `connect` before I/O. Requesting permission may require a user gesture.
+/// Range reads return at most the requested length and may return fewer bytes.
+/// An empty result indicates the end of the file. Providers may report
+/// unsupported operations and omit metadata they cannot determine.
+#[cfg_attr(test, mockall::automock)]
 #[async_trait(?Send)]
-pub trait AsyncStorage: Any {
-    /// Queries access and optionally requests permission from the user.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the permission operation fails.
+pub trait Storage: Any {
     async fn connect(
         &self,
-        request_permission: bool,
-    ) -> Result<bool, AsyncStorageError>;
-    /// Disconnects this connection without deleting its data.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the provider cannot disconnect.
-    async fn disconnect(&self) -> Result<(), AsyncStorageError>;
-    /// Reports the last known connection state.
-    fn is_connected(&self) -> bool;
-    /// Lists the entries in a directory.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the directory cannot be listed.
+        _request_permission: bool,
+    ) -> Result<bool, StorageError> {
+        Ok(true)
+    }
+    async fn disconnect(&self) -> Result<(), StorageError> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
     async fn read_dir(
         &self,
-        path: StoragePath,
-    ) -> Result<Vec<StorageEntry>, AsyncStorageError>;
-    /// Reads the entire file.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the file cannot be read.
-    async fn read(
+        _path: StoragePath,
+    ) -> Result<Vec<StorageEntry>, StorageError> {
+        Err(StorageError::NotSupported)
+    }
+    async fn read_range(
         &self,
-        path: StoragePath,
-    ) -> Result<Vec<u8>, AsyncStorageError>;
-    /// Replaces the entire file with the supplied bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the file cannot be written.
+        _path: StoragePath,
+        _offset: u64,
+        _length: usize,
+    ) -> Result<Vec<u8>, StorageError> {
+        Err(StorageError::NotSupported)
+    }
     async fn write(
         &self,
-        path: StoragePath,
-        bytes: &[u8],
-    ) -> Result<(), AsyncStorageError>;
-    /// Exposes the provider for platform-specific handle interoperation.
+        _path: StoragePath,
+        _bytes: &[u8],
+    ) -> Result<(), StorageError> {
+        Err(StorageError::NotSupported)
+    }
     fn as_any(&self) -> &dyn Any;
 }
 
-/// A file or directory within a storage directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Describes a directory entry and its available metadata.
 pub struct StorageEntry {
-    /// The entry's name within its parent directory.
     pub name: String,
-    /// Whether the entry is a directory.
     pub is_directory: bool,
+    pub size: Option<u64>,
+    pub accessed: Option<SystemTime>,
 }
 
-/// An asynchronous storage operation failed.
 #[derive(Debug, thiserror::Error)]
-pub enum AsyncStorageError {
+/// Reports a storage operation failure.
+pub enum StorageError {
+    #[error("storage operation is not supported")]
+    NotSupported,
     #[error("storage entry not found")]
     NotFound,
+    #[error("path is not a directory")]
+    NotADirectory,
+    #[error("path is not a file")]
+    NotAFile,
+    #[error("storage is unavailable: {message}")]
+    Unavailable { message: String },
     #[error("storage is disconnected")]
     Disconnected,
     #[error("storage permission denied")]
@@ -135,43 +121,40 @@ pub enum AsyncStorageError {
     Failed { message: String },
 }
 
-#[cfg_attr(test, mockall::automock)]
-pub trait Storage: Send + Sync {
-    fn read_dir(
-        &self,
-        _path: StoragePath,
-    ) -> Result<Box<dyn Iterator<Item = Box<dyn DirEntry>>>, ReadDirError> {
-        Err(ReadDirError::NotSupported)
+#[async_trait(?Send)]
+impl<T: Storage + ?Sized> Storage for Box<T> {
+    async fn connect(&self, request: bool) -> Result<bool, StorageError> {
+        (**self).connect(request).await
     }
-
-    fn read_file_at(
-        &self,
-        _path: StoragePath,
-        _writer: &mut dyn WriteAt,
-        _range: Range<u64>,
-    ) -> Result<(), ReadFileAtError> {
-        Err(ReadFileAtError::NotSupported)
+    async fn disconnect(&self) -> Result<(), StorageError> {
+        (**self).disconnect().await
     }
-}
-
-impl<T> Storage for Box<T>
-where
-    T: Storage + ?Sized,
-{
-    fn read_dir(
+    fn is_connected(&self) -> bool {
+        (**self).is_connected()
+    }
+    async fn read_dir(
         &self,
         path: StoragePath,
-    ) -> Result<Box<dyn Iterator<Item = Box<dyn DirEntry>>>, ReadDirError> {
-        (**self).read_dir(path)
+    ) -> Result<Vec<StorageEntry>, StorageError> {
+        (**self).read_dir(path).await
     }
-
-    fn read_file_at(
+    async fn read_range(
         &self,
         path: StoragePath,
-        writer: &mut dyn WriteAt,
-        range: Range<u64>,
-    ) -> Result<(), ReadFileAtError> {
-        (**self).read_file_at(path, writer, range)
+        offset: u64,
+        length: usize,
+    ) -> Result<Vec<u8>, StorageError> {
+        (**self).read_range(path, offset, length).await
+    }
+    async fn write(
+        &self,
+        path: StoragePath,
+        data: &[u8],
+    ) -> Result<(), StorageError> {
+        (**self).write(path, data).await
+    }
+    fn as_any(&self) -> &dyn Any {
+        (**self).as_any()
     }
 }
 
@@ -284,29 +267,27 @@ mod test {
     struct TestStorageConnection {}
 
     // private test util: Tests the storage configuration contract.
-    impl Storage for TestStorageConnection {}
+    #[async_trait(?Send)]
+    impl Storage for TestStorageConnection {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
 
     // private test util: Tests storage defaults and deserialization.
     #[typetag::serde(name = "test")]
     impl StorageConfig for TestStorageConfig {
-        fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError> {
-            Ok(Box::new(TestStorageConnection {}))
+        fn clone_config(&self) -> Box<dyn StorageConfig> {
+            Box::new(self.clone())
         }
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn async_connection_is_unsupported_by_default() {
-        let config: Box<dyn StorageConfig> = Box::new(TestStorageConfig {
-            endpoint: None,
-            bucket: "documents".to_owned(),
-            username: "user".to_owned(),
-            password: "secret".to_owned(),
-        });
-
-        assert!(matches!(
-            config.connect_async().await,
-            Err(ConnectStorageError::Failed { .. })
-        ));
+        fn connect(
+            &self,
+        ) -> StorageFuture<'_, Result<Box<dyn Storage>, ConnectStorageError>>
+        {
+            Box::pin(async {
+                Ok(Box::new(TestStorageConnection {}) as Box<dyn Storage>)
+            })
+        }
     }
 
     #[test]
@@ -324,8 +305,8 @@ mod test {
         ));
     }
 
-    #[test]
-    fn deserializes_test_storage_config_from_toml() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn deserializes_test_storage_config_from_toml() {
         let config: Box<dyn StorageConfig> = toml::from_str(
             r#"
 type = "test"
@@ -337,15 +318,15 @@ password = "secret"
         )
         .expect("deserialize storage config");
 
-        let connection = config.connect().expect("connect test storage");
+        let connection = config.connect().await.expect("connect test storage");
         assert!(matches!(
-            connection.read_dir(StoragePath::root()),
-            Err(ReadDirError::NotSupported)
+            connection.read_dir(StoragePath::root()).await,
+            Err(StorageError::NotSupported)
         ));
     }
 
-    #[test]
-    fn deserializes_test_storage_config_without_endpoint() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn deserializes_test_storage_config_without_endpoint() {
         let config: Box<dyn StorageConfig> = toml::from_str(
             r#"
 type = "test"
@@ -356,10 +337,10 @@ password = "secret"
         )
         .expect("deserialize storage config");
 
-        let connection = config.connect().expect("connect test storage");
+        let connection = config.connect().await.expect("connect test storage");
         assert!(matches!(
-            connection.read_dir(StoragePath::root()),
-            Err(ReadDirError::NotSupported)
+            connection.read_dir(StoragePath::root()).await,
+            Err(StorageError::NotSupported)
         ));
     }
 }

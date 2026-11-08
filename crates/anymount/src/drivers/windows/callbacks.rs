@@ -1,8 +1,8 @@
-use crate::domain::{DirEntry, Storage, WriteAt, WriteAtError};
+use super::native_storage::NativeStorage;
+use crate::domain::{DirEntry, WriteAt, WriteAtError};
 use crate::drivers::windows::placeholder_utils::{
     dehydrate_file, get_placeholder_info,
 };
-use crate::{read_dir, read_file_at};
 use cloud_filter::{
     error::CResult,
     filter::{Request, SyncFilter, info, ticket},
@@ -16,14 +16,14 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 use windows::Win32::Storage::CloudFilters::CF_PIN_STATE_UNPINNED;
 
-pub struct Callbacks<S: Storage> {
+pub struct Callbacks {
     path: PathBuf,
-    storage: S,
+    storage: NativeStorage,
     pending_dehydrate: Mutex<HashSet<PathBuf>>,
 }
 
-impl<S: Storage> Callbacks<S> {
-    pub fn new(path: PathBuf, storage: S) -> Self {
+impl Callbacks {
+    pub fn new(path: PathBuf, storage: NativeStorage) -> Self {
         Self {
             path,
             storage,
@@ -36,7 +36,7 @@ impl<S: Storage> Callbacks<S> {
     }
 }
 
-impl<S: Storage> SyncFilter for Callbacks<S> {
+impl SyncFilter for Callbacks {
     fn fetch_data(
         &self,
         request: Request,
@@ -62,10 +62,18 @@ impl<S: Storage> SyncFilter for Callbacks<S> {
         };
         let range = info.required_file_range();
         let mut writer = FetchDataWriter::new(ticket, range.end);
-        read_file_at(&self.storage, relative, &mut writer, range.clone())
-            .map_err(|e| {
-                self.emit_telemetry(format!("read_file_at failed: {}", e));
-                cloud_filter::error::CloudErrorKind::Unsuccessful
+        crate::domain::StoragePath::try_from(relative)
+            .map_err(|_| cloud_filter::error::CloudErrorKind::Unsuccessful)
+            .and_then(|path| {
+                self.storage
+                    .read_file_at(path, &mut writer, range.clone())
+                    .map_err(|e| {
+                        self.emit_telemetry(format!(
+                            "read_file_at failed: {}",
+                            e
+                        ));
+                        cloud_filter::error::CloudErrorKind::Unsuccessful
+                    })
             })?;
         CResult::Ok(())
     }
@@ -93,7 +101,9 @@ impl<S: Storage> SyncFilter for Callbacks<S> {
                 return Err(cloud_filter::error::CloudErrorKind::Unsuccessful);
             }
         };
-        let iter = read_dir(&self.storage, relative).map_err(|e| {
+        let path = crate::domain::StoragePath::try_from(relative)
+            .map_err(|_| cloud_filter::error::CloudErrorKind::Unsuccessful)?;
+        let iter = self.storage.read_dir(path).map_err(|e| {
             self.emit_telemetry(format!("read_dir failed: {}", e));
             cloud_filter::error::CloudErrorKind::Unsuccessful
         })?;

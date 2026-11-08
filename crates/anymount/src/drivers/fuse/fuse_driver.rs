@@ -34,7 +34,15 @@ impl Driver for FuseDriver {
     ) -> Result<Box<dyn Mount>, MountError> {
         let name = config.name.clone();
         let path = config.path.clone();
-        let storage = config.storage.connect()?;
+        let storage_config = config.storage.clone_config();
+        let storage = tokio::task::spawn_blocking(move || {
+            super::native_storage::NativeStorage::open(storage_config)
+        })
+        .await
+        .map_err(|source| MountError::CannotMountAtPath {
+            path: config.path.clone(),
+            message: source.to_string(),
+        })??;
         std::fs::create_dir_all(&path).map_err(|source| {
             MountError::CannotMountAtPath {
                 path: path.clone(),

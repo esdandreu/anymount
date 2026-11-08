@@ -39,13 +39,15 @@ not share the handle or data between devices. A user may select a folder that is
 already synchronized by another provider, but synchronization is outside this
 POC. There are no app accounts, authentication service, or application backend.
 
-This driver does not provide FUSE, Windows Cloud Filter, arbitrary filesystem
-access, cloud-provider access, or encryption. The existing native `Storage`
-interface remains synchronous for native filesystem callbacks. Browser file
-operations use the shared asynchronous byte-storage port and browser promises.
-Reads and writes handle whole files; parent directories must already exist.
-The existing native storage providers do not yet implement the async port.
-The shared `Driver` and `Mount` traits allow non-`Send` implementations and
-futures, including single-threaded browser handles. The browser `Mount` represents a
-logical user workspace; the native `Mount` implementations continue to expose
-operating-system mount points.
+The browser driver does not provide FUSE, Windows Cloud Filter, arbitrary
+filesystem access, cloud-provider access, or encryption. Browser and native
+providers implement the same asynchronous `Storage` interface. Reads are bounded
+ranges; the note editor collects them into a whole file, and writes replace the
+whole file. Parent directories must already exist. The current native providers
+support reads; writes are not yet implemented.
+
+The shared `Driver`, `Mount`, and `Storage` traits allow non-`Send`
+implementations and futures, including single-threaded browser handles. Native
+filesystem callbacks use a worker that owns the storage provider. The browser
+`Mount` represents a logical user workspace; native mounts expose operating-system
+mount points.

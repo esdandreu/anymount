@@ -6,9 +6,9 @@ mod browser_driver_api;
 pub use browser_driver_api::BrowserDriverApi;
 
 use crate::domain::{
-    AsyncStorage, AsyncStorageError, ConnectMountError, ConnectStorageError,
-    DisconnectMountError, Driver, DriverConfig, Mount, MountConfig, MountError,
-    Storage, StorageConfig, StorageEntry, StorageFuture, StoragePath,
+    ConnectMountError, ConnectStorageError, DisconnectMountError, Driver,
+    DriverConfig, Mount, MountConfig, MountError, Storage, StorageConfig,
+    StorageEntry, StorageError, StorageFuture, StoragePath,
     UnregisterMountError,
 };
 use async_trait::async_trait;
@@ -42,7 +42,7 @@ inventory::submit! {
 /// Manages browser workspaces backed by directory handles.
 #[derive(Default)]
 pub struct BrowserDriver {
-    mounts: RefCell<HashMap<String, Rc<dyn AsyncStorage>>>,
+    mounts: RefCell<HashMap<String, Rc<dyn Storage>>>,
 }
 
 impl std::fmt::Debug for BrowserDriver {
@@ -57,13 +57,13 @@ impl Driver for BrowserDriver {
         &self,
         config: &MountConfig,
     ) -> Result<Box<dyn Mount>, MountError> {
-        let storage: Rc<dyn AsyncStorage> =
-            Rc::from(config.storage.connect_async().await.map_err(
-                |error| MountError::CannotMountAtPath {
+        let storage: Rc<dyn Storage> =
+            Rc::from(config.storage.connect().await.map_err(|error| {
+                MountError::CannotMountAtPath {
                     path: config.path.clone(),
                     message: error.to_string(),
-                },
-            )?);
+                }
+            })?);
         self.mounts
             .borrow_mut()
             .insert(config.name.clone(), storage.clone());
@@ -92,7 +92,7 @@ impl Driver for BrowserDriver {
 struct BrowserMount {
     name: String,
     path: PathBuf,
-    storage: Rc<dyn AsyncStorage>,
+    storage: Rc<dyn Storage>,
 }
 
 #[async_trait(?Send)]
@@ -170,11 +170,11 @@ impl std::fmt::Debug for FileSystemAccessStorage {
 }
 
 #[async_trait(?Send)]
-impl AsyncStorage for FileSystemAccessStorage {
+impl Storage for FileSystemAccessStorage {
     async fn connect(
         &self,
         request_permission: bool,
-    ) -> Result<bool, AsyncStorageError> {
+    ) -> Result<bool, StorageError> {
         self.connected.set(false);
         let options = Object::new();
         Reflect::set(
@@ -203,7 +203,7 @@ impl AsyncStorage for FileSystemAccessStorage {
         Ok(connected)
     }
 
-    async fn disconnect(&self) -> Result<(), AsyncStorageError> {
+    async fn disconnect(&self) -> Result<(), StorageError> {
         self.connected.set(false);
         Ok(())
     }
@@ -211,7 +211,7 @@ impl AsyncStorage for FileSystemAccessStorage {
     async fn read_dir(
         &self,
         path: StoragePath,
-    ) -> Result<Vec<StorageEntry>, AsyncStorageError> {
+    ) -> Result<Vec<StorageEntry>, StorageError> {
         self.ensure_connected()?;
         let parts: Vec<_> = path.as_path().iter().collect();
         let directory = self
@@ -235,36 +235,54 @@ impl AsyncStorage for FileSystemAccessStorage {
             let name = Reflect::get(&entry, &JsValue::from_str("name"))
                 .map_err(|error| self.io_error(error))?
                 .as_string()
-                .ok_or_else(|| AsyncStorageError::Failed {
+                .ok_or_else(|| StorageError::Failed {
                     message: "directory entry has no name".to_owned(),
                 })?;
             let kind = Reflect::get(&entry, &JsValue::from_str("kind"))
                 .map_err(|error| self.io_error(error))?
                 .as_string()
-                .ok_or_else(|| AsyncStorageError::Failed {
+                .ok_or_else(|| StorageError::Failed {
                     message: "directory entry has no kind".to_owned(),
                 })?;
             let is_directory = match kind.as_str() {
                 "directory" => true,
                 "file" => false,
                 _ => {
-                    return Err(AsyncStorageError::Failed {
+                    return Err(StorageError::Failed {
                         message: format!(
                             "unknown directory entry kind: {kind}"
                         ),
                     });
                 }
             };
-            entries.push(StorageEntry { name, is_directory });
+            entries.push(StorageEntry {
+                name,
+                is_directory,
+                size: None,
+                accessed: None,
+            });
         }
         Ok(entries)
     }
 
-    async fn read(
+    async fn read_range(
         &self,
         path: StoragePath,
-    ) -> Result<Vec<u8>, AsyncStorageError> {
+        offset: u64,
+        length: usize,
+    ) -> Result<Vec<u8>, StorageError> {
+        if length > crate::domain::MAX_READ_SIZE {
+            return Err(StorageError::Failed {
+                message: "read range exceeds limit".into(),
+            });
+        }
         self.ensure_connected()?;
+        let end = offset
+            .checked_add(length as u64)
+            .filter(|end| *end <= 9_007_199_254_740_991)
+            .ok_or_else(|| StorageError::Failed {
+                message: "invalid range".into(),
+            })?;
         let file_handle = self
             .file_handle(path, false)
             .await
@@ -272,7 +290,16 @@ impl AsyncStorage for FileSystemAccessStorage {
         let file = call_async(&file_handle, "getFile", &Array::new())
             .await
             .map_err(|error| self.io_error(error))?;
-        let buffer = call_async(&file, "arrayBuffer", &Array::new())
+        let slice = call(
+            &file,
+            "slice",
+            &Array::of2(
+                &JsValue::from_f64(offset as f64),
+                &JsValue::from_f64(end as f64),
+            ),
+        )
+        .map_err(|error| self.io_error(error))?;
+        let buffer = call_async(&slice, "arrayBuffer", &Array::new())
             .await
             .map_err(|error| self.io_error(error))?;
         Ok(Uint8Array::new(&buffer).to_vec())
@@ -282,7 +309,7 @@ impl AsyncStorage for FileSystemAccessStorage {
         &self,
         path: StoragePath,
         value: &[u8],
-    ) -> Result<(), AsyncStorageError> {
+    ) -> Result<(), StorageError> {
         self.ensure_connected()?;
         let file_handle = self
             .file_handle(path, true)
@@ -314,9 +341,9 @@ impl AsyncStorage for FileSystemAccessStorage {
 }
 
 impl FileSystemAccessStorage {
-    fn io_error(&self, error: JsValue) -> AsyncStorageError {
+    fn io_error(&self, error: JsValue) -> StorageError {
         let error = storage_error(error);
-        if matches!(error, AsyncStorageError::PermissionDenied) {
+        if matches!(error, StorageError::PermissionDenied) {
             self.connected.set(false);
         }
         error
@@ -368,11 +395,11 @@ impl FileSystemAccessStorage {
         .await
     }
 
-    fn ensure_connected(&self) -> Result<(), AsyncStorageError> {
+    fn ensure_connected(&self) -> Result<(), StorageError> {
         if self.is_connected() {
             Ok(())
         } else {
-            Err(AsyncStorageError::Disconnected)
+            Err(StorageError::Disconnected)
         }
     }
 }
@@ -383,18 +410,12 @@ pub struct BrowserStorageConfig;
 
 #[typetag::serde(name = "browser")]
 impl StorageConfig for BrowserStorageConfig {
-    fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError> {
-        Err(ConnectStorageError::Failed {
-            kind: self.kind(),
-            message: "browser storage requires an asynchronous connection"
-                .to_owned(),
-        })
+    fn clone_config(&self) -> Box<dyn StorageConfig> {
+        Box::new(self.clone())
     }
-
-    fn connect_async(
+    fn connect(
         &self,
-    ) -> StorageFuture<'_, Result<Box<dyn AsyncStorage>, ConnectStorageError>>
-    {
+    ) -> StorageFuture<'_, Result<Box<dyn Storage>, ConnectStorageError>> {
         Box::pin(async {
             let options = Object::new();
             Reflect::set(
@@ -417,7 +438,7 @@ impl StorageConfig for BrowserStorageConfig {
                 message: js_message(&error),
             })?;
             Ok(Box::new(FileSystemAccessStorage::new(handle))
-                as Box<dyn AsyncStorage>)
+                as Box<dyn Storage>)
         })
     }
 }
@@ -448,15 +469,15 @@ fn call(
     function.apply(receiver, args)
 }
 
-fn storage_error(error: JsValue) -> AsyncStorageError {
+fn storage_error(error: JsValue) -> StorageError {
     match Reflect::get(&error, &JsValue::from_str("name"))
         .ok()
         .and_then(|v| v.as_string())
         .as_deref()
     {
-        Some("NotFoundError") => AsyncStorageError::NotFound,
-        Some("NotAllowedError") => AsyncStorageError::PermissionDenied,
-        _ => AsyncStorageError::Failed {
+        Some("NotFoundError") => StorageError::NotFound,
+        Some("NotAllowedError") => StorageError::PermissionDenied,
+        _ => StorageError::Failed {
             message: js_message(&error),
         },
     }
@@ -501,7 +522,7 @@ mod tests {
         let config: Box<dyn StorageConfig> =
             serde_json::from_str(r#"{"type":"browser"}"#)
                 .expect("browser storage configuration is registered");
-        assert!(config.connect().is_err());
+        let _ = config;
         let _read_file_at = crate::read_file_at::<dyn crate::Storage>;
     }
 
@@ -539,7 +560,7 @@ mod tests {
     }
     #[wasm_bindgen_test]
     async fn browser_storage_round_trips_bytes_and_reconnects() {
-        use crate::domain::{AsyncStorageError, StoragePath};
+        use crate::domain::{StorageError, StoragePath};
         let create_handle = Function::new_no_args(
             r#"
             let data;
@@ -552,7 +573,7 @@ mod tests {
                     if (permission !== 'granted') throw new DOMException('denied', 'NotAllowedError');
                     if (data === undefined && !options.create) throw new DOMException('missing', 'NotFoundError');
                     return {
-                        getFile: async () => ({ arrayBuffer: async () => data.buffer }),
+                        getFile: async () => ({ slice: (start, end) => ({ arrayBuffer: async () => data.slice(start, end).buffer }) }),
                         createWritable: async () => ({
                             write: async bytes => { data = new Uint8Array(bytes); },
                             close: async () => {}, abort: async () => {}
@@ -579,40 +600,73 @@ mod tests {
         .expect("install picker");
         let config: Box<dyn StorageConfig> =
             serde_json::from_str(r#"{"type":"browser"}"#).expect("config");
-        let storage = config.connect_async().await.expect("select directory");
+        let storage = config.connect().await.expect("select directory");
         let path =
             StoragePath::try_from(PathBuf::from("note.bin")).expect("path");
         assert!(!storage.connect(false).await.expect("query"));
         assert!(matches!(
-            storage.read(path.clone()).await,
-            Err(AsyncStorageError::Disconnected)
+            storage.read_range(path.clone(), 0, 65536).await,
+            Err(StorageError::Disconnected)
         ));
         assert!(storage.connect(true).await.expect("request"));
         assert!(matches!(
-            storage.read(path.clone()).await,
-            Err(AsyncStorageError::NotFound)
+            storage.read_range(path.clone(), 0, 65536).await,
+            Err(StorageError::NotFound)
         ));
         storage
             .write(path.clone(), &[0, 255, 42])
             .await
             .expect("write");
+        assert_eq!(
+            storage
+                .read_range(path.clone(), 1, 1)
+                .await
+                .expect("bounded read"),
+            vec![255]
+        );
+        assert!(
+            storage
+                .read_range(path.clone(), 3, 1)
+                .await
+                .expect("end of file")
+                .is_empty()
+        );
+        assert!(storage.read_range(path.clone(), u64::MAX, 1).await.is_err());
+        assert!(
+            storage
+                .read_range(path.clone(), 9_007_199_254_740_991, 1)
+                .await
+                .is_err()
+        );
+        assert!(
+            storage
+                .read_range(path.clone(), 0, crate::domain::MAX_READ_SIZE + 1)
+                .await
+                .is_err()
+        );
         storage.disconnect().await.expect("disconnect");
         assert!(storage.connect(false).await.expect("reconnect"));
         assert_eq!(
-            storage.read(path.clone()).await.expect("read"),
+            storage
+                .read_range(path.clone(), 0, 65536)
+                .await
+                .expect("read"),
             vec![0, 255, 42]
         );
         Function::new_with_args("handle", "handle.revoke()")
             .call1(&JsValue::NULL, &handle)
             .expect("revoke permission");
         assert!(matches!(
-            storage.read(path.clone()).await,
-            Err(AsyncStorageError::PermissionDenied)
+            storage.read_range(path.clone(), 0, 65536).await,
+            Err(StorageError::PermissionDenied)
         ));
         assert!(!storage.is_connected());
         assert!(storage.connect(true).await.expect("request again"));
         assert_eq!(
-            storage.read(path).await.expect("read again"),
+            storage
+                .read_range(path, 0, 65536)
+                .await
+                .expect("read again"),
             vec![0, 255, 42]
         );
         Reflect::delete_property(
@@ -625,9 +679,7 @@ mod tests {
     #[wasm_bindgen_test]
     async fn browser_storage_lists_root_and_nested_directories() {
         use super::FileSystemAccessStorage;
-        use crate::domain::{
-            AsyncStorage, AsyncStorageError, StorageEntry, StoragePath,
-        };
+        use crate::domain::{Storage, StorageEntry, StorageError, StoragePath};
 
         let handle = Function::new_no_args(
             r#"
@@ -652,14 +704,16 @@ mod tests {
         let storage = FileSystemAccessStorage::new(handle);
         assert!(matches!(
             storage.read_dir(StoragePath::root()).await,
-            Err(AsyncStorageError::Disconnected)
+            Err(StorageError::Disconnected)
         ));
         assert!(storage.connect(false).await.expect("connect"));
         assert_eq!(
             storage.read_dir(StoragePath::root()).await.expect("root"),
             vec![StorageEntry {
                 name: "notes".into(),
-                is_directory: true
+                is_directory: true,
+                size: None,
+                accessed: None
             }]
         );
         let path = StoragePath::try_from(PathBuf::from("notes")).expect("path");
@@ -667,14 +721,16 @@ mod tests {
             storage.read_dir(path).await.expect("nested"),
             vec![StorageEntry {
                 name: "note.txt".into(),
-                is_directory: false
+                is_directory: false,
+                size: None,
+                accessed: None
             }]
         );
         let missing =
             StoragePath::try_from(PathBuf::from("missing")).expect("path");
         assert!(matches!(
             storage.read_dir(missing).await,
-            Err(AsyncStorageError::NotFound)
+            Err(StorageError::NotFound)
         ));
     }
 
@@ -687,7 +743,7 @@ mod tests {
             return {
                 queryPermission: async () => 'granted',
                 getFileHandle: async () => ({
-                    getFile: async () => ({ arrayBuffer: async () => data.buffer }),
+                    getFile: async () => ({ slice: (start, end) => ({ arrayBuffer: async () => data.slice(start, end).buffer }) }),
                     createWritable: async () => ({
                         write: async value => { data = new Uint8Array(value); },
                         close: async () => {}, abort: async () => {}
@@ -761,7 +817,7 @@ mod tests {
             const first = {
                 queryPermission: async () => 'granted',
                 getFileHandle: async () => ({
-                    getFile: async () => ({ arrayBuffer: async () => data.buffer }),
+                    getFile: async () => ({ slice: (start, end) => ({ arrayBuffer: async () => data.slice(start, end).buffer }) }),
                     createWritable: async () => ({
                         write: async value => { data = new Uint8Array(value); },
                         close: async () => {}, abort: async () => {}
@@ -829,7 +885,7 @@ mod tests {
     #[wasm_bindgen_test]
     async fn failed_browser_write_aborts_the_stream() {
         use super::FileSystemAccessStorage;
-        use crate::domain::{AsyncStorage, StoragePath};
+        use crate::domain::{Storage, StoragePath};
 
         let handle = Function::new_no_args(
             r#"

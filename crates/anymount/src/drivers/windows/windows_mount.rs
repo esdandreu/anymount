@@ -1,8 +1,7 @@
 use super::callbacks::Callbacks;
 use super::{Error, Result};
 use crate::domain::{
-    ConnectMountError, DisconnectMountError, Mount, Storage,
-    UnregisterMountError,
+    ConnectMountError, DisconnectMountError, Mount, UnregisterMountError,
 };
 use async_trait::async_trait;
 use cloud_filter::root::{
@@ -27,15 +26,19 @@ fn sync_root_id(name: &str) -> Result<SyncRootId> {
 }
 
 /// A registered Windows sync root with an optional live connection.
-pub struct WindowsMount<S: Storage> {
+pub struct WindowsMount {
     name: String,
     path: PathBuf,
     id: SyncRootId,
-    connection: Mutex<Option<Connection<Callbacks<S>>>>,
+    connection: Mutex<Option<Connection<Callbacks>>>,
 }
 
-impl<S: Storage + 'static> WindowsMount<S> {
-    pub fn new(name: String, path: PathBuf, storage: S) -> Result<Self> {
+impl WindowsMount {
+    pub fn new(
+        name: String,
+        path: PathBuf,
+        storage: super::native_storage::NativeStorage,
+    ) -> Result<Self> {
         if !path.exists() {
             std::fs::create_dir_all(&path).map_err(|source| Error::Io {
                 operation: "create mount path",
@@ -77,8 +80,9 @@ impl<S: Storage + 'static> WindowsMount<S> {
             })?;
         }
 
+        let callbacks = Callbacks::new(path.clone(), storage);
         let connection = CloudSession::new()
-            .connect(&path, Callbacks::new(path.clone(), storage))
+            .connect(&path, callbacks)
             .map_err(|source| Error::CloudFilterOperation {
                 operation: "connect to sync root",
                 source,
@@ -94,7 +98,7 @@ impl<S: Storage + 'static> WindowsMount<S> {
 }
 
 #[async_trait(?Send)]
-impl<S: Storage + 'static> Mount for WindowsMount<S> {
+impl Mount for WindowsMount {
     fn name(&self) -> &str {
         &self.name
     }

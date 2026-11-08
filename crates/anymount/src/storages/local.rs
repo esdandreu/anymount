@@ -5,14 +5,17 @@ use cap_std::ambient_authority;
 use cap_std::fs::Dir;
 
 use crate::domain::{
-    DirEntry, ReadDirError, ReadFileAtError, Storage, StoragePath, WriteAt,
+    DirEntry, ReadDirError, Storage, StorageEntry, StorageError, StoragePath,
 };
+#[cfg(test)]
+use crate::domain::{ReadFileAtError, WriteAt};
 
 pub const DEFAULT_LOCAL_CHUNK_SIZE: usize = 65536;
 
 /// Reads the exact number of bytes required to fill buf from the given offset.
 /// The offset is relative to the start of the file and thus independent from
 /// the current cursor.
+#[cfg(test)]
 fn read_exact_at(
     file: &std::fs::File,
     buf: &mut [u8],
@@ -41,12 +44,13 @@ fn read_exact_at(
     }
 }
 
+#[derive(Clone)]
 pub struct LocalStorage {
-    root: Result<Dir, RootOpenError>,
+    root: Result<std::sync::Arc<Dir>, RootOpenError>,
     chunk_size: usize,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct RootOpenError {
     kind: std::io::ErrorKind,
     message: String,
@@ -61,12 +65,12 @@ pub struct LocalDirEntry {
 
 impl LocalStorage {
     pub fn new(root: PathBuf) -> Self {
-        let root = Dir::open_ambient_dir(root, ambient_authority()).map_err(
-            |source| RootOpenError {
+        let root = Dir::open_ambient_dir(root, ambient_authority())
+            .map(std::sync::Arc::new)
+            .map_err(|source| RootOpenError {
                 kind: source.kind(),
                 message: source.to_string(),
-            },
-        );
+            });
         Self {
             root,
             chunk_size: DEFAULT_LOCAL_CHUNK_SIZE,
@@ -91,6 +95,7 @@ fn read_dir_error(source: std::io::Error) -> ReadDirError {
     }
 }
 
+#[cfg(test)]
 fn read_file_error(source: std::io::Error) -> ReadFileAtError {
     if source.kind() == std::io::ErrorKind::PermissionDenied {
         ReadFileAtError::PermissionDenied
@@ -114,7 +119,7 @@ impl DirEntry for LocalDirEntry {
     }
 }
 
-impl Storage for LocalStorage {
+impl LocalStorage {
     fn read_dir(
         &self,
         path: StoragePath,
@@ -143,6 +148,7 @@ impl Storage for LocalStorage {
         Ok(Box::new(entries.into_iter()))
     }
 
+    #[cfg(test)]
     fn read_file_at(
         &self,
         path: StoragePath,
@@ -164,6 +170,106 @@ impl Storage for LocalStorage {
             pos += to_read as u64;
         }
         Ok(())
+    }
+}
+
+#[async_trait::async_trait(?Send)]
+impl Storage for LocalStorage {
+    async fn read_dir(
+        &self,
+        path: StoragePath,
+    ) -> Result<Vec<StorageEntry>, StorageError> {
+        let storage = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let entries = storage.read_dir(path).map_err(|e| match e {
+                ReadDirError::NotFound => StorageError::NotFound,
+                ReadDirError::NotADirectory => StorageError::NotADirectory,
+                ReadDirError::PermissionDenied => {
+                    StorageError::PermissionDenied
+                }
+                ReadDirError::Unavailable { message } => {
+                    StorageError::Unavailable { message }
+                }
+                ReadDirError::NotSupported => StorageError::NotSupported,
+                other => StorageError::Failed {
+                    message: other.to_string(),
+                },
+            })?;
+            Ok(entries
+                .map(|entry| StorageEntry {
+                    name: entry.file_name(),
+                    is_directory: entry.is_dir(),
+                    size: Some(entry.size()),
+                    accessed: Some(entry.accessed()),
+                })
+                .collect())
+        })
+        .await
+        .map_err(|e| StorageError::Failed {
+            message: e.to_string(),
+        })?
+    }
+    async fn read_range(
+        &self,
+        path: StoragePath,
+        offset: u64,
+        length: usize,
+    ) -> Result<Vec<u8>, StorageError> {
+        if length > crate::domain::MAX_READ_SIZE
+            || offset.checked_add(length as u64).is_none()
+        {
+            return Err(StorageError::Failed {
+                message: "invalid read range".into(),
+            });
+        }
+        let storage = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let root = storage.root.as_ref().map_err(|e| match e.kind {
+                std::io::ErrorKind::NotFound => StorageError::NotFound,
+                std::io::ErrorKind::PermissionDenied => {
+                    StorageError::PermissionDenied
+                }
+                _ => StorageError::Failed {
+                    message: e.message.clone(),
+                },
+            })?;
+            let file = root
+                .open(path.as_path())
+                .map_err(|e| match e.kind() {
+                    std::io::ErrorKind::NotFound => StorageError::NotFound,
+                    std::io::ErrorKind::PermissionDenied => {
+                        StorageError::PermissionDenied
+                    }
+                    std::io::ErrorKind::IsADirectory => StorageError::NotAFile,
+                    _ => StorageError::Failed {
+                        message: e.to_string(),
+                    },
+                })?
+                .into_std();
+            let mut bytes = vec![0; length];
+            #[cfg(unix)]
+            let count = {
+                use std::os::unix::fs::FileExt;
+                file.read_at(&mut bytes, offset)
+            };
+            #[cfg(windows)]
+            let count = {
+                use std::os::windows::fs::FileExt;
+                file.seek_read(&mut bytes, offset)
+            };
+            let count = count.map_err(|e| StorageError::Failed {
+                message: e.to_string(),
+            })?;
+            bytes.truncate(count);
+            Ok(bytes)
+        })
+        .await
+        .map_err(|e| StorageError::Failed {
+            message: e.to_string(),
+        })?
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
@@ -208,6 +314,89 @@ mod tests {
     fn storage_path(value: impl Into<PathBuf>) -> StoragePath {
         StoragePath::try_from(value.into())
             .expect("test storage path should be valid")
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn async_storage_lists_and_reads_ranges() {
+        let dir = TempDir::new().expect("temporary directory");
+        std::fs::write(dir.path().join("note"), [0, 1, 254, 255])
+            .expect("write");
+        let storage = LocalStorage::new(dir.path().to_path_buf());
+        let entries = Storage::read_dir(&storage, StoragePath::root())
+            .await
+            .expect("list");
+        let entry = entries
+            .iter()
+            .find(|entry| entry.name == "note")
+            .expect("entry");
+        assert_eq!(entry.size, Some(4));
+        let path = storage_path("note");
+        assert_eq!(
+            Storage::read_range(&storage, path.clone(), 1, 2)
+                .await
+                .expect("range"),
+            [1, 254]
+        );
+        assert_eq!(
+            Storage::read_range(&storage, path.clone(), 3, 4)
+                .await
+                .expect("short range"),
+            [255]
+        );
+        assert!(
+            Storage::read_range(&storage, path.clone(), 4, 1)
+                .await
+                .expect("EOF")
+                .is_empty()
+        );
+        assert!(
+            Storage::read_range(&storage, path.clone(), u64::MAX, 2)
+                .await
+                .is_err()
+        );
+        assert!(
+            Storage::read_range(
+                &storage,
+                path,
+                0,
+                crate::domain::MAX_READ_SIZE + 1
+            )
+            .await
+            .is_err()
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn async_listing_preserves_missing_and_wrong_type_errors() {
+        let dir = TempDir::new().expect("temporary directory");
+        std::fs::write(dir.path().join("file"), b"data").expect("write file");
+        let storage = LocalStorage::new(dir.path().to_path_buf());
+        assert!(matches!(
+            Storage::read_dir(&storage, storage_path("missing")).await,
+            Err(StorageError::NotFound)
+        ));
+        assert!(matches!(
+            Storage::read_dir(&storage, storage_path("file")).await,
+            Err(StorageError::NotADirectory)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn async_range_does_not_follow_symlinks_outside_root() {
+        use std::os::unix::fs::symlink;
+        let root = TempDir::new().expect("root");
+        let outside = TempDir::new().expect("outside");
+        std::fs::write(outside.path().join("secret"), b"secret")
+            .expect("write");
+        symlink(outside.path().join("secret"), root.path().join("link"))
+            .expect("symlink");
+        let storage = LocalStorage::new(root.path().to_path_buf());
+        assert!(
+            Storage::read_range(&storage, storage_path("link"), 0, 6)
+                .await
+                .is_err()
+        );
     }
 
     #[test]
@@ -272,25 +461,26 @@ mod tests {
         assert_eq!(entries[0].file_name(), "f.txt");
     }
 
-    #[test]
-    fn read_dir_rejects_absolute_path() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn read_dir_rejects_absolute_path() {
         let dir =
             TempDir::new().expect("temporary directory should be created");
         let storage = LocalStorage::new(dir.path().to_path_buf());
 
-        let result = read_dir(&storage, dir.path().to_path_buf());
+        let result = read_dir(&storage, dir.path().to_path_buf()).await;
 
         assert!(matches!(result, Err(crate::ReadDirError::InvalidPath(_))));
     }
 
-    #[test]
-    fn read_dir_rejects_parent_components() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn read_dir_rejects_parent_components() {
         let dir =
             TempDir::new().expect("temporary directory should be created");
         let storage = LocalStorage::new(dir.path().to_path_buf());
 
-        let parent = read_dir(&storage, PathBuf::from(".."));
-        let nested = read_dir(&storage, PathBuf::from("nested/../../outside"));
+        let parent = read_dir(&storage, PathBuf::from("..")).await;
+        let nested =
+            read_dir(&storage, PathBuf::from("nested/../../outside")).await;
 
         assert!(matches!(parent, Err(crate::ReadDirError::InvalidPath(_))));
         assert!(matches!(nested, Err(crate::ReadDirError::InvalidPath(_))));
@@ -333,8 +523,8 @@ mod tests {
         assert_eq!(writer.flat_bytes(), b"nested");
     }
 
-    #[test]
-    fn read_file_at_rejects_absolute_path() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn read_file_at_rejects_absolute_path() {
         let dir =
             TempDir::new().expect("temporary directory should be created");
         let storage = LocalStorage::new(dir.path().to_path_buf());
@@ -345,7 +535,8 @@ mod tests {
             dir.path().join("outside"),
             &mut writer,
             0..1,
-        );
+        )
+        .await;
 
         assert!(matches!(
             result,
@@ -353,8 +544,8 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn read_file_at_rejects_parent_components() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn read_file_at_rejects_parent_components() {
         let dir =
             TempDir::new().expect("temporary directory should be created");
         let storage = LocalStorage::new(dir.path().to_path_buf());
@@ -365,13 +556,15 @@ mod tests {
             PathBuf::from("../outside"),
             &mut writer,
             0..1,
-        );
+        )
+        .await;
         let nested = read_file_at(
             &storage,
             PathBuf::from("nested/../../outside"),
             &mut writer,
             0..1,
-        );
+        )
+        .await;
 
         assert!(matches!(
             parent,

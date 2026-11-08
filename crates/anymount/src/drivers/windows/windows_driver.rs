@@ -31,7 +31,15 @@ impl Driver for WindowsDriver {
         &self,
         config: &MountConfig,
     ) -> std::result::Result<Box<dyn Mount>, MountError> {
-        let storage = config.storage.connect()?;
+        let storage_config = config.storage.clone_config();
+        let storage = tokio::task::spawn_blocking(move || {
+            super::native_storage::NativeStorage::open(storage_config)
+        })
+        .await
+        .map_err(|source| MountError::CannotMountAtPath {
+            path: config.path.clone(),
+            message: source.to_string(),
+        })??;
         WindowsMount::new(config.name.clone(), config.path.clone(), storage)
             .map(|mount| Box::new(mount) as Box<dyn Mount>)
             .map_err(|source| MountError::CannotMountAtPath {

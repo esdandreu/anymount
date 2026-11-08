@@ -12,8 +12,7 @@ pub mod test_utils;
 #[cfg(not(target_arch = "wasm32"))]
 pub use config_dir::ConfigDir;
 pub use domain::{
-    AsyncStorage, AsyncStorageError, Config, ConfigRepository, Storage,
-    StorageEntry, StoragePath,
+    Config, ConfigRepository, Storage, StorageEntry, StorageError, StoragePath,
 };
 pub use mount::{MountError, mount};
 pub use read_dir::{ReadDirError, read_dir};

@@ -2,6 +2,8 @@ mod cached_dir;
 pub mod error;
 pub mod fuse_driver;
 mod fuse_mount;
+#[path = "native_storage.rs"]
+mod native_storage;
 mod storage_filesystem;
 
 pub use cached_dir::{

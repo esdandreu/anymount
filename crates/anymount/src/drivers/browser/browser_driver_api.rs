@@ -2,7 +2,7 @@ use super::{
     BrowserDriver, BrowserMount, BrowserStorageConfig, FileSystemAccessStorage,
 };
 use crate::domain::{
-    AsyncStorage, AsyncStorageError, Driver, Mount, MountConfig, StoragePath,
+    Driver, Mount, MountConfig, Storage, StorageError, StoragePath,
 };
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -72,7 +72,7 @@ impl BrowserDriverApi {
         path: String,
         handle: JsValue,
     ) -> Result<bool, JsValue> {
-        let storage: Rc<dyn AsyncStorage> =
+        let storage: Rc<dyn Storage> =
             Rc::new(FileSystemAccessStorage::new(handle));
         let mount = BrowserMount {
             name: name.clone(),
@@ -146,8 +146,19 @@ impl BrowserDriverApi {
     ) -> Result<String, JsValue> {
         let path = StoragePath::try_from(PathBuf::from(file_name))
             .map_err(|error| JsValue::from_str(&error.to_string()))?;
-        let bytes =
-            self.storage(&name)?.read(path).await.map_err(to_js_error)?;
+        let storage = self.storage(&name)?;
+        let mut bytes = Vec::new();
+        loop {
+            let chunk = storage
+                .read_range(path.clone(), bytes.len() as u64, 65536)
+                .await
+                .map_err(to_js_error)?;
+            let length = chunk.len();
+            bytes.extend(chunk);
+            if length == 0 {
+                break;
+            }
+        }
         String::from_utf8(bytes)
             .map_err(|error| JsValue::from_str(&error.to_string()))
     }
@@ -198,7 +209,7 @@ impl BrowserDriverApi {
 }
 
 impl BrowserDriverApi {
-    fn storage(&self, name: &str) -> Result<Rc<dyn AsyncStorage>, JsValue> {
+    fn storage(&self, name: &str) -> Result<Rc<dyn Storage>, JsValue> {
         self.driver
             .mounts
             .borrow()
@@ -210,13 +221,11 @@ impl BrowserDriverApi {
     }
 }
 
-fn to_js_error(error: AsyncStorageError) -> JsValue {
+fn to_js_error(error: StorageError) -> JsValue {
     let result = js_sys::Error::new(&error.to_string());
     match error {
-        AsyncStorageError::NotFound => result.set_name("NotFoundError"),
-        AsyncStorageError::PermissionDenied => {
-            result.set_name("NotAllowedError")
-        }
+        StorageError::NotFound => result.set_name("NotFoundError"),
+        StorageError::PermissionDenied => result.set_name("NotAllowedError"),
         _ => {}
     }
     result.into()

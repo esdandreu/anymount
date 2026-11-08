@@ -50,7 +50,7 @@ opentelemetry-otlp = { version = "0.31.0", default-features = false, features = 
     "grpc-tonic",
     "reqwest-blocking-client",
 ] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 tonic = { version = "0.14.5", default-features = false }
 tracing-opentelemetry = { version = "0.32.1", default-features = false, features = [
     "tracing-log",

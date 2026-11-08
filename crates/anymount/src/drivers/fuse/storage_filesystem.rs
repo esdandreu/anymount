@@ -1,6 +1,6 @@
+use super::native_storage::NativeStorage;
 use super::{CachePort, CachedDirCache, CachedDirEntry, Result};
-use crate::domain::{Storage, WriteAt, WriteAtError};
-use crate::{read_dir, read_file_at};
+use crate::domain::{WriteAt, WriteAtError};
 use fuser::{
     Errno, FileAttr, FileHandle, FileType, Generation, INodeNo, OpenFlags,
     ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request,
@@ -27,8 +27,8 @@ pub struct NodeInfo {
     pub atime: SystemTime,
 }
 
-pub struct StorageFilesystem<S: Storage> {
-    storage: S,
+pub struct StorageFilesystem {
+    storage: NativeStorage,
     cache: Arc<dyn CachePort>,
     next_ino: AtomicU64,
     ino_to_info: RwLock<HashMap<u64, NodeInfo>>,
@@ -36,8 +36,11 @@ pub struct StorageFilesystem<S: Storage> {
     dir_cache: CachedDirCache,
 }
 
-impl<S: Storage> StorageFilesystem<S> {
-    pub fn new_with_cache(storage: S, cache: Arc<dyn CachePort>) -> Self {
+impl StorageFilesystem {
+    pub fn new_with_cache(
+        storage: NativeStorage,
+        cache: Arc<dyn CachePort>,
+    ) -> Self {
         let next_ino = AtomicU64::new(2);
         let ino_to_info = RwLock::new(HashMap::new());
         let path_to_ino = RwLock::new(HashMap::new());
@@ -63,7 +66,7 @@ impl<S: Storage> StorageFilesystem<S> {
     }
 }
 
-impl<S: Storage + 'static> fuser::Filesystem for StorageFilesystem<S> {
+impl fuser::Filesystem for StorageFilesystem {
     fn lookup(
         &self,
         _req: &Request,
@@ -223,13 +226,14 @@ impl<S: Storage + 'static> fuser::Filesystem for StorageFilesystem<S> {
             buf: vec![0u8; range_len],
             range_start: offset,
         };
-        if read_file_at(
-            &self.storage,
-            info.path.clone(),
-            &mut writer,
-            offset..end,
-        )
-        .is_err()
+        if crate::domain::StoragePath::try_from(info.path.clone())
+            .map_err(|_| ())
+            .and_then(|path| {
+                self.storage
+                    .read_file_at(path, &mut writer, offset..end)
+                    .map_err(|_| ())
+            })
+            .is_err()
         {
             reply.error(Errno::from_i32(libc::EIO));
             return;
@@ -343,7 +347,7 @@ impl<S: Storage + 'static> fuser::Filesystem for StorageFilesystem<S> {
     }
 }
 
-impl<S: Storage> StorageFilesystem<S> {
+impl StorageFilesystem {
     pub fn get_info(&self, ino: u64) -> Option<NodeInfo> {
         self.ino_to_info.read().get(&ino).cloned()
     }
@@ -416,15 +420,21 @@ impl<S: Storage> StorageFilesystem<S> {
         if let Some(entries) = self.dir_cache.get(&path) {
             return Ok(entries);
         }
-        let entries: Vec<CachedDirEntry> =
-            read_dir(&self.storage, path.clone())?
-                .map(|entry| CachedDirEntry {
-                    file_name: entry.file_name(),
-                    is_dir: entry.is_dir(),
-                    size: entry.size(),
-                    accessed: entry.accessed(),
-                })
-                .collect();
+        let entries: Vec<CachedDirEntry> = self
+            .storage
+            .read_dir(
+                path.clone()
+                    .try_into()
+                    .map_err(crate::ReadDirError::InvalidPath)?,
+            )
+            .map_err(crate::ReadDirError::Native)?
+            .map(|entry| CachedDirEntry {
+                file_name: entry.file_name(),
+                is_dir: entry.is_dir(),
+                size: entry.size(),
+                accessed: entry.accessed(),
+            })
+            .collect();
         self.cache.sync_metadata_placeholders(&path, &entries)?;
         self.dir_cache.insert(path, entries.clone());
         Ok(entries)
@@ -435,58 +445,29 @@ impl<S: Storage> StorageFilesystem<S> {
 mod tests {
     use super::{
         CachePort, CachedDirCache, CachedDirEntry, DOT_DOT_ENTRY_OFFSET,
-        DOT_ENTRY_OFFSET, FIRST_CHILD_ENTRY_OFFSET, StorageFilesystem,
+        DOT_ENTRY_OFFSET, FIRST_CHILD_ENTRY_OFFSET, NativeStorage,
+        StorageFilesystem,
     };
-    use crate::domain::{
-        DirEntry, MockStorage, ReadDirError, ReadFileAtError, StoragePath,
-    };
+    use crate::domain::MockStorage;
+    use crate::drivers::fuse::NoCacheFsCache;
     use crate::drivers::fuse::cached_dir::MockCachePort as MockCache;
     use crate::drivers::fuse::error::Error;
-    use crate::drivers::fuse::{NoCacheFsCache, Result};
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::{Duration, SystemTime};
-
-    #[derive(Clone)]
-    struct TestDirEntry {
-        file_name: String,
-        is_dir: bool,
-        size: u64,
-        accessed: SystemTime,
-    }
-
-    // private test util: Supplies directory entries in FUSE tests.
-    impl DirEntry for TestDirEntry {
-        fn file_name(&self) -> String {
-            self.file_name.clone()
-        }
-
-        fn is_dir(&self) -> bool {
-            self.is_dir
-        }
-
-        fn size(&self) -> u64 {
-            self.size
-        }
-
-        fn accessed(&self) -> SystemTime {
-            self.accessed
-        }
-    }
 
     fn mock_storage(read_dir_calls: usize) -> MockStorage {
         let mut storage = MockStorage::new();
         storage
             .expect_read_dir()
             .times(read_dir_calls)
-            .returning_st(|_| {
-                let entry: Box<dyn DirEntry> = Box::new(TestDirEntry {
-                    file_name: "alpha.txt".to_string(),
-                    is_dir: false,
-                    size: 5,
-                    accessed: SystemTime::UNIX_EPOCH,
-                });
-                Ok(Box::new(std::iter::once(entry)))
+            .returning(|_| {
+                Ok(vec![crate::domain::StorageEntry {
+                    name: "alpha.txt".to_string(),
+                    is_directory: false,
+                    size: Some(5),
+                    accessed: Some(SystemTime::UNIX_EPOCH),
+                }])
             });
         storage
     }
@@ -594,23 +575,14 @@ mod tests {
 
     #[test]
     fn child_start_index_maps_special_offsets() {
-        assert_eq!(StorageFilesystem::<MockStorage>::child_start_index(0), 0);
+        assert_eq!(StorageFilesystem::child_start_index(0), 0);
+        assert_eq!(StorageFilesystem::child_start_index(DOT_ENTRY_OFFSET), 0);
         assert_eq!(
-            StorageFilesystem::<MockStorage>::child_start_index(
-                DOT_ENTRY_OFFSET
-            ),
+            StorageFilesystem::child_start_index(DOT_DOT_ENTRY_OFFSET),
             0
         );
         assert_eq!(
-            StorageFilesystem::<MockStorage>::child_start_index(
-                DOT_DOT_ENTRY_OFFSET
-            ),
-            0
-        );
-        assert_eq!(
-            StorageFilesystem::<MockStorage>::child_start_index(
-                FIRST_CHILD_ENTRY_OFFSET
-            ),
+            StorageFilesystem::child_start_index(FIRST_CHILD_ENTRY_OFFSET),
             1
         );
     }
@@ -618,21 +590,24 @@ mod tests {
     #[test]
     fn child_entry_offset_is_monotonic_and_starts_after_special_entries() {
         assert_eq!(
-            StorageFilesystem::<MockStorage>::child_entry_offset(0),
+            StorageFilesystem::child_entry_offset(0),
             FIRST_CHILD_ENTRY_OFFSET
         );
         assert_eq!(
-            StorageFilesystem::<MockStorage>::child_entry_offset(1),
+            StorageFilesystem::child_entry_offset(1),
             FIRST_CHILD_ENTRY_OFFSET + 1
         );
-        assert_eq!(StorageFilesystem::<MockStorage>::child_entry_offset(7), 10);
+        assert_eq!(StorageFilesystem::child_entry_offset(7), 10);
     }
 
     #[test]
     fn storage_filesystem_new_with_cache_creates_root_node() {
-        let storage = mock_storage(0);
+        let storage = || mock_storage(0);
         let cache = Arc::new(NoCacheFsCache::new());
-        let fs = StorageFilesystem::new_with_cache(storage, cache);
+        let fs = StorageFilesystem::new_with_cache(
+            NativeStorage::from_factory(storage).expect("storage worker"),
+            cache,
+        );
         let root_info = fs.get_info(1);
         assert!(root_info.is_some());
         assert!(root_info.expect("root inode should exist").is_dir);
@@ -640,9 +615,12 @@ mod tests {
 
     #[test]
     fn read_dir_entries_uses_cache_within_ttl() {
-        let storage = mock_storage(1);
+        let storage = || mock_storage(1);
         let cache = Arc::new(mock_cache(1));
-        let fs = StorageFilesystem::new_with_cache(storage, cache);
+        let fs = StorageFilesystem::new_with_cache(
+            NativeStorage::from_factory(storage).expect("storage worker"),
+            cache,
+        );
         let path = PathBuf::new();
 
         let first = fs
@@ -658,7 +636,7 @@ mod tests {
 
     #[test]
     fn read_dir_entries_passes_entries_to_cache_port() {
-        let storage = mock_storage(1);
+        let storage = || mock_storage(1);
         let mut cache = MockCache::new();
         cache
             .expect_sync_metadata_placeholders()
@@ -670,7 +648,10 @@ mod tests {
             .times(1)
             .returning(|_, _| Ok(()));
         let cache = Arc::new(cache);
-        let fs = StorageFilesystem::new_with_cache(storage, cache);
+        let fs = StorageFilesystem::new_with_cache(
+            NativeStorage::from_factory(storage).expect("storage worker"),
+            cache,
+        );
 
         let entries = fs
             .read_dir_entries(PathBuf::new())

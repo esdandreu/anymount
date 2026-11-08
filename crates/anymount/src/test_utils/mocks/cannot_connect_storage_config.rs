@@ -7,10 +7,20 @@ pub struct CannotConnectStorageConfig {
 
 #[typetag::serde(name = "cannot-connect")]
 impl StorageConfig for CannotConnectStorageConfig {
-    fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError> {
-        Err(ConnectStorageError::Failed {
-            kind: self.kind(),
-            message: self.error_message.clone(),
+    fn clone_config(&self) -> Box<dyn StorageConfig> {
+        Box::new(self.clone())
+    }
+    fn connect(
+        &self,
+    ) -> crate::domain::StorageFuture<
+        '_,
+        Result<Box<dyn Storage>, ConnectStorageError>,
+    > {
+        Box::pin(async {
+            Err(ConnectStorageError::Failed {
+                kind: self.kind(),
+                message: self.error_message.clone(),
+            })
         })
     }
 }

@@ -11,9 +11,9 @@ pub use mount::{
 };
 pub use started_authorization::{AuthStorageError, StartedAuthorization};
 pub use storage::{
-    AsyncStorage, AsyncStorageError, ConnectStorageError, DirEntry,
-    InvalidStoragePath, ReadDirError, ReadFileAtError, Storage, StorageConfig,
-    StorageEntry, StorageFuture, StoragePath, WriteAt, WriteAtError,
+    ConnectStorageError, DirEntry, InvalidStoragePath, MAX_READ_SIZE,
+    ReadDirError, ReadFileAtError, Storage, StorageConfig, StorageEntry,
+    StorageError, StorageFuture, StoragePath, WriteAt, WriteAtError,
 };
 
 #[cfg(test)]

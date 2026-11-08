@@ -92,8 +92,8 @@ mod tests {
     use tempfile::TempDir;
     use tracing_test::traced_test;
 
-    #[test]
-    fn reads_toml_config_file() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn reads_toml_config_file() {
         let dir = TempDir::new().expect("create temp dir");
         std::fs::write(
             &dir.path().join("demo.toml"),
@@ -109,7 +109,7 @@ error_message = "toml test"
         let mounts = config_dir.list().collect::<Vec<_>>();
         let config = mounts.into_iter().next().expect("read config");
         assert_eq!(config.mount.name, "demo");
-        match config.mount.storage.connect() {
+        match config.mount.storage.connect().await {
             Ok(_) => panic!("should not connect"),
             Err(ConnectStorageError::Failed { message, .. }) => {
                 assert_eq!(message, "toml test");
@@ -118,8 +118,8 @@ error_message = "toml test"
         }
     }
 
-    #[test]
-    fn reads_json_config_file() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn reads_json_config_file() {
         let dir = TempDir::new().expect("create temp dir");
         std::fs::write(
             &dir.path().join("demo.json"),
@@ -137,7 +137,7 @@ error_message = "toml test"
         let mounts = config_dir.list().collect::<Vec<_>>();
         let config = mounts.into_iter().next().expect("read config");
         assert_eq!(config.mount.name, "demo");
-        match config.mount.storage.connect() {
+        match config.mount.storage.connect().await {
             Ok(_) => panic!("should not connect"),
             Err(ConnectStorageError::Failed { message, .. }) => {
                 assert_eq!(message, "json test");
@@ -146,8 +146,8 @@ error_message = "toml test"
         }
     }
 
-    #[test]
-    fn reads_yaml_config_file() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn reads_yaml_config_file() {
         let dir = TempDir::new().expect("create temp dir");
         std::fs::write(
             &dir.path().join("demo.yaml"),
@@ -164,7 +164,7 @@ storage:
         let mounts = config_dir.list().collect::<Vec<_>>();
         let config = mounts.into_iter().next().expect("read config");
         assert_eq!(config.mount.name, "demo");
-        match config.mount.storage.connect() {
+        match config.mount.storage.connect().await {
             Ok(_) => panic!("should not connect"),
             Err(ConnectStorageError::Failed { message, .. }) => {
                 assert_eq!(message, "yaml test");
