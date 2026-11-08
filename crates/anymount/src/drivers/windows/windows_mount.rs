@@ -1,4 +1,5 @@
 use super::callbacks::Callbacks;
+use super::native_storage::NativeStorage;
 use super::{Error, Result};
 use crate::domain::{
     ConnectMountError, DisconnectMountError, Mount, UnregisterMountError,
@@ -37,7 +38,7 @@ impl WindowsMount {
     pub fn new(
         name: String,
         path: PathBuf,
-        storage: super::native_storage::NativeStorage,
+        storage: NativeStorage,
     ) -> Result<Self> {
         if !path.exists() {
             std::fs::create_dir_all(&path).map_err(|source| Error::Io {

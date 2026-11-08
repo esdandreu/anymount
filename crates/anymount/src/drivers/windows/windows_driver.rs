@@ -1,3 +1,4 @@
+use super::native_storage::NativeStorage;
 use super::windows_mount::WindowsMount;
 use crate::domain::{Driver, DriverConfig, MountError};
 use crate::domain::{Mount, MountConfig};
@@ -33,7 +34,7 @@ impl Driver for WindowsDriver {
     ) -> std::result::Result<Box<dyn Mount>, MountError> {
         let storage_config = config.storage.clone_config();
         let storage = tokio::task::spawn_blocking(move || {
-            super::native_storage::NativeStorage::open(storage_config)
+            NativeStorage::open(storage_config)
         })
         .await
         .map_err(|source| MountError::CannotMountAtPath {
