@@ -112,6 +112,8 @@ external details around those layers.
 
 Storage implementations return directory entries through the domain `DirEntry`
 trait. Each storage implementation defines its own entry type.
+Storage configurations implement `Clone`; boxed configurations can be cloned
+when a driver needs to move one into an owned worker.
 
 ## Notable dependencies
 

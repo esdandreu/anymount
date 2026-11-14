@@ -104,7 +104,7 @@ impl NativeStorage {
 
     #[cfg(test)]
     pub fn from_factory<
-        T: crate::domain::Storage,
+        T: crate::domain::Storage + 'static,
         F: FnOnce() -> T + Send + 'static,
     >(
         factory: F,
