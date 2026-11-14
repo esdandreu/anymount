@@ -2,13 +2,29 @@ mod path;
 
 pub use path::{InvalidStoragePath, StoragePath};
 
-use std::{ops::Range, time::SystemTime};
+use async_trait::async_trait;
+use std::{any::Any, ops::Range, time::SystemTime};
 
 use super::started_authorization::{AuthStorageError, StartedAuthorization};
 
+#[async_trait(?Send)]
 #[typetag::serde(tag = "type")]
 pub trait StorageConfig: Send + Sync {
     fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError>;
+
+    /// Opens an asynchronous storage connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if this configuration cannot open async storage.
+    async fn connect_async(
+        &self,
+    ) -> Result<Box<dyn AsyncStorage>, ConnectStorageError> {
+        Err(ConnectStorageError::Failed {
+            kind: self.kind(),
+            message: "asynchronous storage is not supported".to_owned(),
+        })
+    }
 
     fn kind(&self) -> &'static str {
         std::any::type_name::<Self>()
@@ -33,6 +49,35 @@ pub enum ConnectStorageError {
 
     #[error("failed to connect {kind} storage: {message}")]
     Failed { kind: &'static str, message: String },
+}
+
+/// A platform-neutral connection to a byte store.
+///
+/// Operations run asynchronously and may use single-threaded runtimes. Call
+/// `connect` before I/O and `disconnect` when the connection is no longer used.
+/// Requesting permission may require a user gesture on browser platforms.
+#[async_trait(?Send)]
+pub trait AsyncStorage: Any {
+    async fn connect(
+        &self,
+        request_permission: bool,
+    ) -> Result<bool, StorageError>;
+    async fn disconnect(&self) -> Result<(), StorageError>;
+    fn is_connected(&self) -> bool;
+    async fn read(&self, path: StoragePath) -> Result<Vec<u8>, StorageError>;
+    async fn write(
+        &self,
+        path: StoragePath,
+        bytes: &[u8],
+    ) -> Result<(), StorageError>;
+    fn as_any(&self) -> &dyn Any;
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+pub struct StorageError {
+    pub message: String,
+    pub not_found: bool,
 }
 
 #[cfg_attr(test, mockall::automock)]
@@ -192,6 +237,20 @@ mod test {
         fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError> {
             Ok(Box::new(TestStorageConnection {}))
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn async_connection_is_unsupported_by_default() {
+        let config: Box<dyn StorageConfig> = Box::new(TestStorageConfig {
+            endpoint: None,
+            bucket: "documents".to_owned(),
+            username: "user".to_owned(),
+            password: "secret".to_owned(),
+        });
+        assert!(matches!(
+            config.connect_async().await,
+            Err(ConnectStorageError::Failed { .. })
+        ));
     }
 
     #[test]

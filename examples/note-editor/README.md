@@ -41,7 +41,9 @@ POC. There are no app accounts, authentication service, or application backend.
 This driver does not provide FUSE, Windows Cloud Filter, arbitrary filesystem
 access, cloud-provider access, or encryption. The existing native `Storage`
 interface remains synchronous for native filesystem callbacks. Browser file
-operations use async promises through a separate browser-facing storage port.
+operations use the shared asynchronous byte storage port. Native adapters do not
+yet implement that port. Browser directory access is local permission, not
+multi-user authorization.
 The shared `Driver` and `Mount` traits allow non-`Send` implementations and
 futures, including single-threaded browser handles. The browser `Mount` represents a
 logical user workspace; the native `Mount` implementations continue to expose

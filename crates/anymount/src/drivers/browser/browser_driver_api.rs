@@ -1,8 +1,7 @@
 use super::{
-    BrowserDriver, BrowserMount, BrowserStorage, BrowserStorageConfig,
-    FileSystemAccessStorage,
+    BrowserDriver, BrowserMount, BrowserStorageConfig, FileSystemAccessStorage,
 };
-use crate::domain::{Driver, Mount, MountConfig};
+use crate::domain::{AsyncStorage, Driver, Mount, MountConfig, StoragePath};
 use std::path::PathBuf;
 use std::rc::Rc;
 use wasm_bindgen::{JsValue, prelude::wasm_bindgen};
@@ -65,7 +64,7 @@ impl BrowserDriverApi {
         path: String,
         handle: JsValue,
     ) -> Result<bool, JsValue> {
-        let storage: Rc<dyn BrowserStorage> =
+        let storage: Rc<dyn AsyncStorage> =
             Rc::new(FileSystemAccessStorage::new(handle));
         self.driver
             .mounts
@@ -99,7 +98,7 @@ impl BrowserDriverApi {
         request_permission: bool,
     ) -> Result<bool, JsValue> {
         let storage = self.storage(&name)?;
-        storage.connect(request_permission).await
+        storage.connect(request_permission).await.map_err(js_error)
     }
 
     /// Disconnects a workspace while keeping its selected handle available.
@@ -112,7 +111,7 @@ impl BrowserDriverApi {
         name: String,
     ) -> Result<(), JsValue> {
         let storage = self.storage(&name)?;
-        storage.disconnect().await
+        storage.disconnect().await.map_err(js_error)
     }
 
     /// Unregisters a browser workspace.
@@ -136,7 +135,11 @@ impl BrowserDriverApi {
         name: String,
         file_name: String,
     ) -> Result<String, JsValue> {
-        self.storage(&name)?.read_text(&file_name).await
+        let path = StoragePath::try_from(PathBuf::from(file_name))
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        let bytes = self.storage(&name)?.read(path).await.map_err(js_error)?;
+        String::from_utf8(bytes)
+            .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
     /// Writes UTF-8 text to a file in the connected workspace.
@@ -150,7 +153,12 @@ impl BrowserDriverApi {
         file_name: String,
         value: String,
     ) -> Result<(), JsValue> {
-        self.storage(&name)?.write_text(&file_name, &value).await
+        let path = StoragePath::try_from(PathBuf::from(file_name))
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        self.storage(&name)?
+            .write(path, value.as_bytes())
+            .await
+            .map_err(js_error)
     }
 
     /// Returns the browser handle for a mounted workspace.
@@ -159,7 +167,14 @@ impl BrowserDriverApi {
     ///
     /// Returns an error if the workspace is not mounted.
     pub fn directory_handle(&self, name: String) -> Result<JsValue, JsValue> {
-        Ok(self.storage(&name)?.handle())
+        let storage = self.storage(&name)?;
+        let browser = storage
+            .as_any()
+            .downcast_ref::<FileSystemAccessStorage>()
+            .ok_or_else(|| {
+                JsValue::from_str("workspace is not browser storage")
+            })?;
+        Ok(browser.handle.clone())
     }
 
     /// Reports whether a browser workspace is connected.
@@ -173,7 +188,7 @@ impl BrowserDriverApi {
 }
 
 impl BrowserDriverApi {
-    fn storage(&self, name: &str) -> Result<Rc<dyn BrowserStorage>, JsValue> {
+    fn storage(&self, name: &str) -> Result<Rc<dyn AsyncStorage>, JsValue> {
         self.driver
             .mounts
             .borrow()
@@ -183,4 +198,12 @@ impl BrowserDriverApi {
                 JsValue::from_str("browser workspace is not mounted")
             })
     }
+}
+
+fn js_error(error: crate::domain::StorageError) -> JsValue {
+    let value = js_sys::Error::new(&error.message);
+    if error.not_found {
+        value.set_name("NotFoundError");
+    }
+    value.into()
 }
