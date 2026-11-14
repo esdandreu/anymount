@@ -34,7 +34,7 @@ impl Driver for FuseDriver {
     ) -> Result<Box<dyn Mount>, MountError> {
         let name = config.name.clone();
         let path = config.path.clone();
-        let storage_config = config.storage.clone_config();
+        let storage_config = config.storage.clone();
         let storage = tokio::task::spawn_blocking(move || {
             super::native_storage::NativeStorage::open(storage_config)
         })

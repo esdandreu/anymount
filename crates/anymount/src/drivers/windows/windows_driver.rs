@@ -32,7 +32,7 @@ impl Driver for WindowsDriver {
         &self,
         config: &MountConfig,
     ) -> std::result::Result<Box<dyn Mount>, MountError> {
-        let storage_config = config.storage.clone_config();
+        let storage_config = config.storage.clone();
         let storage = tokio::task::spawn_blocking(move || {
             NativeStorage::open(storage_config)
         })
