@@ -6,12 +6,12 @@ mod browser_driver_api;
 pub use browser_driver_api::BrowserDriverApi;
 
 use crate::domain::{
-    ConnectMountError, ConnectStorageError, DisconnectMountError, Driver,
-    DriverConfig, Mount, MountConfig, MountError, Storage, StorageConfig,
-    UnregisterMountError,
+    AsyncStorage, AsyncStorageError, ConnectMountError, ConnectStorageError,
+    DisconnectMountError, Driver, DriverConfig, Mount, MountConfig, MountError,
+    Storage, StorageConfig, StorageFuture, StoragePath, UnregisterMountError,
 };
 use async_trait::async_trait;
-use js_sys::{Array, Function, Object, Promise, Reflect};
+use js_sys::{Array, Function, Object, Promise, Reflect, Uint8Array};
 use serde::{Deserialize, Serialize};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -41,7 +41,7 @@ inventory::submit! {
 /// Manages browser workspaces backed by directory handles.
 #[derive(Default)]
 pub struct BrowserDriver {
-    mounts: RefCell<HashMap<String, Rc<dyn BrowserStorage>>>,
+    mounts: RefCell<HashMap<String, Rc<dyn AsyncStorage>>>,
 }
 
 impl std::fmt::Debug for BrowserDriver {
@@ -56,21 +56,13 @@ impl Driver for BrowserDriver {
         &self,
         config: &MountConfig,
     ) -> Result<Box<dyn Mount>, MountError> {
-        let picker_options = Object::new();
-        Reflect::set(
-            &picker_options,
-            &JsValue::from_str("mode"),
-            &JsValue::from_str("readwrite"),
-        )
-        .map_err(|error| mount_error(config, error))?;
-        let args = Array::new();
-        args.push(&picker_options);
-        let window = js_sys::global();
-        let handle = call_async(&window, "showDirectoryPicker", &args)
-            .await
-            .map_err(|error| mount_error(config, error))?;
-        let storage: Rc<dyn BrowserStorage> =
-            Rc::new(FileSystemAccessStorage::new(handle));
+        let storage: Rc<dyn AsyncStorage> =
+            Rc::from(config.storage.connect_async().await.map_err(
+                |error| MountError::CannotMountAtPath {
+                    path: config.path.clone(),
+                    message: error.to_string(),
+                },
+            )?);
         self.mounts
             .borrow_mut()
             .insert(config.name.clone(), storage.clone());
@@ -87,7 +79,7 @@ impl Driver for BrowserDriver {
             storage.disconnect().await.map_err(|error| {
                 MountError::CannotMountAtPath {
                     path: PathBuf::from(name),
-                    message: js_message(&error),
+                    message: error.to_string(),
                 }
             })?;
             self.mounts.borrow_mut().remove(name);
@@ -99,7 +91,7 @@ impl Driver for BrowserDriver {
 struct BrowserMount {
     name: String,
     path: PathBuf,
-    storage: Rc<dyn BrowserStorage>,
+    storage: Rc<dyn AsyncStorage>,
 }
 
 #[async_trait(?Send)]
@@ -120,7 +112,7 @@ impl Mount for BrowserMount {
         if self.storage.connect(false).await.map_err(|error| {
             ConnectMountError {
                 path: self.path.clone(),
-                message: js_message(&error),
+                message: error.to_string(),
             }
         })? {
             Ok(())
@@ -139,7 +131,7 @@ impl Mount for BrowserMount {
             .await
             .map_err(|error| DisconnectMountError {
                 path: self.path.clone(),
-                message: js_message(&error),
+                message: error.to_string(),
             })
     }
 
@@ -151,16 +143,6 @@ impl Mount for BrowserMount {
                 message: error.message,
             })
     }
-}
-
-#[async_trait(?Send)]
-trait BrowserStorage {
-    async fn connect(&self, request_permission: bool) -> Result<bool, JsValue>;
-    async fn disconnect(&self) -> Result<(), JsValue>;
-    async fn read_text(&self, name: &str) -> Result<String, JsValue>;
-    async fn write_text(&self, name: &str, value: &str) -> Result<(), JsValue>;
-    fn handle(&self) -> JsValue;
-    fn is_connected(&self) -> bool;
 }
 
 struct FileSystemAccessStorage {
@@ -178,17 +160,23 @@ impl FileSystemAccessStorage {
 }
 
 #[async_trait(?Send)]
-impl BrowserStorage for FileSystemAccessStorage {
-    async fn connect(&self, request_permission: bool) -> Result<bool, JsValue> {
+impl AsyncStorage for FileSystemAccessStorage {
+    async fn connect(
+        &self,
+        request_permission: bool,
+    ) -> Result<bool, AsyncStorageError> {
+        self.connected.set(false);
         let options = Object::new();
         Reflect::set(
             &options,
             &JsValue::from_str("mode"),
             &JsValue::from_str("readwrite"),
-        )?;
+        )
+        .map_err(storage_error)?;
         let mut permission =
             call_async(&self.handle, "queryPermission", &Array::of1(&options))
-                .await?;
+                .await
+                .map_err(storage_error)?;
         if permission.as_string().as_deref() != Some("granted")
             && request_permission
         {
@@ -197,53 +185,63 @@ impl BrowserStorage for FileSystemAccessStorage {
                 "requestPermission",
                 &Array::of1(&options),
             )
-            .await?;
+            .await
+            .map_err(storage_error)?;
         }
         let connected = permission.as_string().as_deref() == Some("granted");
         self.connected.set(connected);
         Ok(connected)
     }
 
-    async fn disconnect(&self) -> Result<(), JsValue> {
+    async fn disconnect(&self) -> Result<(), AsyncStorageError> {
         self.connected.set(false);
         Ok(())
     }
 
-    async fn read_text(&self, name: &str) -> Result<String, JsValue> {
+    async fn read(
+        &self,
+        path: StoragePath,
+    ) -> Result<Vec<u8>, AsyncStorageError> {
         self.ensure_connected()?;
-        let file_handle = self.file_handle(name, false).await?;
-        let file = call_async(&file_handle, "getFile", &Array::new()).await?;
-        let text = call_async(&file, "text", &Array::new()).await?;
-        text.as_string()
-            .ok_or_else(|| JsValue::from_str("file contents were not text"))
+        let file_handle =
+            self.file_handle(path, false).await.map_err(storage_error)?;
+        let file = call_async(&file_handle, "getFile", &Array::new())
+            .await
+            .map_err(storage_error)?;
+        let buffer = call_async(&file, "arrayBuffer", &Array::new())
+            .await
+            .map_err(storage_error)?;
+        Ok(Uint8Array::new(&buffer).to_vec())
     }
 
-    async fn write_text(&self, name: &str, value: &str) -> Result<(), JsValue> {
+    async fn write(
+        &self,
+        path: StoragePath,
+        value: &[u8],
+    ) -> Result<(), AsyncStorageError> {
         self.ensure_connected()?;
-        let file_handle = self.file_handle(name, true).await?;
+        let file_handle =
+            self.file_handle(path, true).await.map_err(storage_error)?;
         let writable =
-            call_async(&file_handle, "createWritable", &Array::new()).await?;
+            call_async(&file_handle, "createWritable", &Array::new())
+                .await
+                .map_err(storage_error)?;
         let result = async {
-            call_async(
-                &writable,
-                "write",
-                &Array::of1(&JsValue::from_str(value)),
-            )
-            .await?;
+            let bytes = Uint8Array::from(value);
+            call_async(&writable, "write", &Array::of1(&bytes)).await?;
             call_async(&writable, "close", &Array::new()).await
         }
         .await;
         if let Err(error) = result {
             let _ = call_async(&writable, "abort", &Array::new()).await;
-            return Err(error);
+            return Err(storage_error(error));
         }
         Ok(())
     }
 
-    fn handle(&self) -> JsValue {
-        self.handle.clone()
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
-
     fn is_connected(&self) -> bool {
         self.connected.get()
     }
@@ -252,9 +250,28 @@ impl BrowserStorage for FileSystemAccessStorage {
 impl FileSystemAccessStorage {
     async fn file_handle(
         &self,
-        name: &str,
+        path: StoragePath,
         create: bool,
     ) -> Result<JsValue, JsValue> {
+        let parts: Vec<_> = path.as_path().iter().collect();
+        let (name, directories) = parts
+            .split_last()
+            .ok_or_else(|| JsValue::from_str("file path is empty"))?;
+        let mut parent = self.handle.clone();
+        for directory in directories {
+            let name = directory
+                .to_str()
+                .ok_or_else(|| JsValue::from_str("path is not UTF-8"))?;
+            parent = call_async(
+                &parent,
+                "getDirectoryHandle",
+                &Array::of1(&JsValue::from_str(name)),
+            )
+            .await?;
+        }
+        let name = name
+            .to_str()
+            .ok_or_else(|| JsValue::from_str("path is not UTF-8"))?;
         let options = Object::new();
         Reflect::set(
             &options,
@@ -262,18 +279,18 @@ impl FileSystemAccessStorage {
             &JsValue::from_bool(create),
         )?;
         call_async(
-            &self.handle,
+            &parent,
             "getFileHandle",
             &Array::of2(&JsValue::from_str(name), &options),
         )
         .await
     }
 
-    fn ensure_connected(&self) -> Result<(), JsValue> {
+    fn ensure_connected(&self) -> Result<(), AsyncStorageError> {
         if self.is_connected() {
             Ok(())
         } else {
-            Err(JsValue::from_str("browser workspace is disconnected"))
+            Err(AsyncStorageError::Disconnected)
         }
     }
 }
@@ -281,16 +298,46 @@ impl FileSystemAccessStorage {
 #[derive(Deserialize, Serialize)]
 struct BrowserStorageConfig;
 
-#[typetag::serde(name = "browser-placeholder")]
+#[typetag::serde(name = "browser")]
 impl StorageConfig for BrowserStorageConfig {
     fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError> {
-        Ok(Box::new(BrowserStoragePlaceholder))
+        Err(ConnectStorageError::Failed {
+            kind: self.kind(),
+            message: "browser storage requires an asynchronous connection"
+                .to_owned(),
+        })
+    }
+
+    fn connect_async(
+        &self,
+    ) -> StorageFuture<'_, Result<Box<dyn AsyncStorage>, ConnectStorageError>>
+    {
+        Box::pin(async {
+            let options = Object::new();
+            Reflect::set(
+                &options,
+                &JsValue::from_str("mode"),
+                &JsValue::from_str("readwrite"),
+            )
+            .map_err(|error| ConnectStorageError::Failed {
+                kind: self.kind(),
+                message: js_message(&error),
+            })?;
+            let handle = call_async(
+                &js_sys::global(),
+                "showDirectoryPicker",
+                &Array::of1(&options),
+            )
+            .await
+            .map_err(|error| ConnectStorageError::Failed {
+                kind: self.kind(),
+                message: js_message(&error),
+            })?;
+            Ok(Box::new(FileSystemAccessStorage::new(handle))
+                as Box<dyn AsyncStorage>)
+        })
     }
 }
-
-struct BrowserStoragePlaceholder;
-
-impl Storage for BrowserStoragePlaceholder {}
 
 async fn call_async(
     receiver: &JsValue,
@@ -310,10 +357,18 @@ async fn call_async(
     JsFuture::from(promise).await
 }
 
-fn mount_error(config: &MountConfig, error: JsValue) -> MountError {
-    MountError::CannotMountAtPath {
-        path: config.path.clone(),
-        message: js_message(&error),
+fn storage_error(error: JsValue) -> AsyncStorageError {
+    if Reflect::get(&error, &JsValue::from_str("name"))
+        .ok()
+        .and_then(|v| v.as_string())
+        .as_deref()
+        == Some("NotFoundError")
+    {
+        AsyncStorageError::NotFound
+    } else {
+        AsyncStorageError::Failed {
+            message: js_message(&error),
+        }
     }
 }
 
