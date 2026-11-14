@@ -2,7 +2,9 @@ mod path;
 
 pub use path::{InvalidStoragePath, StoragePath};
 
-use std::{any::Any, time::SystemTime};
+use std::{ops::Range, pin::Pin, time::SystemTime};
+
+use futures::Stream;
 
 use async_trait::async_trait;
 
@@ -10,10 +12,8 @@ use super::started_authorization::{AuthStorageError, StartedAuthorization};
 
 #[typetag::serde(tag = "type")]
 #[async_trait(?Send)]
-pub trait StorageConfig: Send + Sync {
+pub trait StorageConfig: dyn_clone::DynClone + Send + Sync {
     async fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError>;
-
-    fn clone_config(&self) -> Box<dyn StorageConfig>;
 
     fn kind(&self) -> &'static str {
         std::any::type_name::<Self>()
@@ -31,6 +31,8 @@ pub trait StorageConfig: Send + Sync {
     }
 }
 
+dyn_clone::clone_trait_object!(StorageConfig);
+
 #[derive(Debug, thiserror::Error)]
 pub enum ConnectStorageError {
     #[error("{kind} storage is not authenticated")]
@@ -41,27 +43,18 @@ pub enum ConnectStorageError {
 }
 
 /// Maximum number of bytes a single range read may request.
-pub const MAX_READ_SIZE: usize = 65536;
+pub const MAX_READ_FILE_AT_RANGE_SIZE: usize = 65536;
 
-#[cfg_attr(test, mockall::automock)]
+pub type DirStream =
+    Pin<Box<dyn Stream<Item = Result<Box<dyn DirEntry>, ReadDirError>>>>;
+
 #[async_trait(?Send)]
-pub trait Storage: Any {
-    async fn connect(
-        &self,
-        _request_permission: bool,
-    ) -> Result<bool, ConnectPermissionError> {
-        Ok(true)
-    }
-    async fn disconnect(&self) -> Result<(), DisconnectStorageError> {
-        Ok(())
-    }
-    fn is_connected(&self) -> bool {
-        true
-    }
+#[cfg_attr(test, mockall::automock)]
+pub trait Storage {
     async fn read_dir(
         &self,
         _path: StoragePath,
-    ) -> Result<Vec<Box<dyn DirEntry>>, ReadDirError> {
+    ) -> Result<DirStream, ReadDirError> {
         Err(ReadDirError::NotSupported)
     }
     async fn read_file_at(
@@ -79,55 +72,6 @@ pub trait Storage: Any {
     ) -> Result<(), WriteFileError> {
         Err(WriteFileError::NotSupported)
     }
-    fn as_any(&self) -> &dyn Any;
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-/// Describes a directory entry and its available metadata.
-pub struct StorageEntry {
-    pub name: String,
-    pub is_directory: bool,
-    pub size: Option<u64>,
-    pub accessed: Option<SystemTime>,
-}
-
-impl DirEntry for StorageEntry {
-    fn file_name(&self) -> String {
-        self.name.clone()
-    }
-    fn is_dir(&self) -> bool {
-        self.is_directory
-    }
-    fn size(&self) -> Option<u64> {
-        self.size
-    }
-    fn accessed(&self) -> Option<SystemTime> {
-        self.accessed
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum ConnectPermissionError {
-    #[error("storage operation is not supported")]
-    NotSupported,
-    #[error("storage permission denied")]
-    PermissionDenied,
-    #[error("storage is unavailable: {message}")]
-    Unavailable { message: String },
-    #[error("storage operation failed: {message}")]
-    Failed { message: String },
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum DisconnectStorageError {
-    #[error("storage operation is not supported")]
-    NotSupported,
-    #[error("storage is disconnected")]
-    Disconnected,
-    #[error("storage is unavailable: {message}")]
-    Unavailable { message: String },
-    #[error("storage operation failed: {message}")]
-    Failed { message: String },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -152,29 +96,17 @@ pub enum WriteFileError {
 
 #[async_trait(?Send)]
 impl<T: Storage + ?Sized> Storage for Box<T> {
-    async fn connect(
-        &self,
-        request: bool,
-    ) -> Result<bool, ConnectPermissionError> {
-        (**self).connect(request).await
-    }
-    async fn disconnect(&self) -> Result<(), DisconnectStorageError> {
-        (**self).disconnect().await
-    }
-    fn is_connected(&self) -> bool {
-        (**self).is_connected()
-    }
     async fn read_dir(
         &self,
         path: StoragePath,
-    ) -> Result<Vec<Box<dyn DirEntry>>, ReadDirError> {
+    ) -> Result<DirStream, ReadDirError> {
         (**self).read_dir(path).await
     }
     async fn read_file_at(
         &self,
         path: StoragePath,
         writer: &mut dyn WriteAt,
-        range: std::ops::Range<u64>,
+        range: Range<u64>,
     ) -> Result<u64, ReadFileAtError> {
         (**self).read_file_at(path, writer, range).await
     }
@@ -184,9 +116,6 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
         data: &[u8],
     ) -> Result<(), WriteFileError> {
         (**self).write_file(path, data).await
-    }
-    fn as_any(&self) -> &dyn Any {
-        (**self).as_any()
     }
 }
 
@@ -312,19 +241,12 @@ mod test {
 
     // private test util: Tests the storage configuration contract.
     #[async_trait(?Send)]
-    impl Storage for TestStorageConnection {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-    }
+    impl Storage for TestStorageConnection {}
 
     // private test util: Tests storage defaults and deserialization.
     #[typetag::serde(name = "test")]
     #[async_trait(?Send)]
     impl StorageConfig for TestStorageConfig {
-        fn clone_config(&self) -> Box<dyn StorageConfig> {
-            Box::new(self.clone())
-        }
         async fn connect(
             &self,
         ) -> Result<Box<dyn Storage>, ConnectStorageError> {
@@ -364,9 +286,13 @@ password = "secret"
             toml::to_string(&config).expect("serialize storage config");
         let restored: Box<dyn StorageConfig> = toml::from_str(&serialized)
             .expect("deserialize serialized storage config");
-        let cloned = restored.clone_config();
+        let cloned = restored.clone();
+        drop(restored);
+        assert_eq!(
+            toml::to_string(&cloned).expect("serialize cloned storage config"),
+            serialized
+        );
         let connection = cloned.connect().await.expect("connect test storage");
-        assert!(connection.as_any().is::<TestStorageConnection>());
         assert!(matches!(
             connection.read_dir(StoragePath::root()).await,
             Err(ReadDirError::NotSupported)
