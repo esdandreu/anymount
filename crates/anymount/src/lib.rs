@@ -14,7 +14,7 @@ pub use config_dir::ConfigDir;
 pub use domain::{
     Config, ConfigRepository, ConnectPermissionError, DirEntry, DirStream,
     DisconnectStorageError, ReadDirError, ReadFileAtError, Storage,
-    StorageEntry, StoragePath, WriteFileError,
+    StoragePath, WriteFileError,
 };
 pub use mount::{MountError, mount};
 pub use read_dir::read_dir;

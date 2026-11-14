@@ -286,8 +286,7 @@ impl NativeStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::StorageEntry;
-    use crate::test_utils::mocks::MockStorage;
+    use crate::test_utils::mocks::{MockStorage, TestDirEntry};
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -410,7 +409,7 @@ mod tests {
             let mut storage = MockStorage::new();
             storage.expect_read_dir().returning_st(move |_| {
                 counter.set(counter.get() + 1);
-                Ok(vec![Box::new(StorageEntry {
+                Ok(vec![Box::new(TestDirEntry {
                     name: counter.get().to_string(),
                     is_directory: false,
                     size: Some(0),
@@ -444,7 +443,7 @@ mod tests {
             let storage = NativeStorage::from_factory(move || {
                 let mut storage = MockStorage::new();
                 storage.expect_read_dir().returning(move |_| {
-                    Ok(vec![Box::new(StorageEntry {
+                    Ok(vec![Box::new(TestDirEntry {
                         name: "note".into(),
                         is_directory: false,
                         size,

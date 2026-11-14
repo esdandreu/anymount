@@ -454,7 +454,7 @@ mod tests {
     use crate::drivers::fuse::NoCacheFsCache;
     use crate::drivers::fuse::cached_dir::MockCachePort as MockCache;
     use crate::drivers::fuse::error::Error;
-    use crate::test_utils::mocks::MockStorage;
+    use crate::test_utils::mocks::{MockStorage, TestDirEntry};
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::{Duration, SystemTime};
@@ -465,7 +465,7 @@ mod tests {
             .expect_read_dir()
             .times(read_dir_calls)
             .returning(|_| {
-                Ok(vec![Box::new(crate::domain::StorageEntry {
+                Ok(vec![Box::new(TestDirEntry {
                     name: "alpha.txt".to_string(),
                     is_directory: false,
                     size: Some(5),

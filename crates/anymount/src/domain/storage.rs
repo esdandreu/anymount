@@ -87,30 +87,6 @@ pub trait Storage: Any {
     fn as_any(&self) -> &dyn Any;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-/// Describes a directory entry and its available metadata.
-pub struct StorageEntry {
-    pub name: String,
-    pub is_directory: bool,
-    pub size: Option<u64>,
-    pub accessed: Option<SystemTime>,
-}
-
-impl DirEntry for StorageEntry {
-    fn file_name(&self) -> String {
-        self.name.clone()
-    }
-    fn is_dir(&self) -> bool {
-        self.is_directory
-    }
-    fn size(&self) -> Option<u64> {
-        self.size
-    }
-    fn accessed(&self) -> Option<SystemTime> {
-        self.accessed
-    }
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum ConnectPermissionError {
     #[error("storage operation is not supported")]

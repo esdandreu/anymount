@@ -21,7 +21,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::mocks::NoOpStorage;
+    use crate::test_utils::mocks::{NoOpStorage, TestDirEntry};
     use futures::TryStreamExt;
 
     #[tokio::test(flavor = "current_thread")]
@@ -35,7 +35,7 @@ mod tests {
     async fn returns_entries_through_storage_trait_object() {
         let mut storage = crate::test_utils::mocks::MockStorage::new();
         storage.expect_read_dir().returning(|_| {
-            Ok(vec![Box::new(crate::StorageEntry {
+            Ok(vec![Box::new(TestDirEntry {
                 name: "note".into(),
                 is_directory: false,
                 size: None,

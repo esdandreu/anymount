@@ -278,10 +278,10 @@ fn collect_placeholders(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::StorageEntry;
+    use crate::test_utils::mocks::TestDirEntry;
 
     fn entry() -> Box<dyn DirEntry> {
-        Box::new(StorageEntry {
+        Box::new(TestDirEntry {
             name: "note".into(),
             is_directory: false,
             size: Some(1),

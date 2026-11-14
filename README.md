@@ -110,6 +110,9 @@ Dependency direction flows inward: frontends call `application`,
 `application` works in terms of `domain`, and adapters implement the
 external details around those layers.
 
+Storage implementations return directory entries through the domain `DirEntry`
+trait. Each storage implementation defines its own entry type.
+
 ## Notable dependencies
 
 ### Windows

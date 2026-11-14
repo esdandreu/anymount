@@ -9,8 +9,7 @@ use crate::domain::{
     ConnectMountError, ConnectPermissionError, ConnectStorageError, DirEntry,
     DisconnectMountError, DisconnectStorageError, Driver, DriverConfig, Mount,
     MountConfig, MountError, ReadDirError, ReadFileAtError, Storage,
-    StorageConfig, StorageEntry, StoragePath, UnregisterMountError,
-    WriteFileError,
+    StorageConfig, StoragePath, UnregisterMountError, WriteFileError,
 };
 use async_trait::async_trait;
 use js_sys::{Array, Function, Object, Promise, Reflect, Uint8Array};
@@ -153,6 +152,29 @@ pub struct FileSystemAccessStorage {
     connected: Rc<Cell<bool>>,
 }
 
+struct FileSystemAccessDirEntry {
+    name: String,
+    is_directory: bool,
+}
+
+impl DirEntry for FileSystemAccessDirEntry {
+    fn file_name(&self) -> String {
+        self.name.clone()
+    }
+
+    fn is_dir(&self) -> bool {
+        self.is_directory
+    }
+
+    fn size(&self) -> Option<u64> {
+        None
+    }
+
+    fn accessed(&self) -> Option<std::time::SystemTime> {
+        None
+    }
+}
+
 impl FileSystemAccessStorage {
     /// Creates a storage provider from a directory handle.
     pub fn new(handle: JsValue) -> Self {
@@ -266,11 +288,9 @@ impl Storage for FileSystemAccessStorage {
                             });
                         }
                     };
-                    Ok(Some(Box::new(StorageEntry {
+                    Ok(Some(Box::new(FileSystemAccessDirEntry {
                         name,
                         is_directory,
-                        size: None,
-                        accessed: None,
                     }) as Box<dyn DirEntry>))
                 }
                 .await;
@@ -307,7 +327,8 @@ impl Storage for FileSystemAccessStorage {
         let mut offset = range.start;
         while offset < range.end {
             let end = offset
-                + (range.end - offset).min(crate::domain::MAX_READ_SIZE as u64);
+                + (range.end - offset)
+                    .min(crate::domain::MAX_READ_FILE_AT_RANGE_SIZE as u64);
             let slice = call(
                 &file,
                 "slice",
