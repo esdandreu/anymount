@@ -580,9 +580,6 @@ pub struct BrowserStorageConfig;
 #[typetag::serde(name = "browser")]
 #[async_trait(?Send)]
 impl StorageConfig for BrowserStorageConfig {
-    fn clone_config(&self) -> Box<dyn StorageConfig> {
-        Box::new(self.clone())
-    }
     async fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError> {
         Ok(Box::new(self.pick_directory().await?))
     }

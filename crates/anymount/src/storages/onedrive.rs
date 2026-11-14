@@ -298,9 +298,6 @@ impl OneDriveConfig {
 #[typetag::serde(name = "onedrive")]
 #[async_trait::async_trait(?Send)]
 impl StorageConfig for OneDriveConfig {
-    fn clone_config(&self) -> Box<dyn StorageConfig> {
-        Box::new(self.clone())
-    }
     async fn connect(
         &self,
     ) -> std::result::Result<Box<dyn Storage>, ConnectStorageError> {
