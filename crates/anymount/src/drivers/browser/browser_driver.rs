@@ -42,7 +42,36 @@ inventory::submit! {
 /// Manages browser workspaces backed by directory handles.
 #[derive(Default)]
 pub struct BrowserDriver {
-    mounts: RefCell<HashMap<String, Rc<dyn Storage>>>,
+    mounts: RefCell<HashMap<String, BrowserWorkspace>>,
+}
+
+#[derive(Clone)]
+struct BrowserWorkspace {
+    storage: Rc<dyn Storage>,
+    handle: Option<JsValue>,
+}
+
+impl BrowserDriver {
+    fn register(
+        &self,
+        name: String,
+        path: PathBuf,
+        storage: Rc<dyn Storage>,
+        handle: Option<JsValue>,
+    ) -> BrowserMount {
+        self.mounts.borrow_mut().insert(
+            name.clone(),
+            BrowserWorkspace {
+                storage: storage.clone(),
+                handle,
+            },
+        );
+        BrowserMount {
+            name,
+            path,
+            storage,
+        }
+    }
 }
 
 impl std::fmt::Debug for BrowserDriver {
@@ -64,20 +93,18 @@ impl Driver for BrowserDriver {
                     message: error.to_string(),
                 }
             })?);
-        self.mounts
-            .borrow_mut()
-            .insert(config.name.clone(), storage.clone());
-        Ok(Box::new(BrowserMount {
-            name: config.name.clone(),
-            path: config.path.clone(),
+        Ok(Box::new(self.register(
+            config.name.clone(),
+            config.path.clone(),
             storage,
-        }))
+            None,
+        )))
     }
 
     async fn unmount(&self, name: &str) -> Result<(), MountError> {
-        let storage = self.mounts.borrow().get(name).cloned();
-        if let Some(storage) = storage {
-            storage.disconnect().await.map_err(|error| {
+        let workspace = self.mounts.borrow().get(name).cloned();
+        if let Some(workspace) = workspace {
+            workspace.storage.disconnect().await.map_err(|error| {
                 MountError::CannotMountAtPath {
                     path: PathBuf::from(name),
                     message: error.to_string(),
@@ -385,9 +412,6 @@ impl Storage for FileSystemAccessStorage {
         Ok(())
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
     fn is_connected(&self) -> bool {
         self.connected.get()
     }
@@ -495,6 +519,14 @@ impl StorageConfig for BrowserStorageConfig {
         Box::new(self.clone())
     }
     async fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError> {
+        Ok(Box::new(self.pick_directory().await?))
+    }
+}
+
+impl BrowserStorageConfig {
+    async fn pick_directory(
+        &self,
+    ) -> Result<FileSystemAccessStorage, ConnectStorageError> {
         let options = Object::new();
         Reflect::set(
             &options,
@@ -515,7 +547,7 @@ impl StorageConfig for BrowserStorageConfig {
             kind: self.kind(),
             message: js_message(&error),
         })?;
-        Ok(Box::new(FileSystemAccessStorage::new(handle)) as Box<dyn Storage>)
+        Ok(FileSystemAccessStorage::new(handle))
     }
 }
 
@@ -949,16 +981,23 @@ mod tests {
             .await
             .expect("write");
         let saved = first.directory_handle("workspace".into()).expect("handle");
+        assert_eq!(saved, handle);
         let restored = BrowserDriverApi::new();
         assert!(
             restored
                 .restore_workspace(
                     "workspace".into(),
                     "workspace".into(),
-                    saved
+                    saved.clone()
                 )
                 .await
                 .expect("restore")
+        );
+        assert_eq!(
+            restored
+                .directory_handle("workspace".into())
+                .expect("handle"),
+            saved
         );
         assert_eq!(
             restored
@@ -967,6 +1006,11 @@ mod tests {
                 .expect("read"),
             "saved note"
         );
+        restored
+            .unmount_workspace("workspace".into())
+            .await
+            .expect("unmount");
+        assert!(restored.directory_handle("workspace".into()).is_err());
         Reflect::delete_property(
             &global,
             &JsValue::from_str("showDirectoryPicker"),
@@ -1008,6 +1052,8 @@ mod tests {
             .mount_workspace("workspace".into(), "workspace".into())
             .await
             .expect("mount");
+        let original =
+            driver.directory_handle("workspace".into()).expect("handle");
         driver
             .write_text(
                 "workspace".into(),
@@ -1034,6 +1080,10 @@ mod tests {
                 )
                 .await
                 .is_err()
+        );
+        assert_eq!(
+            driver.directory_handle("workspace".into()).expect("handle"),
+            original
         );
         assert!(driver.is_connected("workspace".into()).expect("connected"));
         assert_eq!(

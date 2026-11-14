@@ -2,7 +2,7 @@ mod path;
 
 pub use path::{InvalidStoragePath, StoragePath};
 
-use std::{any::Any, ops::Range, pin::Pin, time::SystemTime};
+use std::{ops::Range, pin::Pin, time::SystemTime};
 
 use futures::Stream;
 
@@ -50,7 +50,7 @@ pub type DirStream =
 
 #[async_trait(?Send)]
 #[cfg_attr(test, mockall::automock)]
-pub trait Storage: Any {
+pub trait Storage {
     async fn connect(
         &self,
         _request_permission: bool,
@@ -84,7 +84,6 @@ pub trait Storage: Any {
     ) -> Result<(), WriteFileError> {
         Err(WriteFileError::NotSupported)
     }
-    fn as_any(&self) -> &dyn Any;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -165,9 +164,6 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
         data: &[u8],
     ) -> Result<(), WriteFileError> {
         (**self).write_file(path, data).await
-    }
-    fn as_any(&self) -> &dyn Any {
-        (**self).as_any()
     }
 }
 
@@ -293,11 +289,7 @@ mod test {
 
     // private test util: Tests the storage configuration contract.
     #[async_trait(?Send)]
-    impl Storage for TestStorageConnection {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-    }
+    impl Storage for TestStorageConnection {}
 
     // private test util: Tests storage defaults and deserialization.
     #[typetag::serde(name = "test")]
@@ -347,7 +339,6 @@ password = "secret"
             .expect("deserialize serialized storage config");
         let cloned = restored.clone_config();
         let connection = cloned.connect().await.expect("connect test storage");
-        assert!(connection.as_any().is::<TestStorageConnection>());
         assert!(matches!(
             connection.read_dir(StoragePath::root()).await,
             Err(ReadDirError::NotSupported)

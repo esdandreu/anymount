@@ -273,9 +273,6 @@ impl Storage for LocalStorage {
         }
         Ok(offset - range.start)
     }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 #[cfg(test)]

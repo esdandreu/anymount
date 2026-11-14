@@ -17,7 +17,4 @@ impl Storage for MockStorage {
                 as DirStream
         })
     }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }

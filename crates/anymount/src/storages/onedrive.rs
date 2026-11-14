@@ -590,9 +590,6 @@ impl<T: BearerToken, F: HttpGet> Storage for OneDriveStorage<T, F> {
         }
         Ok(offset - range.start)
     }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 #[cfg(test)]
