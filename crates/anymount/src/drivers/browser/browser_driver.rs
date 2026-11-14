@@ -6,12 +6,13 @@ mod browser_driver_api;
 pub use browser_driver_api::BrowserDriverApi;
 
 use crate::domain::{
-    ConnectMountError, ConnectPermissionError, ConnectStorageError, DirEntry,
-    DisconnectMountError, DisconnectStorageError, Driver, DriverConfig, Mount,
-    MountConfig, MountError, ReadDirError, ReadFileAtError, Storage,
-    StorageConfig, StoragePath, UnregisterMountError, WriteFileError,
+    ConnectMountError, ConnectStorageError, DirEntry, DisconnectMountError,
+    Driver, DriverConfig, Mount, MountConfig, MountError, ReadDirError,
+    ReadFileAtError, Storage, StorageConfig, StoragePath, UnregisterMountError,
+    WriteFileError,
 };
 use async_trait::async_trait;
+use futures::StreamExt;
 use js_sys::{Array, Function, Object, Promise, Reflect, Uint8Array};
 use serde::{Deserialize, Serialize};
 use std::cell::{Cell, RefCell};
@@ -49,6 +50,128 @@ pub struct BrowserDriver {
 struct BrowserWorkspace {
     storage: Rc<dyn Storage>,
     handle: Option<JsValue>,
+    connected: Rc<Cell<bool>>,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum ConnectPermissionError {
+    #[error("storage permission denied")]
+    PermissionDenied,
+    #[error("storage operation failed: {message}")]
+    Failed { message: String },
+}
+
+impl BrowserWorkspace {
+    fn new(storage: Rc<dyn Storage>, handle: Option<JsValue>) -> Self {
+        let connected = Rc::new(Cell::new(handle.is_none()));
+        Self {
+            storage,
+            handle,
+            connected,
+        }
+    }
+
+    async fn connect(
+        &self,
+        request_permission: bool,
+    ) -> Result<bool, ConnectPermissionError> {
+        self.connected.set(false);
+        let Some(handle) = &self.handle else {
+            self.connected.set(true);
+            return Ok(true);
+        };
+        let options = Object::new();
+        Reflect::set(
+            &options,
+            &JsValue::from_str("mode"),
+            &JsValue::from_str("readwrite"),
+        )
+        .map_err(connect_permission_error)?;
+        let mut permission =
+            call_async(handle, "queryPermission", &Array::of1(&options))
+                .await
+                .map_err(connect_permission_error)?;
+        if permission.as_string().as_deref() != Some("granted")
+            && request_permission
+        {
+            permission =
+                call_async(handle, "requestPermission", &Array::of1(&options))
+                    .await
+                    .map_err(connect_permission_error)?;
+        }
+        let connected = permission.as_string().as_deref() == Some("granted");
+        self.connected.set(connected);
+        Ok(connected)
+    }
+
+    fn disconnect(&self) {
+        self.connected.set(false);
+    }
+
+    fn is_connected(&self) -> bool {
+        self.connected.get()
+    }
+}
+
+#[async_trait(?Send)]
+impl Storage for BrowserWorkspace {
+    async fn read_dir(
+        &self,
+        path: StoragePath,
+    ) -> Result<crate::domain::DirStream, ReadDirError> {
+        if !self.is_connected() {
+            return Err(ReadDirError::Disconnected);
+        }
+        let entries = self.storage.read_dir(path).await.map_err(|error| {
+            if matches!(error, ReadDirError::PermissionDenied) {
+                self.disconnect();
+            }
+            error
+        })?;
+        let connected = self.connected.clone();
+        Ok(Box::pin(entries.map(move |entry| {
+            if matches!(entry, Err(ReadDirError::PermissionDenied)) {
+                connected.set(false);
+            }
+            entry
+        })))
+    }
+
+    async fn read_file_at(
+        &self,
+        path: StoragePath,
+        writer: &mut dyn crate::domain::WriteAt,
+        range: std::ops::Range<u64>,
+    ) -> Result<u64, ReadFileAtError> {
+        if !self.is_connected() {
+            return Err(ReadFileAtError::Disconnected);
+        }
+        self.storage
+            .read_file_at(path, writer, range)
+            .await
+            .map_err(|error| {
+                if matches!(error, ReadFileAtError::PermissionDenied) {
+                    self.disconnect();
+                }
+                error
+            })
+    }
+
+    async fn write_file(
+        &self,
+        path: StoragePath,
+        bytes: &[u8],
+    ) -> Result<(), WriteFileError> {
+        if !self.is_connected() {
+            return Err(WriteFileError::Disconnected);
+        }
+        self.storage.write_file(path, bytes).await.map_err(|error| {
+            if matches!(error, WriteFileError::PermissionDenied) {
+                self.disconnect();
+            }
+            error
+        })
+    }
 }
 
 impl BrowserDriver {
@@ -59,17 +182,14 @@ impl BrowserDriver {
         storage: Rc<dyn Storage>,
         handle: Option<JsValue>,
     ) -> BrowserMount {
-        self.mounts.borrow_mut().insert(
-            name.clone(),
-            BrowserWorkspace {
-                storage: storage.clone(),
-                handle,
-            },
-        );
+        let workspace = BrowserWorkspace::new(storage, handle);
+        self.mounts
+            .borrow_mut()
+            .insert(name.clone(), workspace.clone());
         BrowserMount {
             name,
             path,
-            storage,
+            workspace,
         }
     }
 }
@@ -86,31 +206,39 @@ impl Driver for BrowserDriver {
         &self,
         config: &MountConfig,
     ) -> Result<Box<dyn Mount>, MountError> {
-        let storage: Rc<dyn Storage> =
-            Rc::from(config.storage.connect().await.map_err(|error| {
+        let (storage, handle): (Rc<dyn Storage>, Option<JsValue>) = if config
+            .storage
+            .kind()
+            == std::any::type_name::<BrowserStorageConfig>()
+        {
+            let storage = BrowserStorageConfig.pick_directory().await.map_err(
+                |error| MountError::CannotMountAtPath {
+                    path: config.path.clone(),
+                    message: error.to_string(),
+                },
+            )?;
+            let handle = storage.handle.clone();
+            (Rc::new(storage), Some(handle))
+        } else {
+            let storage = config.storage.connect().await.map_err(|error| {
                 MountError::CannotMountAtPath {
                     path: config.path.clone(),
                     message: error.to_string(),
                 }
-            })?);
+            })?;
+            (Rc::from(storage), None)
+        };
         Ok(Box::new(self.register(
             config.name.clone(),
             config.path.clone(),
             storage,
-            None,
+            handle,
         )))
     }
 
     async fn unmount(&self, name: &str) -> Result<(), MountError> {
-        let workspace = self.mounts.borrow().get(name).cloned();
-        if let Some(workspace) = workspace {
-            workspace.storage.disconnect().await.map_err(|error| {
-                MountError::CannotMountAtPath {
-                    path: PathBuf::from(name),
-                    message: error.to_string(),
-                }
-            })?;
-            self.mounts.borrow_mut().remove(name);
+        if let Some(workspace) = self.mounts.borrow_mut().remove(name) {
+            workspace.disconnect();
         }
         Ok(())
     }
@@ -119,7 +247,7 @@ impl Driver for BrowserDriver {
 struct BrowserMount {
     name: String,
     path: PathBuf,
-    storage: Rc<dyn Storage>,
+    workspace: BrowserWorkspace,
 }
 
 #[async_trait(?Send)]
@@ -133,11 +261,11 @@ impl Mount for BrowserMount {
     }
 
     fn is_connected(&self) -> bool {
-        self.storage.is_connected()
+        self.workspace.is_connected()
     }
 
     async fn connect(&self) -> Result<(), ConnectMountError> {
-        if self.storage.connect(false).await.map_err(|error| {
+        if self.workspace.connect(false).await.map_err(|error| {
             ConnectMountError {
                 path: self.path.clone(),
                 message: error.to_string(),
@@ -154,13 +282,8 @@ impl Mount for BrowserMount {
     }
 
     async fn disconnect(&self) -> Result<(), DisconnectMountError> {
-        self.storage
-            .disconnect()
-            .await
-            .map_err(|error| DisconnectMountError {
-                path: self.path.clone(),
-                message: error.to_string(),
-            })
+        self.workspace.disconnect();
+        Ok(())
     }
 
     async fn unregister(&self) -> Result<(), UnregisterMountError> {
@@ -176,7 +299,6 @@ impl Mount for BrowserMount {
 /// Stores files in a browser-authorized directory.
 pub struct FileSystemAccessStorage {
     handle: JsValue,
-    connected: Rc<Cell<bool>>,
 }
 
 struct FileSystemAccessDirEntry {
@@ -205,10 +327,7 @@ impl DirEntry for FileSystemAccessDirEntry {
 impl FileSystemAccessStorage {
     /// Creates a storage provider from a directory handle.
     pub fn new(handle: JsValue) -> Self {
-        Self {
-            handle,
-            connected: Rc::new(Cell::new(false)),
-        }
+        Self { handle }
     }
 }
 
@@ -221,50 +340,10 @@ impl std::fmt::Debug for FileSystemAccessStorage {
 
 #[async_trait(?Send)]
 impl Storage for FileSystemAccessStorage {
-    async fn connect(
-        &self,
-        request_permission: bool,
-    ) -> Result<bool, ConnectPermissionError> {
-        self.connected.set(false);
-        let options = Object::new();
-        Reflect::set(
-            &options,
-            &JsValue::from_str("mode"),
-            &JsValue::from_str("readwrite"),
-        )
-        .map_err(connect_permission_error)?;
-        let mut permission =
-            call_async(&self.handle, "queryPermission", &Array::of1(&options))
-                .await
-                .map_err(connect_permission_error)?;
-        if permission.as_string().as_deref() != Some("granted")
-            && request_permission
-        {
-            permission = call_async(
-                &self.handle,
-                "requestPermission",
-                &Array::of1(&options),
-            )
-            .await
-            .map_err(connect_permission_error)?;
-        }
-        let connected = permission.as_string().as_deref() == Some("granted");
-        self.connected.set(connected);
-        Ok(connected)
-    }
-
-    async fn disconnect(&self) -> Result<(), DisconnectStorageError> {
-        self.connected.set(false);
-        Ok(())
-    }
-
     async fn read_dir(
         &self,
         path: StoragePath,
     ) -> Result<crate::domain::DirStream, ReadDirError> {
-        if !self.is_connected() {
-            return Err(ReadDirError::Disconnected);
-        }
         let parts: Vec<_> = path.as_path().iter().collect();
         let directory = self
             .directory_handle(&parts)
@@ -274,7 +353,6 @@ impl Storage for FileSystemAccessStorage {
             .map_err(|error| self.read_dir_error(error))?;
         let storage = Self {
             handle: self.handle.clone(),
-            connected: self.connected.clone(),
         };
         Ok(Box::pin(futures::stream::unfold(
             Some((iterator, storage)),
@@ -338,9 +416,6 @@ impl Storage for FileSystemAccessStorage {
         writer: &mut dyn crate::domain::WriteAt,
         range: std::ops::Range<u64>,
     ) -> Result<u64, ReadFileAtError> {
-        if !self.is_connected() {
-            return Err(ReadFileAtError::Disconnected);
-        }
         if range.start > range.end || range.end > 9_007_199_254_740_991 {
             return Err(ReadFileAtError::RangeNotSatisfiable);
         }
@@ -388,9 +463,6 @@ impl Storage for FileSystemAccessStorage {
         path: StoragePath,
         value: &[u8],
     ) -> Result<(), WriteFileError> {
-        if !self.is_connected() {
-            return Err(WriteFileError::Disconnected);
-        }
         let file_handle = self
             .file_handle(path, true)
             .await
@@ -411,10 +483,6 @@ impl Storage for FileSystemAccessStorage {
         }
         Ok(())
     }
-
-    fn is_connected(&self) -> bool {
-        self.connected.get()
-    }
 }
 
 impl FileSystemAccessStorage {
@@ -422,9 +490,6 @@ impl FileSystemAccessStorage {
         let name = Reflect::get(error, &JsValue::from_str("name"))
             .ok()
             .and_then(|value| value.as_string());
-        if name.as_deref() == Some("NotAllowedError") {
-            self.connected.set(false);
-        }
         name
     }
 
@@ -601,7 +666,7 @@ fn js_message(error: &JsValue) -> String {
 mod tests {
     use std::path::PathBuf;
 
-    use crate::domain::{Config, MountConfig, StorageConfig};
+    use crate::domain::{Config, MountConfig, Storage, StorageConfig};
     use crate::drivers::{
         browser::{BrowserDriver, BrowserDriverConfig},
         get_default_driver_config,
@@ -611,6 +676,15 @@ mod tests {
     use wasm_bindgen_test::wasm_bindgen_test;
 
     use crate::test_utils::mocks::BytesWriter as TestWriter;
+
+    fn workspace(handle: JsValue) -> super::BrowserWorkspace {
+        super::BrowserWorkspace::new(
+            std::rc::Rc::new(super::FileSystemAccessStorage::new(
+                handle.clone(),
+            )),
+            Some(handle),
+        )
+    }
 
     #[wasm_bindgen_test]
     fn browser_driver_is_public_and_implements_driver() {
@@ -641,7 +715,15 @@ mod tests {
             serde_json::from_str(r#"{"type":"browser"}"#)
                 .expect("browser storage configuration is registered");
         let global = js_sys::global();
-        let picker = Function::new_no_args("return Promise.resolve({})");
+        let handle = Function::new_no_args(
+            "return { permission: 'prompt', queryPermission: async function() { return this.permission; } }",
+        ).call0(&JsValue::NULL).expect("create handle");
+        let picker = Function::new_with_args(
+            "handle",
+            "return () => Promise.resolve(handle)",
+        )
+        .call1(&JsValue::NULL, &handle)
+        .expect("create picker");
         Reflect::set(
             &global,
             &JsValue::from_str("showDirectoryPicker"),
@@ -661,11 +743,43 @@ mod tests {
 
         assert_eq!(mount.name(), "workspace");
         assert!(!mount.is_connected());
+        assert!(mount.connect().await.is_err());
+        Reflect::set(
+            &handle,
+            &JsValue::from_str("permission"),
+            &JsValue::from_str("granted"),
+        )
+        .expect("grant permission");
+        mount.connect().await.expect("connect");
+        assert!(mount.is_connected());
+        mount.disconnect().await.expect("disconnect");
+        assert!(!mount.is_connected());
         Reflect::delete_property(
             &global,
             &JsValue::from_str("showDirectoryPicker"),
         )
         .expect("remove directory picker");
+    }
+
+    #[wasm_bindgen_test]
+    async fn browser_driver_mounts_other_storage_configs() {
+        use crate::domain::Driver;
+        use crate::test_utils::mocks::EmptyStorageConfig;
+
+        let driver = BrowserDriver::default();
+        let config = MountConfig {
+            name: "other".into(),
+            path: PathBuf::from("other"),
+            storage: Box::new(EmptyStorageConfig),
+        };
+        let mount = driver.mount(&config).await.expect("mount");
+        assert!(mount.is_connected());
+        mount.disconnect().await.expect("disconnect");
+        assert!(!mount.is_connected());
+        mount.connect().await.expect("reconnect");
+        assert!(mount.is_connected());
+        driver.unmount("other").await.expect("unmount");
+        assert!(!mount.is_connected());
     }
     #[wasm_bindgen_test]
     async fn browser_storage_round_trips_bytes_and_reconnects() {
@@ -709,7 +823,11 @@ mod tests {
         .expect("install picker");
         let config: Box<dyn StorageConfig> =
             serde_json::from_str(r#"{"type":"browser"}"#).expect("config");
-        let storage = config.connect().await.expect("select directory");
+        let provider = config.connect().await.expect("select directory");
+        let storage = super::BrowserWorkspace::new(
+            std::rc::Rc::from(provider),
+            Some(handle.clone()),
+        );
         let path =
             StoragePath::try_from(PathBuf::from("note.bin")).expect("path");
         let mut writer = TestWriter::default();
@@ -766,7 +884,7 @@ mod tests {
         );
         assert_eq!(writer.0, vec![0, 255, 42]);
         writer.0.clear();
-        storage.disconnect().await.expect("disconnect");
+        storage.disconnect();
         assert!(storage.connect(false).await.expect("reconnect"));
         assert_eq!(
             storage
@@ -805,7 +923,6 @@ mod tests {
 
     #[wasm_bindgen_test]
     async fn browser_storage_lists_root_and_nested_directories() {
-        use super::FileSystemAccessStorage;
         use crate::domain::{ReadDirError, Storage, StoragePath};
         use futures::StreamExt;
 
@@ -829,7 +946,7 @@ mod tests {
             });
         "#,
         ).call0(&JsValue::NULL).expect("create handle");
-        let storage = FileSystemAccessStorage::new(handle);
+        let storage = workspace(handle);
         assert!(matches!(
             storage.read_dir(StoragePath::root()).await,
             Err(ReadDirError::Disconnected)
@@ -861,7 +978,6 @@ mod tests {
 
     #[wasm_bindgen_test]
     async fn browser_directory_stream_is_lazy_and_reports_permission_errors() {
-        use super::FileSystemAccessStorage;
         use crate::domain::{ReadDirError, Storage, StoragePath};
         use futures::StreamExt;
 
@@ -876,7 +992,7 @@ mod tests {
             return handle;
             "#,
         ).call0(&JsValue::NULL).expect("create handle");
-        let storage = FileSystemAccessStorage::new(handle.clone());
+        let storage = workspace(handle.clone());
         assert!(storage.connect(false).await.expect("connect"));
         let mut entries = storage
             .read_dir(StoragePath::root())
@@ -909,13 +1025,12 @@ mod tests {
 
     #[wasm_bindgen_test]
     async fn browser_write_permission_failure_disconnects_storage() {
-        use super::FileSystemAccessStorage;
         use crate::domain::{Storage, StoragePath, WriteFileError};
 
         let handle = Function::new_no_args(
             "return { queryPermission: async () => 'granted', getFileHandle: async () => { throw new DOMException('denied', 'NotAllowedError'); } }",
         ).call0(&JsValue::NULL).expect("create handle");
-        let storage = FileSystemAccessStorage::new(handle);
+        let storage = workspace(handle);
         let path =
             StoragePath::try_from(PathBuf::from("note.bin")).expect("path");
         assert!(matches!(
@@ -1004,6 +1119,36 @@ mod tests {
                 .read_text("workspace".into(), "note.txt".into())
                 .await
                 .expect("read"),
+            "saved note"
+        );
+        restored
+            .disconnect_workspace("workspace".into())
+            .await
+            .expect("disconnect");
+        assert!(!restored.is_connected("workspace".into()).expect("status"));
+        assert_eq!(
+            restored
+                .directory_handle("workspace".into())
+                .expect("handle"),
+            saved
+        );
+        assert!(
+            restored
+                .read_text("workspace".into(), "note.txt".into())
+                .await
+                .is_err()
+        );
+        assert!(
+            restored
+                .connect_workspace("workspace".into(), false)
+                .await
+                .expect("reconnect")
+        );
+        assert_eq!(
+            restored
+                .read_text("workspace".into(), "note.txt".into())
+                .await
+                .expect("read after reconnect"),
             "saved note"
         );
         restored
@@ -1102,7 +1247,6 @@ mod tests {
 
     #[wasm_bindgen_test]
     async fn failed_browser_write_aborts_the_stream() {
-        use super::FileSystemAccessStorage;
         use crate::domain::{Storage, StoragePath};
 
         let handle = Function::new_no_args(
@@ -1121,7 +1265,7 @@ mod tests {
         )
         .call0(&JsValue::NULL)
         .expect("create handle");
-        let storage = FileSystemAccessStorage::new(handle.clone());
+        let storage = workspace(handle.clone());
         assert!(storage.connect(false).await.expect("connect"));
         let path =
             StoragePath::try_from(PathBuf::from("note.bin")).expect("path");

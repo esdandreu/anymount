@@ -51,18 +51,6 @@ pub type DirStream =
 #[async_trait(?Send)]
 #[cfg_attr(test, mockall::automock)]
 pub trait Storage {
-    async fn connect(
-        &self,
-        _request_permission: bool,
-    ) -> Result<bool, ConnectPermissionError> {
-        Ok(true)
-    }
-    async fn disconnect(&self) -> Result<(), DisconnectStorageError> {
-        Ok(())
-    }
-    fn is_connected(&self) -> bool {
-        true
-    }
     async fn read_dir(
         &self,
         _path: StoragePath,
@@ -87,30 +75,6 @@ pub trait Storage {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum ConnectPermissionError {
-    #[error("storage operation is not supported")]
-    NotSupported,
-    #[error("storage permission denied")]
-    PermissionDenied,
-    #[error("storage is unavailable: {message}")]
-    Unavailable { message: String },
-    #[error("storage operation failed: {message}")]
-    Failed { message: String },
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum DisconnectStorageError {
-    #[error("storage operation is not supported")]
-    NotSupported,
-    #[error("storage is disconnected")]
-    Disconnected,
-    #[error("storage is unavailable: {message}")]
-    Unavailable { message: String },
-    #[error("storage operation failed: {message}")]
-    Failed { message: String },
-}
-
-#[derive(Debug, thiserror::Error)]
 pub enum WriteFileError {
     #[error("storage operation is not supported")]
     NotSupported,
@@ -132,18 +96,6 @@ pub enum WriteFileError {
 
 #[async_trait(?Send)]
 impl<T: Storage + ?Sized> Storage for Box<T> {
-    async fn connect(
-        &self,
-        request: bool,
-    ) -> Result<bool, ConnectPermissionError> {
-        (**self).connect(request).await
-    }
-    async fn disconnect(&self) -> Result<(), DisconnectStorageError> {
-        (**self).disconnect().await
-    }
-    fn is_connected(&self) -> bool {
-        (**self).is_connected()
-    }
     async fn read_dir(
         &self,
         path: StoragePath,
