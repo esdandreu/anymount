@@ -43,8 +43,8 @@ pub enum ConnectStorageError {
 /// Maximum number of bytes a single range read may request.
 pub const MAX_READ_SIZE: usize = 65536;
 
-#[cfg_attr(test, mockall::automock)]
 #[async_trait(?Send)]
+#[cfg_attr(test, mockall::automock)]
 pub trait Storage: Any {
     async fn connect(
         &self,
