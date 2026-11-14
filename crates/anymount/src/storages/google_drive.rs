@@ -40,10 +40,6 @@ pub struct GoogleDriveConfig {
 #[typetag::serde(name = "gdrive")]
 #[async_trait::async_trait(?Send)]
 impl StorageConfig for GoogleDriveConfig {
-    fn clone_config(&self) -> Box<dyn StorageConfig> {
-        Box::new(self.clone())
-    }
-
     async fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError> {
         let token =
             self.access_token.as_ref().filter(|v| !v.is_empty()).ok_or(
