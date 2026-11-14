@@ -269,7 +269,7 @@ impl<F: Http> GoogleDriveStorage<F> {
                 params.append_pair("q", &query);
                 params.append_pair(
                     "fields",
-                    "nextPageToken,files(id,name,mimeType,size,viewedByMeTime)",
+                    "nextPageToken,incompleteSearch,files(id,name,mimeType,size,viewedByMeTime)",
                 );
                 params.append_pair("pageSize", "1000");
                 if let Some(token) = &page {
@@ -733,6 +733,207 @@ mod tests {
             3
         );
         assert_eq!(writer.0, b"bcd");
+    }
+
+    async fn http_storage(server: &wiremock::MockServer) -> Box<dyn Storage> {
+        GoogleDriveConfig {
+            access_token: Some("test-token".into()),
+            root_id: "root".into(),
+            endpoint: format!("{}/drive/v3/", server.uri()),
+        }
+        .connect()
+        .await
+        .expect("connect")
+    }
+
+    #[tokio::test]
+    async fn http_lists_all_pages_with_credentials() {
+        use wiremock::matchers::{
+            header, method, path, query_param, query_param_is_missing,
+        };
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        let query = "'root' in parents and trashed = false";
+        let fields = "nextPageToken,incompleteSearch,files(id,name,mimeType,size,viewedByMeTime)";
+        Mock::given(method("GET"))
+            .and(path("/drive/v3/files"))
+            .and(header("authorization", "Bearer test-token"))
+            .and(query_param("q", query))
+            .and(query_param("fields", fields))
+            .and(query_param_is_missing("pageToken"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "files": [{"id": "folder", "name": "folder", "mimeType": FOLDER_MIME}],
+                "nextPageToken": "next"
+            })))
+            .expect(1)
+            .mount(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/drive/v3/files"))
+            .and(header("authorization", "Bearer test-token"))
+            .and(query_param("q", query))
+            .and(query_param("pageToken", "next"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "files": [{"id": "file", "name": "report.txt", "mimeType": "text/plain", "size": "6"}]
+            })))
+            .expect(1)
+            .mount(&server).await;
+        let entries = http_storage(&server)
+            .await
+            .read_dir(StoragePath::root())
+            .await
+            .expect("list");
+        assert_eq!(entries.len(), 2);
+        assert!(entries[0].is_dir());
+        assert_eq!(entries[1].file_name(), "report.txt");
+        assert_eq!(entries[1].size(), Some(6));
+    }
+
+    #[tokio::test]
+    async fn http_reads_ranges_and_rejects_bad_content_range() {
+        use wiremock::matchers::{header, method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/drive/v3/files"))
+            .and(query_param("q", "'root' in parents and trashed = false and name = 'report.txt'"))
+            .and(header("authorization", "Bearer test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "files": [{"id": "file1", "name": "report.txt", "mimeType": "text/plain"}]
+            })))
+            .expect(2).mount(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/drive/v3/files/file1"))
+            .and(query_param("alt", "media"))
+            .and(header("authorization", "Bearer test-token"))
+            .and(header("range", "bytes=1-3"))
+            .respond_with(
+                ResponseTemplate::new(206)
+                    .insert_header("Content-Range", "bytes 1-3/6")
+                    .set_body_raw("bcd", "application/octet-stream"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/drive/v3/files/file1"))
+            .and(header("range", "bytes=2-4"))
+            .respond_with(
+                ResponseTemplate::new(206)
+                    .insert_header("Content-Range", "bytes 1-3/6")
+                    .set_body_raw("bcd", "application/octet-stream"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let storage = http_storage(&server).await;
+        let path =
+            StoragePath::try_from(std::path::PathBuf::from("report.txt"))
+                .expect("path");
+        let mut writer = crate::test_utils::mocks::BytesWriter(Vec::new());
+        assert_eq!(
+            storage
+                .read_file_at(path.clone(), &mut writer, 1..4)
+                .await
+                .expect("read"),
+            3
+        );
+        assert_eq!(writer.0, b"bcd");
+        assert!(matches!(
+            storage.read_file_at(path, &mut writer, 2..5).await,
+            Err(ReadFileAtError::Unknown { .. })
+        ));
+        assert_eq!(writer.0, b"bcd");
+    }
+
+    #[tokio::test]
+    async fn http_creates_and_replaces_file_content() {
+        use wiremock::matchers::{
+            body_bytes, body_string_contains, header, header_regex, method,
+            path, query_param,
+        };
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        let query =
+            "'root' in parents and trashed = false and name = 'new.txt'";
+        Mock::given(method("GET"))
+            .and(path("/drive/v3/files"))
+            .and(query_param("q", query))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"files": []})),
+            )
+            .expect(1)
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET")).and(path("/drive/v3/files"))
+            .and(query_param("q", query))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "files": [{"id": "file1", "name": "new.txt", "mimeType": "text/plain"}]
+            })))
+            .expect(1).mount(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/upload/drive/v3/files"))
+            .and(query_param("uploadType", "multipart"))
+            .and(header("authorization", "Bearer test-token"))
+            .and(header_regex(
+                "content-type",
+                "^multipart/related; boundary=",
+            ))
+            .and(body_string_contains("\"name\":\"new.txt\""))
+            .and(body_string_contains("\"parents\":[\"root\"]"))
+            .and(body_string_contains("first content"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path("/upload/drive/v3/files/file1"))
+            .and(query_param("uploadType", "media"))
+            .and(header("authorization", "Bearer test-token"))
+            .and(header("content-type", "application/octet-stream"))
+            .and(body_bytes(b"replacement".to_vec()))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let storage = http_storage(&server).await;
+        let path = StoragePath::try_from(std::path::PathBuf::from("new.txt"))
+            .expect("path");
+        storage
+            .write_file(path.clone(), b"first content")
+            .await
+            .expect("create");
+        storage
+            .write_file(path, b"replacement")
+            .await
+            .expect("replace");
+    }
+
+    #[tokio::test]
+    async fn http_reports_incomplete_listing_and_permission_errors() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("GET")).and(path("/drive/v3/files"))
+            .and(query_param("fields", "nextPageToken,incompleteSearch,files(id,name,mimeType,size,viewedByMeTime)"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"files": [], "incompleteSearch": true})))
+            .expect(1).up_to_n_times(1).mount(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/drive/v3/files"))
+            .respond_with(ResponseTemplate::new(403))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let storage = http_storage(&server).await;
+        assert!(matches!(
+            storage.read_dir(StoragePath::root()).await,
+            Err(ReadDirError::Unknown { .. })
+        ));
+        assert!(matches!(
+            storage.read_dir(StoragePath::root()).await,
+            Err(ReadDirError::PermissionDenied)
+        ));
     }
 
     #[tokio::test(flavor = "current_thread")]
