@@ -197,7 +197,7 @@ impl HttpGet for UreqHttpGet {
             .iter()
             .any(|(name, _)| name.eq_ignore_ascii_case("range"));
         let limit = if is_range {
-            crate::domain::MAX_READ_SIZE as u64 + 1
+            crate::domain::MAX_READ_FILE_AT_RANGE_SIZE as u64 + 1
         } else {
             u64::MAX
         };
@@ -564,7 +564,8 @@ impl<T: BearerToken, F: HttpGet> Storage for OneDriveStorage<T, F> {
         let mut offset = range.start;
         while offset < range.end {
             let end = offset
-                + (range.end - offset).min(crate::domain::MAX_READ_SIZE as u64);
+                + (range.end - offset)
+                    .min(crate::domain::MAX_READ_FILE_AT_RANGE_SIZE as u64);
             let path = path.clone();
             let storage = self.clone();
             let bytes = tokio::task::spawn_blocking(move || {
@@ -650,7 +651,7 @@ mod tests {
             .get(&url, &[("Range", "bytes=0-1")])
             .expect("range response");
         assert_eq!(status, 200);
-        assert_eq!(body.len(), crate::domain::MAX_READ_SIZE + 1);
+        assert_eq!(body.len(), crate::domain::MAX_READ_FILE_AT_RANGE_SIZE + 1);
         server.join().expect("server thread");
     }
 

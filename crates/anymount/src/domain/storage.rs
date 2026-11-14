@@ -2,7 +2,7 @@ mod path;
 
 pub use path::{InvalidStoragePath, StoragePath};
 
-use std::{any::Any, pin::Pin, time::SystemTime};
+use std::{any::Any, ops::Range, pin::Pin, time::SystemTime};
 
 use futures::Stream;
 
@@ -43,7 +43,7 @@ pub enum ConnectStorageError {
 }
 
 /// Maximum number of bytes a single range read may request.
-pub const MAX_READ_SIZE: usize = 65536;
+pub const MAX_READ_FILE_AT_RANGE_SIZE: usize = 65536;
 
 pub type DirStream =
     Pin<Box<dyn Stream<Item = Result<Box<dyn DirEntry>, ReadDirError>>>>;
@@ -179,7 +179,7 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
         &self,
         path: StoragePath,
         writer: &mut dyn WriteAt,
-        range: std::ops::Range<u64>,
+        range: Range<u64>,
     ) -> Result<u64, ReadFileAtError> {
         (**self).read_file_at(path, writer, range).await
     }

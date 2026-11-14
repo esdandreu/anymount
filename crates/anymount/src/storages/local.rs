@@ -238,9 +238,12 @@ impl Storage for LocalStorage {
         })??;
         let mut offset = range.start;
         while offset < range.end {
-            let length = (range.end - offset)
-                .min(self.chunk_size.max(1).min(crate::domain::MAX_READ_SIZE)
-                    as u64) as usize;
+            let length = (range.end - offset).min(
+                self.chunk_size
+                    .max(1)
+                    .min(crate::domain::MAX_READ_FILE_AT_RANGE_SIZE)
+                    as u64,
+            ) as usize;
             let file = file.clone();
             let bytes = tokio::task::spawn_blocking(move || {
                 let mut bytes = vec![0; length];
@@ -384,7 +387,7 @@ mod tests {
         .expect("read sparse range");
         assert_eq!(count, 131_073);
         assert_eq!(writer.total, count);
-        assert!(writer.max_chunk <= crate::domain::MAX_READ_SIZE);
+        assert!(writer.max_chunk <= crate::domain::MAX_READ_FILE_AT_RANGE_SIZE);
         assert_eq!(writer.calls, 3);
         let mut writer = crate::test_utils::mocks::CountingWriter::new(0);
         writer.fail_after = Some(2);
@@ -392,7 +395,10 @@ mod tests {
             Storage::read_file_at(&storage, path, &mut writer, 0..start).await;
         assert!(matches!(result, Err(ReadFileAtError::WriteAt(_))));
         assert_eq!(writer.calls, 2);
-        assert_eq!(writer.total, 2 * crate::domain::MAX_READ_SIZE as u64);
+        assert_eq!(
+            writer.total,
+            2 * crate::domain::MAX_READ_FILE_AT_RANGE_SIZE as u64
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
