@@ -615,34 +615,14 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    struct MockGet {
-        calls: Mutex<Vec<String>>,
-        writes: Mutex<Vec<(String, Vec<u8>)>>,
-        responses: Mutex<Vec<(u16, Vec<u8>)>>,
-    }
-    impl Http for MockGet {
-        fn request(
-            &self,
-            method: &str,
-            url: &str,
-            _headers: &[(&str, &str)],
-            body: &[u8],
-        ) -> Result<(u16, Vec<u8>), String> {
-            self.calls.lock().expect("lock").push(url.into());
-            self.writes
-                .lock()
-                .expect("lock")
-                .push((method.into(), body.to_vec()));
-            Ok(self.responses.lock().expect("lock").remove(0))
-        }
-    }
-    fn storage(responses: &[&str]) -> GoogleDriveStorage<MockGet> {
+    use crate::storages::mock_drive_http::MockDriveHttp;
+    fn storage(responses: &[&str]) -> GoogleDriveStorage<MockDriveHttp> {
         GoogleDriveStorage {
             root_id: "root".into(),
             endpoint: Url::parse("https://example.test/drive/v3/")
                 .expect("url"),
             token: "token".into(),
-            http: Arc::new(MockGet {
+            http: Arc::new(MockDriveHttp {
                 calls: Mutex::new(Vec::new()),
                 writes: Mutex::new(Vec::new()),
                 responses: Mutex::new(
