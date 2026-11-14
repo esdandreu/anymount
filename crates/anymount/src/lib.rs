@@ -7,6 +7,10 @@ mod read_dir;
 mod read_file_at;
 pub mod storages;
 #[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "test_utils/http_server.rs"]
+pub mod test_http_server;
+#[cfg(test)]
 pub mod test_utils;
 
 #[cfg(not(target_arch = "wasm32"))]

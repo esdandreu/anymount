@@ -418,75 +418,6 @@ mod tests {
             Err(ConnectStorageError::Failed { kind: "s3", .. })
         ));
     }
-    fn serve(
-        responses: Vec<(u16, Vec<u8>, Option<&'static str>)>,
-    ) -> (String, std::thread::JoinHandle<Vec<Vec<u8>>>) {
-        use std::io::{Read, Write};
-
-        let listener = std::net::TcpListener::bind("127.0.0.1:0")
-            .expect("bind test server");
-        let endpoint = format!(
-            "http://{}",
-            listener.local_addr().expect("server address")
-        );
-        let handle = std::thread::spawn(move || {
-            let mut requests = Vec::new();
-            for (status, body, content_range) in responses {
-                let (mut stream, _) =
-                    listener.accept().expect("accept request");
-                stream
-                    .set_read_timeout(Some(std::time::Duration::from_secs(10)))
-                    .expect("read timeout");
-                let mut data = Vec::new();
-                let mut buffer = [0; 8192];
-                let headers_end = loop {
-                    let count = stream.read(&mut buffer).expect("read request");
-                    assert_ne!(count, 0, "request ended before headers");
-                    data.extend_from_slice(&buffer[..count]);
-                    if let Some(pos) =
-                        data.windows(4).position(|part| part == b"\r\n\r\n")
-                    {
-                        break pos + 4;
-                    }
-                };
-                let headers = String::from_utf8_lossy(&data[..headers_end]);
-                let length = headers
-                    .lines()
-                    .find_map(|line| {
-                        let (name, value) = line.split_once(':')?;
-                        if name.eq_ignore_ascii_case("content-length") {
-                            value.trim().parse::<usize>().ok()
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(0);
-                while data.len() < headers_end + length {
-                    let count =
-                        stream.read(&mut buffer).expect("read request body");
-                    assert_ne!(count, 0, "request ended before body");
-                    data.extend_from_slice(&buffer[..count]);
-                }
-                requests.push(data);
-                write!(
-                    stream,
-                    "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\n",
-                    body.len()
-                )
-                .expect("response headers");
-                if let Some(range) = content_range {
-                    write!(stream, "Content-Range: {range}\r\n")
-                        .expect("range header");
-                }
-                write!(stream, "Connection: close\r\n\r\n")
-                    .expect("response headers");
-                stream.write_all(&body).expect("response body");
-            }
-            requests
-        });
-        (endpoint, handle)
-    }
-
     fn test_storage(endpoint: String) -> S3Storage {
         let config = aws_sdk_s3::Config::builder()
             .behavior_version(BehaviorVersion::latest())
@@ -506,11 +437,36 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn lists_all_pages_and_decodes_entries() {
-        let first = br#"<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><IsTruncated>true</IsTruncated><Contents><Key>root/one.txt</Key><Size>3</Size></Contents><NextContinuationToken>A&amp;B</NextContinuationToken></ListBucketResult>"#.to_vec();
-        let second = br#"<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><IsTruncated>false</IsTruncated><CommonPrefixes><Prefix>root/folder/</Prefix></CommonPrefixes></ListBucketResult>"#.to_vec();
-        let (endpoint, server) =
-            serve(vec![(200, first, None), (200, second, None)]);
-        let entries = test_storage(endpoint)
+        use wiremock::{
+            Mock, ResponseTemplate,
+            matchers::{method, path, query_param},
+        };
+
+        let server = crate::test_http_server::http_server().await;
+        let first = br#"<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><IsTruncated>true</IsTruncated><Contents><Key>root/one.txt</Key><Size>3</Size></Contents><NextContinuationToken>A&amp;B</NextContinuationToken></ListBucketResult>"#;
+        let second = br#"<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><IsTruncated>false</IsTruncated><CommonPrefixes><Prefix>root/folder/</Prefix></CommonPrefixes></ListBucketResult>"#;
+        Mock::given(method("GET"))
+            .and(path("/bucket/"))
+            .and(query_param("list-type", "2"))
+            .and(query_param("prefix", "root/"))
+            .and(query_param("delimiter", "/"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_bytes(first.to_vec()),
+            )
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/bucket/"))
+            .and(query_param("continuation-token", "A&B"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_bytes(second.to_vec()),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let entries = test_storage(server.uri())
             .read_dir(StoragePath::root())
             .await
             .expect("list");
@@ -519,23 +475,41 @@ mod tests {
         assert!(entries[0].is_dir());
         assert_eq!(entries[1].file_name(), "one.txt");
         assert_eq!(entries[1].size(), Some(3));
-        let requests = server.join().expect("server");
-        let first = String::from_utf8_lossy(&requests[0]);
-        let second = String::from_utf8_lossy(&requests[1]);
-        assert!(first.contains("list-type=2"));
-        assert!(first.contains("prefix=root%2F"));
-        assert!(first.contains("delimiter=%2F"));
-        assert!(second.contains("continuation-token=A%26B"));
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn reads_large_ranges_in_bounded_requests() {
-        let first = vec![b'a'; crate::domain::MAX_READ_SIZE];
-        let (endpoint, server) = serve(vec![
-            (206, first, Some("bytes 10-65545/65549")),
-            (206, b"xyz".to_vec(), Some("bytes 65546-65548/65549")),
-        ]);
-        let storage = test_storage(endpoint);
+        use wiremock::{
+            Mock, ResponseTemplate,
+            matchers::{header, method, path},
+        };
+
+        let server = crate::test_http_server::http_server().await;
+        for (range, content_range, body) in [
+            (
+                "bytes=10-65545",
+                "bytes 10-65545/65549",
+                vec![b'a'; crate::domain::MAX_READ_SIZE],
+            ),
+            (
+                "bytes=65546-65548",
+                "bytes 65546-65548/65549",
+                b"xyz".to_vec(),
+            ),
+        ] {
+            Mock::given(method("GET"))
+                .and(path("/bucket/root/file.txt"))
+                .and(header("range", range))
+                .respond_with(
+                    ResponseTemplate::new(206)
+                        .insert_header("Content-Range", content_range)
+                        .set_body_bytes(body),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let storage = test_storage(server.uri());
         let path =
             StoragePath::try_from(PathBuf::from("file.txt")).expect("path");
         let mut writer = crate::test_utils::mocks::BytesWriter::default();
@@ -549,19 +523,28 @@ mod tests {
             .expect("read");
         assert_eq!(count, crate::domain::MAX_READ_SIZE as u64 + 3);
         assert_eq!(&writer.0[crate::domain::MAX_READ_SIZE..], b"xyz");
-        let requests = server.join().expect("server");
-        let first = String::from_utf8_lossy(&requests[0]).to_ascii_lowercase();
-        let second = String::from_utf8_lossy(&requests[1]).to_ascii_lowercase();
-        assert!(first.starts_with("get /bucket/root/file.txt"));
-        assert!(first.contains("range: bytes=10-65545"));
-        assert!(second.contains("range: bytes=65546-65548"));
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn rejects_range_response_for_different_offset() {
-        let (endpoint, server) =
-            serve(vec![(206, b"wrong".to_vec(), Some("bytes 0-4/100"))]);
-        let storage = test_storage(endpoint);
+        use wiremock::{
+            Mock, ResponseTemplate,
+            matchers::{header, method, path},
+        };
+
+        let server = crate::test_http_server::http_server().await;
+        Mock::given(method("GET"))
+            .and(path("/bucket/root/file.txt"))
+            .and(header("range", "bytes=10-14"))
+            .respond_with(
+                ResponseTemplate::new(206)
+                    .insert_header("Content-Range", "bytes 0-4/100")
+                    .set_body_bytes(b"wrong".to_vec()),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let storage = test_storage(server.uri());
         let path =
             StoragePath::try_from(PathBuf::from("file.txt")).expect("path");
         let mut writer = crate::test_utils::mocks::BytesWriter::default();
@@ -572,19 +555,26 @@ mod tests {
                 .is_err()
         );
         assert!(writer.0.is_empty());
-        server.join().expect("server");
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn writes_object_to_prefixed_key() {
-        let (endpoint, server) = serve(vec![(200, Vec::new(), None)]);
-        let storage = test_storage(endpoint);
+        use wiremock::{
+            Mock, ResponseTemplate,
+            matchers::{body_bytes, method, path},
+        };
+
+        let server = crate::test_http_server::http_server().await;
+        Mock::given(method("PUT"))
+            .and(path("/bucket/root/hello%20world.txt"))
+            .and(body_bytes(b"hello s3".to_vec()))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let storage = test_storage(server.uri());
         let path = StoragePath::try_from(PathBuf::from("hello world.txt"))
             .expect("path");
         storage.write_file(path, b"hello s3").await.expect("write");
-        let requests = server.join().expect("server");
-        let request = String::from_utf8_lossy(&requests[0]);
-        assert!(request.starts_with("PUT /bucket/root/hello%20world.txt"));
-        assert!(requests[0].ends_with(b"hello s3"));
     }
 }
