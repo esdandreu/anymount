@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::domain::{DirEntry, ReadDirError, Storage};
+use crate::domain::{DirStream, ReadDirError, Storage};
 
 /// Lists a directory after validating its storage-relative path.
 ///
@@ -11,7 +11,7 @@ use crate::domain::{DirEntry, ReadDirError, Storage};
 pub async fn read_dir<S>(
     storage: &S,
     path: PathBuf,
-) -> Result<Vec<Box<dyn DirEntry>>, ReadDirError>
+) -> Result<DirStream, ReadDirError>
 where
     S: Storage + ?Sized,
 {
@@ -21,7 +21,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::mocks::NoOpStorage;
+    use crate::test_utils::mocks::{NoOpStorage, TestDirEntry};
+    use futures::TryStreamExt;
 
     #[tokio::test(flavor = "current_thread")]
     async fn rejects_invalid_storage_path() {
@@ -34,7 +35,7 @@ mod tests {
     async fn returns_entries_through_storage_trait_object() {
         let mut storage = crate::test_utils::mocks::MockStorage::new();
         storage.expect_read_dir().returning(|_| {
-            Ok(vec![Box::new(crate::StorageEntry {
+            Ok(vec![Box::new(TestDirEntry {
                 name: "note".into(),
                 is_directory: false,
                 size: None,
@@ -42,7 +43,12 @@ mod tests {
             })])
         });
         let storage: Box<dyn Storage> = Box::new(storage);
-        let entries = read_dir(&*storage, PathBuf::new()).await.expect("list");
+        let entries: Vec<_> = read_dir(&*storage, PathBuf::new())
+            .await
+            .expect("list")
+            .try_collect()
+            .await
+            .expect("entries");
         assert_eq!(entries[0].file_name(), "note");
         assert!(!entries[0].is_dir());
         assert_eq!(entries[0].size(), None);

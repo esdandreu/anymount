@@ -12,7 +12,4 @@ impl Storage for ShortStorage {
     ) -> Result<u64, crate::domain::ReadFileAtError> {
         Ok(1)
     }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }

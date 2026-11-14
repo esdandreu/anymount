@@ -1,9 +1,9 @@
 use super::{
-    BrowserDriver, BrowserMount, BrowserStorageConfig, FileSystemAccessStorage,
+    BrowserDriver, BrowserMount, BrowserStorageConfig, BrowserWorkspace,
+    ConnectPermissionError, FileSystemAccessStorage,
 };
 use crate::domain::{
-    ConnectPermissionError, DisconnectStorageError, Driver, Mount, MountConfig,
-    Storage, StoragePath, WriteFileError,
+    Driver, Mount, MountError, Storage, StoragePath, WriteFileError,
 };
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -35,22 +35,32 @@ impl BrowserDriverApi {
         name: String,
         path: String,
     ) -> Result<(), JsValue> {
-        let config = MountConfig {
-            name,
-            path: PathBuf::from(path),
-            storage: Box::new(BrowserStorageConfig),
-        };
-        let previous = self.driver.mounts.borrow().get(&config.name).cloned();
-        let mount = Driver::mount(&self.driver, &config)
-            .await
-            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        let path = PathBuf::from(path);
+        let provider =
+            BrowserStorageConfig
+                .pick_directory()
+                .await
+                .map_err(|error| {
+                    JsValue::from_str(
+                        &MountError::CannotMountAtPath {
+                            path: path.clone(),
+                            message: error.to_string(),
+                        }
+                        .to_string(),
+                    )
+                })?;
+        let handle = provider.handle.clone();
+        let previous = self.driver.mounts.borrow().get(&name).cloned();
+        let mount = self.driver.register(
+            name.clone(),
+            path,
+            Rc::new(provider),
+            Some(handle),
+        );
         if let Err(error) = mount.connect().await {
-            let cleanup = Driver::unmount(&self.driver, &config.name).await;
+            let cleanup = Driver::unmount(&self.driver, &name).await;
             if let Some(previous) = previous {
-                self.driver
-                    .mounts
-                    .borrow_mut()
-                    .insert(config.name.clone(), previous);
+                self.driver.mounts.borrow_mut().insert(name, previous);
             }
             if let Err(cleanup_error) = cleanup {
                 return Err(JsValue::from_str(&format!(
@@ -74,11 +84,12 @@ impl BrowserDriverApi {
         handle: JsValue,
     ) -> Result<bool, JsValue> {
         let storage: Rc<dyn Storage> =
-            Rc::new(FileSystemAccessStorage::new(handle));
+            Rc::new(FileSystemAccessStorage::new(handle.clone()));
+        let workspace = BrowserWorkspace::new(storage, Some(handle));
         let mount = BrowserMount {
             name: name.clone(),
             path: PathBuf::from(path),
-            storage: storage.clone(),
+            workspace: workspace.clone(),
         };
         let connected = match mount.connect().await {
             Ok(()) => true,
@@ -90,7 +101,7 @@ impl BrowserDriverApi {
             }
             Err(error) => return Err(JsValue::from_str(&error.to_string())),
         };
-        self.driver.mounts.borrow_mut().insert(name, storage);
+        self.driver.mounts.borrow_mut().insert(name, workspace);
         Ok(connected)
     }
 
@@ -104,8 +115,8 @@ impl BrowserDriverApi {
         name: String,
         request_permission: bool,
     ) -> Result<bool, JsValue> {
-        let storage = self.storage(&name)?;
-        storage
+        let workspace = self.workspace(&name)?;
+        workspace
             .connect(request_permission)
             .await
             .map_err(connect_js_error)
@@ -120,8 +131,8 @@ impl BrowserDriverApi {
         &self,
         name: String,
     ) -> Result<(), JsValue> {
-        let storage = self.storage(&name)?;
-        storage.disconnect().await.map_err(disconnect_js_error)
+        self.workspace(&name)?.disconnect();
+        Ok(())
     }
 
     /// Unregisters a browser workspace.
@@ -147,7 +158,7 @@ impl BrowserDriverApi {
     ) -> Result<String, JsValue> {
         let path = StoragePath::try_from(PathBuf::from(file_name))
             .map_err(|error| JsValue::from_str(&error.to_string()))?;
-        let storage = self.storage(&name)?;
+        let storage = self.workspace(&name)?;
         struct TextWriter(Vec<u8>);
         impl crate::domain::WriteAt for TextWriter {
             fn write_at(
@@ -190,7 +201,7 @@ impl BrowserDriverApi {
     ) -> Result<(), JsValue> {
         let path = StoragePath::try_from(PathBuf::from(file_name))
             .map_err(|error| JsValue::from_str(&error.to_string()))?;
-        self.storage(&name)?
+        self.workspace(&name)?
             .write_file(path, value.as_bytes())
             .await
             .map_err(write_js_error)
@@ -202,14 +213,13 @@ impl BrowserDriverApi {
     ///
     /// Returns an error if the workspace is not mounted.
     pub fn directory_handle(&self, name: String) -> Result<JsValue, JsValue> {
-        let storage = self.storage(&name)?;
-        let provider = storage
-            .as_any()
-            .downcast_ref::<FileSystemAccessStorage>()
-            .ok_or_else(|| {
-                JsValue::from_str("workspace is not a browser directory")
-            })?;
-        Ok(provider.handle.clone())
+        let mounts = self.driver.mounts.borrow();
+        let workspace = mounts.get(&name).ok_or_else(|| {
+            JsValue::from_str("browser workspace is not mounted")
+        })?;
+        workspace.handle.clone().ok_or_else(|| {
+            JsValue::from_str("workspace is not a browser directory")
+        })
     }
 
     /// Reports whether a browser workspace is connected.
@@ -218,12 +228,12 @@ impl BrowserDriverApi {
     ///
     /// Returns an error if the workspace is not mounted.
     pub fn is_connected(&self, name: String) -> Result<bool, JsValue> {
-        Ok(self.storage(&name)?.is_connected())
+        Ok(self.workspace(&name)?.is_connected())
     }
 }
 
 impl BrowserDriverApi {
-    fn storage(&self, name: &str) -> Result<Rc<dyn Storage>, JsValue> {
+    fn workspace(&self, name: &str) -> Result<BrowserWorkspace, JsValue> {
         self.driver
             .mounts
             .borrow()
@@ -241,10 +251,6 @@ fn connect_js_error(error: ConnectPermissionError) -> JsValue {
         _ => None,
     };
     js_error(&error.to_string(), name)
-}
-
-fn disconnect_js_error(error: DisconnectStorageError) -> JsValue {
-    js_error(&error.to_string(), None)
 }
 
 fn write_js_error(error: WriteFileError) -> JsValue {
@@ -277,16 +283,6 @@ mod tests {
                 connect_js_error(ConnectPermissionError::PermissionDenied),
                 "NotAllowedError",
                 "storage permission denied",
-            ),
-            (
-                connect_js_error(ConnectPermissionError::NotSupported),
-                "Error",
-                "storage operation is not supported",
-            ),
-            (
-                disconnect_js_error(DisconnectStorageError::Disconnected),
-                "Error",
-                "storage is disconnected",
             ),
             (
                 write_js_error(WriteFileError::NotFound),

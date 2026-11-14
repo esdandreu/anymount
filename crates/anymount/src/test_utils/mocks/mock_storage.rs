@@ -1,4 +1,4 @@
-use crate::domain::{DirEntry, ReadDirError, Storage, StoragePath};
+use crate::domain::{DirEntry, DirStream, ReadDirError, Storage, StoragePath};
 
 mockall::mock! {
     pub Storage {
@@ -11,10 +11,10 @@ impl Storage for MockStorage {
     async fn read_dir(
         &self,
         path: StoragePath,
-    ) -> Result<Vec<Box<dyn DirEntry>>, ReadDirError> {
-        MockStorage::read_dir(self, path)
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+    ) -> Result<DirStream, ReadDirError> {
+        MockStorage::read_dir(self, path).map(|entries| {
+            Box::pin(futures::stream::iter(entries.into_iter().map(Ok)))
+                as DirStream
+        })
     }
 }

@@ -197,7 +197,7 @@ impl HttpGet for UreqHttpGet {
             .iter()
             .any(|(name, _)| name.eq_ignore_ascii_case("range"));
         let limit = if is_range {
-            crate::domain::MAX_READ_SIZE as u64 + 1
+            crate::domain::MAX_READ_FILE_AT_RANGE_SIZE as u64 + 1
         } else {
             u64::MAX
         };
@@ -298,9 +298,6 @@ impl OneDriveConfig {
 #[typetag::serde(name = "onedrive")]
 #[async_trait::async_trait(?Send)]
 impl StorageConfig for OneDriveConfig {
-    fn clone_config(&self) -> Box<dyn StorageConfig> {
-        Box::new(self.clone())
-    }
     async fn connect(
         &self,
     ) -> std::result::Result<Box<dyn Storage>, ConnectStorageError> {
@@ -534,15 +531,21 @@ impl<T: BearerToken, F: HttpGet> Storage for OneDriveStorage<T, F> {
     async fn read_dir(
         &self,
         path: StoragePath,
-    ) -> std::result::Result<Vec<Box<dyn DirEntry>>, ReadDirError> {
+    ) -> std::result::Result<crate::domain::DirStream, ReadDirError> {
         let storage = self.clone();
         tokio::task::spawn_blocking(move || {
-            storage.read_dir(path).map(|entries| entries.collect())
+            storage
+                .read_dir(path)
+                .map(|entries| entries.collect::<Vec<_>>())
         })
         .await
         .map_err(|e| ReadDirError::Unknown {
             message: e.to_string(),
         })?
+        .map(|entries| {
+            Box::pin(futures::stream::iter(entries.into_iter().map(Ok)))
+                as crate::domain::DirStream
+        })
     }
     async fn read_file_at(
         &self,
@@ -558,7 +561,8 @@ impl<T: BearerToken, F: HttpGet> Storage for OneDriveStorage<T, F> {
         let mut offset = range.start;
         while offset < range.end {
             let end = offset
-                + (range.end - offset).min(crate::domain::MAX_READ_SIZE as u64);
+                + (range.end - offset)
+                    .min(crate::domain::MAX_READ_FILE_AT_RANGE_SIZE as u64);
             let path = path.clone();
             let storage = self.clone();
             let bytes = tokio::task::spawn_blocking(move || {
@@ -582,9 +586,6 @@ impl<T: BearerToken, F: HttpGet> Storage for OneDriveStorage<T, F> {
             offset += bytes.len() as u64;
         }
         Ok(offset - range.start)
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
@@ -644,7 +645,7 @@ mod tests {
             .get(&url, &[("Range", "bytes=0-1")])
             .expect("range response");
         assert_eq!(status, 200);
-        assert_eq!(body.len(), crate::domain::MAX_READ_SIZE + 1);
+        assert_eq!(body.len(), crate::domain::MAX_READ_FILE_AT_RANGE_SIZE + 1);
         server.join().expect("server thread");
     }
 
