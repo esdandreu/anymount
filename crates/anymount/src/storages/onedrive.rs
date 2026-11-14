@@ -534,15 +534,21 @@ impl<T: BearerToken, F: HttpGet> Storage for OneDriveStorage<T, F> {
     async fn read_dir(
         &self,
         path: StoragePath,
-    ) -> std::result::Result<Vec<Box<dyn DirEntry>>, ReadDirError> {
+    ) -> std::result::Result<crate::domain::DirStream, ReadDirError> {
         let storage = self.clone();
         tokio::task::spawn_blocking(move || {
-            storage.read_dir(path).map(|entries| entries.collect())
+            storage
+                .read_dir(path)
+                .map(|entries| entries.collect::<Vec<_>>())
         })
         .await
         .map_err(|e| ReadDirError::Unknown {
             message: e.to_string(),
         })?
+        .map(|entries| {
+            Box::pin(futures::stream::iter(entries.into_iter().map(Ok)))
+                as crate::domain::DirStream
+        })
     }
     async fn read_file_at(
         &self,

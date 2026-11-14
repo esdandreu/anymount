@@ -2,7 +2,9 @@ mod path;
 
 pub use path::{InvalidStoragePath, StoragePath};
 
-use std::{any::Any, time::SystemTime};
+use std::{any::Any, pin::Pin, time::SystemTime};
+
+use futures::Stream;
 
 use async_trait::async_trait;
 
@@ -43,8 +45,11 @@ pub enum ConnectStorageError {
 /// Maximum number of bytes a single range read may request.
 pub const MAX_READ_SIZE: usize = 65536;
 
-#[cfg_attr(test, mockall::automock)]
+pub type DirStream =
+    Pin<Box<dyn Stream<Item = Result<Box<dyn DirEntry>, ReadDirError>>>>;
+
 #[async_trait(?Send)]
+#[cfg_attr(test, mockall::automock)]
 pub trait Storage: Any {
     async fn connect(
         &self,
@@ -61,7 +66,7 @@ pub trait Storage: Any {
     async fn read_dir(
         &self,
         _path: StoragePath,
-    ) -> Result<Vec<Box<dyn DirEntry>>, ReadDirError> {
+    ) -> Result<DirStream, ReadDirError> {
         Err(ReadDirError::NotSupported)
     }
     async fn read_file_at(
@@ -167,7 +172,7 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
     async fn read_dir(
         &self,
         path: StoragePath,
-    ) -> Result<Vec<Box<dyn DirEntry>>, ReadDirError> {
+    ) -> Result<DirStream, ReadDirError> {
         (**self).read_dir(path).await
     }
     async fn read_file_at(

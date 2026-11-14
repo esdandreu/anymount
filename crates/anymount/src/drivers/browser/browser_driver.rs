@@ -150,7 +150,7 @@ impl Mount for BrowserMount {
 /// Stores files in a browser-authorized directory.
 pub struct FileSystemAccessStorage {
     handle: JsValue,
-    connected: Cell<bool>,
+    connected: Rc<Cell<bool>>,
 }
 
 impl FileSystemAccessStorage {
@@ -158,7 +158,7 @@ impl FileSystemAccessStorage {
     pub fn new(handle: JsValue) -> Self {
         Self {
             handle,
-            connected: Cell::new(false),
+            connected: Rc::new(Cell::new(false)),
         }
     }
 }
@@ -212,7 +212,7 @@ impl Storage for FileSystemAccessStorage {
     async fn read_dir(
         &self,
         path: StoragePath,
-    ) -> Result<Vec<Box<dyn DirEntry>>, ReadDirError> {
+    ) -> Result<crate::domain::DirStream, ReadDirError> {
         if !self.is_connected() {
             return Err(ReadDirError::Disconnected);
         }
@@ -223,49 +223,66 @@ impl Storage for FileSystemAccessStorage {
             .map_err(|error| self.read_dir_error(error))?;
         let iterator = call(&directory, "values", &Array::new())
             .map_err(|error| self.read_dir_error(error))?;
-        let mut entries: Vec<Box<dyn DirEntry>> = Vec::new();
-        loop {
-            let next = call_async(&iterator, "next", &Array::new())
-                .await
-                .map_err(|error| self.read_dir_error(error))?;
-            let done = Reflect::get(&next, &JsValue::from_str("done"))
-                .map_err(|error| self.read_dir_error(error))?;
-            if done.as_bool().unwrap_or(false) {
-                break;
-            }
-            let entry = Reflect::get(&next, &JsValue::from_str("value"))
-                .map_err(|error| self.read_dir_error(error))?;
-            let name = Reflect::get(&entry, &JsValue::from_str("name"))
-                .map_err(|error| self.read_dir_error(error))?
-                .as_string()
-                .ok_or_else(|| ReadDirError::Unknown {
-                    message: "directory entry has no name".to_owned(),
-                })?;
-            let kind = Reflect::get(&entry, &JsValue::from_str("kind"))
-                .map_err(|error| self.read_dir_error(error))?
-                .as_string()
-                .ok_or_else(|| ReadDirError::Unknown {
-                    message: "directory entry has no kind".to_owned(),
-                })?;
-            let is_directory = match kind.as_str() {
-                "directory" => true,
-                "file" => false,
-                _ => {
-                    return Err(ReadDirError::Unknown {
-                        message: format!(
-                            "unknown directory entry kind: {kind}"
-                        ),
-                    });
+        let storage = Self {
+            handle: self.handle.clone(),
+            connected: self.connected.clone(),
+        };
+        Ok(Box::pin(futures::stream::unfold(
+            Some((iterator, storage)),
+            |state| async move {
+                let (iterator, storage) = state?;
+                let result = async {
+                    let next = call_async(&iterator, "next", &Array::new())
+                        .await
+                        .map_err(|error| storage.read_dir_error(error))?;
+                    let done = Reflect::get(&next, &JsValue::from_str("done"))
+                        .map_err(|error| storage.read_dir_error(error))?;
+                    if done.as_bool().unwrap_or(false) {
+                        return Ok(None);
+                    }
+                    let entry =
+                        Reflect::get(&next, &JsValue::from_str("value"))
+                            .map_err(|error| storage.read_dir_error(error))?;
+                    let name = Reflect::get(&entry, &JsValue::from_str("name"))
+                        .map_err(|error| storage.read_dir_error(error))?
+                        .as_string()
+                        .ok_or_else(|| ReadDirError::Unknown {
+                            message: "directory entry has no name".to_owned(),
+                        })?;
+                    let kind = Reflect::get(&entry, &JsValue::from_str("kind"))
+                        .map_err(|error| storage.read_dir_error(error))?
+                        .as_string()
+                        .ok_or_else(|| ReadDirError::Unknown {
+                            message: "directory entry has no kind".to_owned(),
+                        })?;
+                    let is_directory = match kind.as_str() {
+                        "directory" => true,
+                        "file" => false,
+                        _ => {
+                            return Err(ReadDirError::Unknown {
+                                message: format!(
+                                    "unknown directory entry kind: {kind}"
+                                ),
+                            });
+                        }
+                    };
+                    Ok(Some(Box::new(StorageEntry {
+                        name,
+                        is_directory,
+                        size: None,
+                        accessed: None,
+                    }) as Box<dyn DirEntry>))
                 }
-            };
-            entries.push(Box::new(StorageEntry {
-                name,
-                is_directory,
-                size: None,
-                accessed: None,
-            }));
-        }
-        Ok(entries)
+                .await;
+                match result {
+                    Ok(Some(entry)) => {
+                        Some((Ok(entry), Some((iterator, storage))))
+                    }
+                    Ok(None) => None,
+                    Err(error) => Some((Err(error), None)),
+                }
+            },
+        )))
     }
 
     async fn read_file_at(
@@ -737,6 +754,7 @@ mod tests {
     async fn browser_storage_lists_root_and_nested_directories() {
         use super::FileSystemAccessStorage;
         use crate::domain::{ReadDirError, Storage, StoragePath};
+        use futures::StreamExt;
 
         let handle = Function::new_no_args(
             r#"
@@ -764,25 +782,76 @@ mod tests {
             Err(ReadDirError::Disconnected)
         ));
         assert!(storage.connect(false).await.expect("connect"));
-        let root = storage.read_dir(StoragePath::root()).await.expect("root");
-        assert_eq!(root.len(), 1);
-        assert_eq!(root[0].file_name(), "notes");
-        assert!(root[0].is_dir());
-        assert_eq!(root[0].size(), None);
-        assert_eq!(root[0].accessed(), None);
+        let mut root =
+            storage.read_dir(StoragePath::root()).await.expect("root");
+        let entry = root.next().await.expect("entry").expect("valid entry");
+        assert_eq!(entry.file_name(), "notes");
+        assert!(entry.is_dir());
+        assert_eq!(entry.size(), None);
+        assert_eq!(entry.accessed(), None);
+        assert!(root.next().await.is_none());
         let path = StoragePath::try_from(PathBuf::from("notes")).expect("path");
-        let nested = storage.read_dir(path).await.expect("nested");
-        assert_eq!(nested.len(), 1);
-        assert_eq!(nested[0].file_name(), "note.txt");
-        assert!(!nested[0].is_dir());
-        assert_eq!(nested[0].size(), None);
-        assert_eq!(nested[0].accessed(), None);
+        let mut nested = storage.read_dir(path).await.expect("nested");
+        let entry = nested.next().await.expect("entry").expect("valid entry");
+        assert_eq!(entry.file_name(), "note.txt");
+        assert!(!entry.is_dir());
+        assert_eq!(entry.size(), None);
+        assert_eq!(entry.accessed(), None);
+        assert!(nested.next().await.is_none());
         let missing =
             StoragePath::try_from(PathBuf::from("missing")).expect("path");
         assert!(matches!(
             storage.read_dir(missing).await,
             Err(ReadDirError::NotFound)
         ));
+    }
+
+    #[wasm_bindgen_test]
+    async fn browser_directory_stream_is_lazy_and_reports_permission_errors() {
+        use super::FileSystemAccessStorage;
+        use crate::domain::{ReadDirError, Storage, StoragePath};
+        use futures::StreamExt;
+
+        let handle = Function::new_no_args(
+            r#"
+            const handle = { calls: 0, queryPermission: async () => 'granted' };
+            handle.values = () => ({ next: async () => {
+                handle.calls++;
+                if (handle.calls === 1) return { value: { name: 'first', kind: 'file' }, done: false };
+                throw new DOMException('denied', 'NotAllowedError');
+            }});
+            return handle;
+            "#,
+        ).call0(&JsValue::NULL).expect("create handle");
+        let storage = FileSystemAccessStorage::new(handle.clone());
+        assert!(storage.connect(false).await.expect("connect"));
+        let mut entries = storage
+            .read_dir(StoragePath::root())
+            .await
+            .expect("listing");
+        let calls = || {
+            Reflect::get(&handle, &JsValue::from_str("calls"))
+                .expect("calls")
+                .as_f64()
+        };
+        assert_eq!(calls(), Some(0.0));
+        assert_eq!(
+            entries
+                .next()
+                .await
+                .expect("entry")
+                .expect("valid entry")
+                .file_name(),
+            "first"
+        );
+        assert_eq!(calls(), Some(1.0));
+        assert!(matches!(
+            entries.next().await,
+            Some(Err(ReadDirError::PermissionDenied))
+        ));
+        assert!(!storage.is_connected());
+        assert!(entries.next().await.is_none());
+        assert_eq!(calls(), Some(2.0));
     }
 
     #[wasm_bindgen_test]

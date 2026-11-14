@@ -427,15 +427,17 @@ impl StorageFilesystem {
                     .try_into()
                     .map_err(crate::ReadDirError::InvalidPath)?,
             )?
-            .map(|entry| CachedDirEntry {
-                file_name: entry.file_name(),
-                is_dir: entry.is_dir(),
-                size: entry.size().expect("native storage validates size"),
-                accessed: entry
-                    .accessed()
-                    .expect("native storage validates access time"),
+            .map(|entry| {
+                entry.map(|entry| CachedDirEntry {
+                    file_name: entry.file_name(),
+                    is_dir: entry.is_dir(),
+                    size: entry.size().expect("native storage validates size"),
+                    accessed: entry
+                        .accessed()
+                        .expect("native storage validates access time"),
+                })
             })
-            .collect();
+            .collect::<std::result::Result<_, _>>()?;
         self.cache.sync_metadata_placeholders(&path, &entries)?;
         self.dir_cache.insert(path, entries.clone());
         Ok(entries)

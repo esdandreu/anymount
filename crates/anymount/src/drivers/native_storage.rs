@@ -2,6 +2,7 @@ use crate::domain::{
     ConnectStorageError, DirEntry, ReadDirError, ReadFileAtError,
     StorageConfig, StoragePath, WriteAt,
 };
+use futures::StreamExt;
 use std::{ops::Range, sync::mpsc};
 
 pub struct NativeStorage {
@@ -10,7 +11,16 @@ pub struct NativeStorage {
 enum Request {
     ReadDir(
         StoragePath,
-        mpsc::Sender<Result<Vec<Box<dyn DirEntry>>, ReadDirError>>,
+        mpsc::Sender<
+            Result<
+                tokio::sync::mpsc::UnboundedSender<
+                    mpsc::Sender<
+                        Option<Result<Box<dyn DirEntry>, ReadDirError>>,
+                    >,
+                >,
+                ReadDirError,
+            >,
+        >,
     ),
     ReadRange(
         StoragePath,
@@ -19,6 +29,49 @@ enum Request {
         mpsc::Sender<Result<Vec<u8>, ReadFileAtError>>,
     ),
 }
+struct NativeDir {
+    requests: tokio::sync::mpsc::UnboundedSender<
+        mpsc::Sender<Option<Result<Box<dyn DirEntry>, ReadDirError>>>,
+    >,
+    done: bool,
+}
+
+impl Iterator for NativeDir {
+    type Item = Result<Box<dyn DirEntry>, ReadDirError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        if tokio::runtime::Handle::try_current().is_ok() {
+            self.done = true;
+            return Some(Err(ReadDirError::Unavailable {
+                message: "native callback cannot block an async runtime".into(),
+            }));
+        }
+        let (reply, response) = mpsc::channel();
+        if self.requests.send(reply).is_err() {
+            self.done = true;
+            return Some(Err(ReadDirError::Unavailable {
+                message: "directory worker stopped".into(),
+            }));
+        }
+        match response.recv() {
+            Ok(Some(Ok(entry))) => Some(Ok(entry)),
+            Ok(item) => {
+                self.done = true;
+                item
+            }
+            Err(error) => {
+                self.done = true;
+                Some(Err(ReadDirError::Unavailable {
+                    message: error.to_string(),
+                }))
+            }
+        }
+    }
+}
+
 struct ChunkWriter {
     bytes: Vec<u8>,
     start: u64,
@@ -100,12 +153,27 @@ impl NativeStorage {
                         return;
                     }
                 };
-                runtime.block_on(async move {
+                runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
                     while let Some(request) = receiver.recv().await {
                         match request {
                             Request::ReadDir(path, reply) => {
-                                let _ =
-                                    reply.send(storage.read_dir(path).await);
+                                match storage.read_dir(path).await {
+                                    Ok(mut entries) => {
+                                        let (next, mut requests) = tokio::sync::mpsc::unbounded_channel::<mpsc::Sender<Option<Result<Box<dyn DirEntry>, ReadDirError>>>>();
+                                        if reply.send(Ok(next)).is_ok() {
+                                            tokio::task::spawn_local(async move {
+                                                while let Some(reply) = requests.recv().await {
+                                                    let item = entries.next().await.map(|result| result.and_then(|entry| {
+                                                        if entry.size().is_none() || entry.accessed().is_none() { Err(ReadDirError::NotSupported) } else { Ok(entry) }
+                                                    }));
+                                                    let done = !matches!(item, Some(Ok(_)));
+                                                    if reply.send(item).is_err() || done { break; }
+                                                }
+                                            });
+                                        }
+                                    }
+                                    Err(error) => { let _ = reply.send(Err(error)); }
+                                }
                             }
                             Request::ReadRange(path, offset, length, reply) => {
                                 let mut writer = ChunkWriter { bytes: Vec::new(), start: offset, limit: length };
@@ -127,7 +195,7 @@ impl NativeStorage {
                             }
                         }
                     }
-                });
+                }));
             })
             .map_err(|error| ConnectStorageError::Failed {
                 kind: "native",
@@ -142,7 +210,10 @@ impl NativeStorage {
     pub fn read_dir(
         &self,
         path: StoragePath,
-    ) -> Result<Box<dyn Iterator<Item = Box<dyn DirEntry>>>, ReadDirError> {
+    ) -> Result<
+        Box<dyn Iterator<Item = Result<Box<dyn DirEntry>, ReadDirError>>>,
+        ReadDirError,
+    > {
         if tokio::runtime::Handle::try_current().is_ok() {
             return Err(ReadDirError::Unavailable {
                 message: "native callback cannot block an async runtime".into(),
@@ -154,19 +225,16 @@ impl NativeStorage {
             .map_err(|error| ReadDirError::Unavailable {
                 message: error.to_string(),
             })?;
-        let entries =
+        let requests =
             response
                 .recv()
                 .map_err(|error| ReadDirError::Unavailable {
                     message: error.to_string(),
                 })??;
-        if entries
-            .iter()
-            .any(|e| e.size().is_none() || e.accessed().is_none())
-        {
-            return Err(ReadDirError::NotSupported);
-        }
-        Ok(Box::new(entries.into_iter()))
+        Ok(Box::new(NativeDir {
+            requests,
+            done: false,
+        }))
     }
     pub fn read_file_at(
         &self,
@@ -356,12 +424,14 @@ mod tests {
             .read_dir(StoragePath::root())
             .expect("first request")
             .next()
-            .expect("first entry");
+            .expect("first entry")
+            .expect("entry succeeds");
         let second = storage
             .read_dir(StoragePath::root())
             .expect("second request")
             .next()
-            .expect("second entry");
+            .expect("second entry")
+            .expect("entry succeeds");
         assert_eq!(first.file_name(), "1");
         assert_eq!(second.file_name(), "2");
     }
@@ -385,8 +455,11 @@ mod tests {
             })
             .expect("create worker");
             assert!(matches!(
-                storage.read_dir(StoragePath::root()),
-                Err(ReadDirError::NotSupported)
+                storage
+                    .read_dir(StoragePath::root())
+                    .expect("open directory")
+                    .next(),
+                Some(Err(ReadDirError::NotSupported))
             ));
         }
     }

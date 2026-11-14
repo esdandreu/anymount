@@ -11,7 +11,7 @@ pub use mount::{
 };
 pub use started_authorization::{AuthStorageError, StartedAuthorization};
 pub use storage::{
-    ConnectPermissionError, ConnectStorageError, DirEntry,
+    ConnectPermissionError, ConnectStorageError, DirEntry, DirStream,
     DisconnectStorageError, InvalidStoragePath, MAX_READ_SIZE, ReadDirError,
     ReadFileAtError, Storage, StorageConfig, StorageEntry, StoragePath,
     WriteAt, WriteAtError, WriteFileError,

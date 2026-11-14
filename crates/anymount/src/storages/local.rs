@@ -123,29 +123,32 @@ impl LocalStorage {
     fn read_dir(
         &self,
         path: StoragePath,
-    ) -> Result<Box<dyn Iterator<Item = Box<dyn DirEntry>>>, ReadDirError> {
+    ) -> Result<
+        Box<
+            dyn Iterator<Item = Result<Box<dyn DirEntry>, ReadDirError>> + Send,
+        >,
+        ReadDirError,
+    > {
         let root = self.root.as_ref().map_err(root_io_error)?;
-        let mut entries: Vec<Box<dyn DirEntry>> = Vec::new();
         let read_dir = if path.as_path().as_os_str().is_empty() {
             root.entries()
         } else {
             root.read_dir(path.as_path())
         };
-        for entry in read_dir.map_err(read_dir_error)? {
+        Ok(Box::new(read_dir.map_err(read_dir_error)?.map(|entry| {
             let entry = entry.map_err(read_dir_error)?;
             let meta = entry.metadata().map_err(read_dir_error)?;
             let accessed = meta
                 .accessed()
                 .map(cap_std::time::SystemTime::into_std)
                 .unwrap_or(SystemTime::UNIX_EPOCH);
-            entries.push(Box::new(LocalDirEntry {
+            Ok(Box::new(LocalDirEntry {
                 file_name: entry.file_name().to_string_lossy().into_owned(),
                 is_dir: meta.is_dir(),
                 size: meta.len(),
                 accessed,
-            }));
-        }
-        Ok(Box::new(entries.into_iter()))
+            }) as Box<dyn DirEntry>)
+        })))
     }
 
     #[cfg(test)]
@@ -178,15 +181,35 @@ impl Storage for LocalStorage {
     async fn read_dir(
         &self,
         path: StoragePath,
-    ) -> Result<Vec<Box<dyn DirEntry>>, ReadDirError> {
+    ) -> Result<crate::domain::DirStream, ReadDirError> {
         let storage = self.clone();
-        tokio::task::spawn_blocking(move || {
-            storage.read_dir(path).map(|entries| entries.collect())
-        })
-        .await
-        .map_err(|e| ReadDirError::Unknown {
-            message: e.to_string(),
-        })?
+        let entries =
+            tokio::task::spawn_blocking(move || storage.read_dir(path))
+                .await
+                .map_err(|e| ReadDirError::Unknown {
+                    message: e.to_string(),
+                })??;
+        Ok(Box::pin(futures::stream::unfold(
+            Some(entries),
+            |state| async move {
+                let mut entries = state?;
+                match tokio::task::spawn_blocking(move || {
+                    let entry = entries.next();
+                    (entry, entries)
+                })
+                .await
+                {
+                    Ok((Some(entry), entries)) => Some((entry, Some(entries))),
+                    Ok((None, _)) => None,
+                    Err(error) => Some((
+                        Err(ReadDirError::Unknown {
+                            message: error.to_string(),
+                        }),
+                        None,
+                    )),
+                }
+            },
+        )))
     }
     async fn read_file_at(
         &self,
@@ -304,6 +327,9 @@ mod tests {
         let entries = Storage::read_dir(&storage, StoragePath::root())
             .await
             .expect("list");
+        let entries: Vec<_> = futures::TryStreamExt::try_collect(entries)
+            .await
+            .expect("entries");
         let entry = entries
             .iter()
             .find(|entry| entry.file_name() == "note")
@@ -431,7 +457,7 @@ mod tests {
         let iter = storage
             .read_dir(StoragePath::root())
             .expect("test directory should be readable");
-        let entries: Vec<_> = iter.collect();
+        let entries: Vec<_> = iter.collect::<Result<_, _>>().expect("entries");
         assert!(entries.len() >= 2);
 
         let file_entry = entries
@@ -463,7 +489,8 @@ mod tests {
         let entries: Vec<_> = storage
             .read_dir(storage_path("nested"))
             .expect("nested directory should be readable")
-            .collect();
+            .collect::<Result<_, _>>()
+            .expect("entries");
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].file_name(), "f.txt");
@@ -637,7 +664,8 @@ mod tests {
         let entries: Vec<_> = storage
             .read_dir(storage_path("internal-dir"))
             .expect("internal directory symlink should be readable")
-            .collect();
+            .collect::<Result<_, _>>()
+            .expect("entries");
         storage
             .read_file_at(storage_path("internal-file"), &mut writer, 0..6)
             .expect("internal file symlink should be readable");

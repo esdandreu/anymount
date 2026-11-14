@@ -1,5 +1,5 @@
 use super::native_storage::NativeStorage;
-use crate::domain::{WriteAt, WriteAtError};
+use crate::domain::{DirEntry, ReadDirError, WriteAt, WriteAtError};
 use crate::drivers::windows::placeholder_utils::{
     dehydrate_file, get_placeholder_info,
 };
@@ -109,31 +109,11 @@ impl SyncFilter for Callbacks {
         })?;
         let blob: Vec<u8> =
             request.path().into_os_string().into_encoded_bytes();
-        let mut placeholders: Vec<PlaceholderFile> = iter
-            .map(|entry| {
-                PlaceholderFile::new(entry.file_name())
-                    .metadata(
-                        (if entry.is_dir() {
-                            Metadata::directory()
-                        } else {
-                            Metadata::file()
-                        })
-                        .size(
-                            entry
-                                .size()
-                                .expect("native storage validates size"),
-                        )
-                        .accessed(
-                            system_time_to_file_time(entry.accessed().expect(
-                                "native storage validates access time",
-                            )),
-                        ),
-                    )
-                    .mark_in_sync()
-                    .overwrite()
-                    .blob(blob.clone())
-            })
-            .collect();
+        let mut placeholders =
+            collect_placeholders(iter, &blob).map_err(|e| {
+                self.emit_telemetry(format!("read_dir failed: {}", e));
+                cloud_filter::error::CloudErrorKind::Unsuccessful
+            })?;
         if let Err(e) = ticket.pass_with_placeholder(&mut placeholders) {
             self.emit_telemetry(format!(
                 "Failed to pass placeholders: {:?}",
@@ -264,6 +244,69 @@ impl SyncFilter for Callbacks {
                 }
             }
         }
+    }
+}
+
+fn collect_placeholders(
+    entries: impl Iterator<Item = Result<Box<dyn DirEntry>, ReadDirError>>,
+    blob: &[u8],
+) -> Result<Vec<PlaceholderFile>, ReadDirError> {
+    entries
+        .map(|entry| {
+            let entry = entry?;
+            Ok(PlaceholderFile::new(entry.file_name())
+                .metadata(
+                    (if entry.is_dir() {
+                        Metadata::directory()
+                    } else {
+                        Metadata::file()
+                    })
+                    .size(entry.size().expect("native storage validates size"))
+                    .accessed(system_time_to_file_time(
+                        entry
+                            .accessed()
+                            .expect("native storage validates access time"),
+                    )),
+                )
+                .mark_in_sync()
+                .overwrite()
+                .blob(blob.to_vec()))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::StorageEntry;
+
+    fn entry() -> Box<dyn DirEntry> {
+        Box::new(StorageEntry {
+            name: "note".into(),
+            is_directory: false,
+            size: Some(1),
+            accessed: Some(SystemTime::UNIX_EPOCH),
+        })
+    }
+
+    #[test]
+    fn collects_successful_placeholders() {
+        let placeholders = collect_placeholders(
+            vec![Ok(entry()), Ok(entry())].into_iter(),
+            b"root",
+        )
+        .expect("collect placeholders");
+        assert_eq!(placeholders.len(), 2);
+    }
+
+    #[test]
+    fn rejects_partial_placeholder_results() {
+        let result = collect_placeholders(
+            vec![Ok(entry()), Err(ReadDirError::Disconnected), Ok(entry())]
+                .into_iter(),
+            b"root",
+        );
+        assert!(matches!(result, Err(ReadDirError::Disconnected)));
     }
 }
 
