@@ -12,10 +12,8 @@ use super::started_authorization::{AuthStorageError, StartedAuthorization};
 
 #[typetag::serde(tag = "type")]
 #[async_trait(?Send)]
-pub trait StorageConfig: Send + Sync {
+pub trait StorageConfig: dyn_clone::DynClone + Send + Sync {
     async fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError>;
-
-    fn clone_config(&self) -> Box<dyn StorageConfig>;
 
     fn kind(&self) -> &'static str {
         std::any::type_name::<Self>()
@@ -32,6 +30,8 @@ pub trait StorageConfig: Send + Sync {
         Err(AuthStorageError::NotImplemented { kind: self.kind() })
     }
 }
+
+dyn_clone::clone_trait_object!(StorageConfig);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConnectStorageError {
@@ -247,9 +247,6 @@ mod test {
     #[typetag::serde(name = "test")]
     #[async_trait(?Send)]
     impl StorageConfig for TestStorageConfig {
-        fn clone_config(&self) -> Box<dyn StorageConfig> {
-            Box::new(self.clone())
-        }
         async fn connect(
             &self,
         ) -> Result<Box<dyn Storage>, ConnectStorageError> {
@@ -289,7 +286,12 @@ password = "secret"
             toml::to_string(&config).expect("serialize storage config");
         let restored: Box<dyn StorageConfig> = toml::from_str(&serialized)
             .expect("deserialize serialized storage config");
-        let cloned = restored.clone_config();
+        let cloned = restored.clone();
+        drop(restored);
+        assert_eq!(
+            toml::to_string(&cloned).expect("serialize cloned storage config"),
+            serialized
+        );
         let connection = cloned.connect().await.expect("connect test storage");
         assert!(matches!(
             connection.read_dir(StoragePath::root()).await,
