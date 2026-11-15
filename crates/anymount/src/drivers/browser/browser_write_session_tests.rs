@@ -18,9 +18,9 @@ fn handle() -> JsValue {
                 return {
             write: async bytes => {
                 h.writes++;
-                fail(h.rejectWrite);
                 const copy = Array.from(bytes);
                 if (h.holdWrite) await new Promise(resolve => h.releaseWrite = resolve);
+                fail(h.rejectWrite);
                 h.chunks.push(copy);
             },
             close: async () => {
@@ -219,6 +219,67 @@ async fn abort_waits_for_cleanup_and_drop_does_not_close() {
     dropped.write_all(b"uncommitted").await.expect("write");
     drop(dropped);
     assert_eq!(get(&handle, "closes").as_f64(), Some(0.0));
+    assert!(get(&handle, "committed").is_null());
+}
+
+#[wasm_bindgen_test]
+async fn abort_preserves_pending_write_denial_across_cancellation() {
+    for (hold, resume) in
+        [("holdWrite", "releaseWrite"), ("holdAbort", "releaseAbort")]
+    {
+        let handle = handle();
+        let workspace = BrowserWorkspace::new(
+            Rc::new(FileSystemAccessStorage::new(handle.clone())),
+            Some(handle.clone()),
+        );
+        workspace.connect(false).await.expect("connect");
+        let mut session =
+            workspace.start_write_file(path()).await.expect("start");
+        set(&handle, "rejectWrite", JsValue::from_str("NotAllowedError"));
+        set(&handle, hold, JsValue::TRUE);
+        session.write_all(b"discard").await.expect("accept write");
+
+        assert!(session.abort().now_or_never().is_none());
+        assert_eq!(get(&handle, "aborts").as_f64(), Some(1.0));
+        JsFuture::from(Promise::resolve(&JsValue::UNDEFINED))
+            .await
+            .expect("settle ready promises");
+        assert!(session.abort().now_or_never().is_none());
+        assert!(session.finish().await.is_err());
+        release(&handle, resume);
+        assert!(matches!(
+            session.abort().await,
+            Err(WriteFileError::PermissionDenied)
+        ));
+        assert!(!workspace.is_connected());
+        assert_eq!(Array::from(&get(&handle, "chunks")).length(), 0);
+        assert!(get(&handle, "committed").is_null());
+        session.abort().await.expect("repeat completed cleanup");
+        assert_eq!(get(&handle, "aborts").as_f64(), Some(1.0));
+    }
+}
+
+#[wasm_bindgen_test]
+async fn pending_write_denial_survives_cleanup_failure() {
+    let handle = handle();
+    let workspace = BrowserWorkspace::new(
+        Rc::new(FileSystemAccessStorage::new(handle.clone())),
+        Some(handle.clone()),
+    );
+    workspace.connect(false).await.expect("connect");
+    let mut session = workspace.start_write_file(path()).await.expect("start");
+    set(&handle, "rejectWrite", JsValue::from_str("NotAllowedError"));
+    set(&handle, "rejectAbort", JsValue::from_str("OperationError"));
+    session.write_all(b"discard").await.expect("accept write");
+
+    assert!(matches!(
+        session.abort().await,
+        Err(WriteFileError::PermissionDenied)
+    ));
+    assert!(!workspace.is_connected());
+    set(&handle, "rejectAbort", JsValue::UNDEFINED);
+    session.abort().await.expect("retry failed cleanup");
+    assert_eq!(get(&handle, "aborts").as_f64(), Some(2.0));
     assert!(get(&handle, "committed").is_null());
 }
 

@@ -32,6 +32,7 @@ pub struct BrowserWriteSession<'a> {
     storage: &'a FileSystemAccessStorage,
     writable: JsValue,
     pending: Option<JsFuture>,
+    aborting_write: Option<JsFuture>,
     state: State,
     failure: Option<WriteFileError>,
 }
@@ -45,6 +46,7 @@ impl<'a> BrowserWriteSession<'a> {
             storage,
             writable,
             pending: None,
+            aborting_write: None,
             state: State::Open,
             failure: None,
         }
@@ -188,12 +190,26 @@ impl WriteFileSession for BrowserWriteSession<'_> {
             return Err(closed());
         }
         if self.state != State::Aborting {
-            // The browser orders abort after any already-submitted write.
-            self.pending = None;
+            // Submit cleanup immediately, but retain the write's error.
+            if self.pending.is_some() {
+                self.aborting_write = self.pending.take();
+            }
             self.state = State::Sealed;
             self.failure = Some(closed());
             self.start("abort", &Array::new())?;
             self.state = State::Aborting;
+        }
+        let write_result = poll_fn(|cx| {
+            let Some(write) = &mut self.aborting_write else {
+                return Poll::Ready(Ok(()));
+            };
+            let result = std::task::ready!(Pin::new(write).poll(cx));
+            self.aborting_write = None;
+            Poll::Ready(result.map(|_| ()))
+        })
+        .await;
+        if let Err(error) = write_result {
+            self.failure = Some(self.storage.write_error(error));
         }
         let result = poll_fn(|cx| self.poll_pending(cx)).await;
         self.state = if result.is_ok() {
@@ -201,6 +217,9 @@ impl WriteFileSession for BrowserWriteSession<'_> {
         } else {
             State::Sealed
         };
+        if matches!(self.failure, Some(WriteFileError::PermissionDenied)) {
+            return Err(WriteFileError::PermissionDenied);
+        }
         result
     }
 }

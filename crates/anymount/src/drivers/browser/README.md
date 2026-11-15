@@ -10,15 +10,8 @@ It uses the File System Access API rather than creating an OS mount.
   - **Connected:** Permission is granted and workspace file operations are enabled.
   - **Disconnected:** The handle remains registered but file operations are disabled.
 
-The driver owns workspace connection state and browser permission checks.
-The built-in browser storage configuration is selected by its `kind()`; other
-storage configurations are connected through their normal storage interface.
+The driver manages workspace connections and browser permissions. Permission
+denials disconnect the workspace.
 
-Writes open an incremental session with at most one pending 64 KiB browser
-write. Flush waits for that write, and close seals input without committing.
-Only explicit `finish` closes the browser stream and commits the replacement.
-Callers must await `abort` after failure to clean up staged output; abort
-remains available after permission denial or workspace disconnection.
-Permission errors during writes, finalization, and cleanup disconnect the
-workspace. Dropping a session cannot await cleanup, and canceling finish after
-browser close has started cannot guarantee rollback.
+File writes use streaming sessions. Call `finish` to commit or await `abort`
+to discard staged changes. Dropping a session does not guarantee cleanup.
