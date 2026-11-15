@@ -5,42 +5,7 @@ use futures::{FutureExt, io::AsyncWriteExt};
 use js_sys::{Function, Reflect};
 use wasm_bindgen_test::wasm_bindgen_test;
 
-fn handle() -> JsValue {
-    Function::new_no_args(r#"
-        const h = { chunks: [], writes: 0, closes: 0, aborts: 0, committed: null };
-        const fail = name => { if (name) throw new DOMException('denied', name); };
-        h.queryPermission = async () => 'granted';
-        h.getFileHandle = async () => {
-            fail(h.rejectGetFileHandle);
-            if (h.holdStart) await new Promise(resolve => h.releaseStart = resolve);
-            return { createWritable: async () => {
-                fail(h.rejectCreateWritable);
-                return {
-            write: async bytes => {
-                h.writes++;
-                const copy = Array.from(bytes);
-                if (h.holdWrite) await new Promise(resolve => h.releaseWrite = resolve);
-                fail(h.rejectWrite);
-                h.chunks.push(copy);
-            },
-            close: async () => {
-                h.closes++;
-                fail(h.rejectClose);
-                if (h.holdClose) await new Promise(resolve => h.releaseClose = resolve);
-                h.committed = h.chunks.flat();
-            },
-            abort: async () => {
-                h.aborts++;
-                fail(h.rejectAbort);
-                if (h.holdAbort) await new Promise(resolve => h.releaseAbort = resolve);
-                h.chunks = [];
-            }
-                };
-            } };
-        };
-        return h;
-    "#).call0(&JsValue::NULL).expect("create browser fake")
-}
+use crate::test_utils::mocks::browser_file_system::handle;
 
 fn get(handle: &JsValue, key: &str) -> JsValue {
     Reflect::get(handle, &JsValue::from_str(key)).expect("fake field")

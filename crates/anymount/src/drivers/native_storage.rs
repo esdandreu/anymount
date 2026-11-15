@@ -1,9 +1,15 @@
 use crate::domain::{
     ConnectStorageError, DirEntry, ReadDirError, ReadFileAtError,
-    StorageConfig, StoragePath, WriteAt,
+    StorageConfig, StoragePath,
 };
-use futures::StreamExt;
-use std::{ops::Range, sync::mpsc};
+use futures::{StreamExt, io::AsyncWrite};
+use std::{
+    io::{self, Write},
+    ops::Range,
+    pin::Pin,
+    sync::mpsc,
+    task::{Context, Poll},
+};
 
 pub struct NativeStorage {
     requests: tokio::sync::mpsc::Sender<Request>,
@@ -74,25 +80,35 @@ impl Iterator for NativeDir {
 
 struct ChunkWriter {
     bytes: Vec<u8>,
-    start: u64,
     limit: usize,
 }
-impl WriteAt for ChunkWriter {
-    fn write_at(
-        &mut self,
+impl AsyncWrite for ChunkWriter {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        _: &mut Context<'_>,
         bytes: &[u8],
-        offset: u64,
-    ) -> Result<(), crate::domain::WriteAtError> {
-        if offset != self.start + self.bytes.len() as u64
-            || bytes.len() > self.limit - self.bytes.len()
-        {
-            return Err(crate::domain::WriteAtError::Failed {
-                offset,
-                message: "provider wrote outside requested range".into(),
-            });
+    ) -> Poll<io::Result<usize>> {
+        if bytes.len() > self.limit - self.bytes.len() {
+            return Poll::Ready(Err(io::Error::other(
+                "provider wrote outside requested range",
+            )));
         }
         self.bytes.extend_from_slice(bytes);
-        Ok(())
+        Poll::Ready(Ok(bytes.len()))
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+    ) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_close(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+    ) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
     }
 }
 impl NativeStorage {
@@ -176,7 +192,7 @@ impl NativeStorage {
                                 }
                             }
                             Request::ReadRange(path, offset, length, reply) => {
-                                let mut writer = ChunkWriter { bytes: Vec::new(), start: offset, limit: length };
+                                let mut writer = ChunkWriter { bytes: Vec::new(), limit: length };
                                 let result = storage
                                     .read_file_at(
                                         path,
@@ -236,10 +252,19 @@ impl NativeStorage {
             done: false,
         }))
     }
+    /// Copies a range into a synchronous native callback sink.
+    ///
+    /// The async provider runs on its owned worker. Source bytes are appended
+    /// sequentially without flushing the caller's sink.
+    ///
+    /// # Errors
+    ///
+    /// Returns provider, sink, or incomplete-range errors. Blocking an async
+    /// runtime is rejected.
     pub fn read_file_at(
         &self,
         path: StoragePath,
-        writer: &mut dyn WriteAt,
+        writer: &mut dyn Write,
         range: Range<u64>,
     ) -> Result<(), ReadFileAtError> {
         if tokio::runtime::Handle::try_current().is_ok() {
@@ -277,7 +302,7 @@ impl NativeStorage {
             if bytes.is_empty() {
                 return Err(ReadFileAtError::RangeNotSatisfiable);
             }
-            writer.write_at(&bytes, offset)?;
+            writer.write_all(&bytes).map_err(ReadFileAtError::Write)?;
             offset += bytes.len() as u64;
         }
         Ok(())
@@ -318,11 +343,7 @@ mod tests {
             }
         });
         let storage = NativeStorage { requests };
-        let mut writer = ChunkWriter {
-            bytes: Vec::new(),
-            start: 0,
-            limit: 1,
-        };
+        let mut writer = Vec::new();
         assert!(matches!(
             storage.read_file_at(StoragePath::root(), &mut writer, 0..1),
             Err(ReadFileAtError::Disconnected)
@@ -334,10 +355,7 @@ mod tests {
     fn preserves_range_and_writer_errors() {
         for error in [
             ReadFileAtError::RangeNotSatisfiable,
-            ReadFileAtError::WriteAt(crate::domain::WriteAtError::Failed {
-                offset: 0,
-                message: "write failed".into(),
-            }),
+            ReadFileAtError::Write(io::Error::other("write failed")),
         ] {
             let expected = std::mem::discriminant(&error);
             let (requests, mut receiver) = tokio::sync::mpsc::channel(1);
@@ -349,11 +367,7 @@ mod tests {
                 }
             });
             let storage = NativeStorage { requests };
-            let mut writer = ChunkWriter {
-                bytes: Vec::new(),
-                start: 0,
-                limit: 1,
-            };
+            let mut writer = Vec::new();
             let result =
                 storage.read_file_at(StoragePath::root(), &mut writer, 0..1);
             assert_eq!(
@@ -362,6 +376,52 @@ mod tests {
             );
             worker.join().expect("join worker");
         }
+    }
+
+    #[test]
+    fn callback_writes_ranges_at_the_current_sink_position() {
+        let (requests, mut receiver) = tokio::sync::mpsc::channel(1);
+        let worker = std::thread::spawn(move || {
+            if let Some(Request::ReadRange(_, offset, length, reply)) =
+                receiver.blocking_recv()
+            {
+                assert_eq!((offset, length), (10, 3));
+                let _ = reply.send(Ok(vec![1, 2, 3]));
+            }
+        });
+        let storage = NativeStorage { requests };
+        let mut writer = io::Cursor::new(vec![9, 9]);
+        writer.set_position(1);
+        storage
+            .read_file_at(StoragePath::root(), &mut writer, 10..13)
+            .expect("read range");
+        assert_eq!(writer.position(), 4);
+        assert_eq!(writer.into_inner(), [9, 1, 2, 3]);
+        worker.join().expect("join worker");
+    }
+
+    #[test]
+    fn callback_reports_write_zero_after_a_partial_write() {
+        let (requests, mut receiver) = tokio::sync::mpsc::channel(1);
+        let worker = std::thread::spawn(move || {
+            if let Some(Request::ReadRange(_, _, _, reply)) =
+                receiver.blocking_recv()
+            {
+                let _ = reply.send(Ok(vec![1, 2, 3]));
+            }
+        });
+        let storage = NativeStorage { requests };
+        let mut buffer = [0; 2];
+        let mut writer = io::Cursor::new(buffer.as_mut_slice());
+        let error = storage
+            .read_file_at(StoragePath::root(), &mut writer, 10..13)
+            .expect_err("bounded sink fills up");
+        let ReadFileAtError::Write(error) = error else {
+            panic!("expected sink I/O error")
+        };
+        assert_eq!(error.kind(), io::ErrorKind::WriteZero);
+        assert_eq!(buffer, [1, 2]);
+        worker.join().expect("join worker");
     }
 
     #[test]

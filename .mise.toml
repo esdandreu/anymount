@@ -8,6 +8,14 @@ _.file = [".env.default", ".env"]
 description = "Format code"
 run = "cargo fmt"
 
+[tasks.check]
+description = "Check the storage library for the selected target"
+run = "cargo check -p anymount"
+
+[tasks."test:browser"]
+description = "Run browser storage tests in Node.js"
+run = "wasm-pack test --node crates/anymount"
+
 [tasks.test]
 description = "Run tests"
 depends = ["lint"]

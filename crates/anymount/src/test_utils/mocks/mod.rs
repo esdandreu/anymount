@@ -1,3 +1,5 @@
+#[cfg(target_arch = "wasm32")]
+pub mod browser_file_system;
 mod bytes_writer;
 mod cannot_connect_storage_config;
 mod counting_writer;
@@ -8,6 +10,7 @@ mod no_op_driver;
 mod no_op_driver_config;
 mod no_op_mount;
 mod no_op_storage;
+mod recording_writer;
 mod short_storage;
 mod test_dir_entry;
 
@@ -23,5 +26,6 @@ pub use no_op_driver::NoOpDriver;
 pub use no_op_driver_config::NoOpDriverConfig;
 pub use no_op_mount::NoOpMount;
 pub use no_op_storage::NoOpStorage;
+pub use recording_writer::RecordingWriter;
 pub use short_storage::ShortStorage;
 pub use test_dir_entry::TestDirEntry;
