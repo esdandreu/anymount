@@ -4,6 +4,9 @@
 mod browser_driver_api;
 #[path = "browser_write_session.rs"]
 mod browser_write_session;
+#[cfg(test)]
+#[path = "test_utils/mod.rs"]
+mod test_utils;
 
 pub use browser_driver_api::BrowserDriverApi;
 
@@ -941,7 +944,7 @@ mod tests {
     #[wasm_bindgen_test]
     async fn browser_ranges_await_partial_pending_sinks_at_current_position() {
         use crate::domain::StoragePath;
-        use crate::drivers::browser::test_utils::handle;
+        use crate::drivers::browser::browser_driver::test_utils::handle;
         use crate::test_utils::mocks::FakeWriter;
 
         let storage = workspace(handle());
@@ -964,7 +967,7 @@ mod tests {
     #[wasm_bindgen_test]
     async fn browser_sink_errors_do_not_disconnect_or_finalize_the_sink() {
         use crate::domain::{ReadFileAtError, StoragePath};
-        use crate::drivers::browser::test_utils::handle;
+        use crate::drivers::browser::browser_driver::test_utils::handle;
         use crate::test_utils::mocks::FakeWriter;
 
         for zero in [false, true] {
@@ -1011,7 +1014,7 @@ mod tests {
     async fn browser_ranges_stage_directly_into_sessions_until_caller_finishes()
     {
         use crate::domain::StoragePath;
-        use crate::drivers::browser::test_utils::handle;
+        use crate::drivers::browser::browser_driver::test_utils::handle;
 
         for abort in [false, true] {
             let handle = handle();

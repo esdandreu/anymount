@@ -5,7 +5,7 @@ use futures::{FutureExt, io::AsyncWriteExt};
 use js_sys::{Function, Reflect};
 use wasm_bindgen_test::wasm_bindgen_test;
 
-use crate::drivers::browser::test_utils::handle;
+use crate::drivers::browser::browser_driver::test_utils::handle;
 
 fn get(handle: &JsValue, key: &str) -> JsValue {
     Reflect::get(handle, &JsValue::from_str(key)).expect("fake field")
