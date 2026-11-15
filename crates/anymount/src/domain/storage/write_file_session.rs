@@ -17,7 +17,7 @@ use futures::io::AsyncWrite;
 /// Dropping a session never intentionally commits, but cannot await cleanup:
 /// backend resources or staging data may remain. Await `abort` for cleanup.
 #[async_trait(?Send)]
-pub trait WriteSession: AsyncWrite + Unpin {
+pub trait WriteFileSession: AsyncWrite + Unpin {
     /// Finalizes all output, then commits the downstream file.
     ///
     /// # Errors
@@ -34,7 +34,7 @@ pub trait WriteSession: AsyncWrite + Unpin {
 }
 
 #[async_trait(?Send)]
-impl<T: WriteSession + ?Sized> WriteSession for Box<T> {
+impl<T: WriteFileSession + ?Sized> WriteFileSession for Box<T> {
     async fn finish(&mut self) -> Result<(), WriteFileError> {
         (**self).finish().await
     }
@@ -44,6 +44,7 @@ impl<T: WriteSession + ?Sized> WriteSession for Box<T> {
     }
 }
 
+/// A failure while writing, finishing, or aborting a file session.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum WriteFileError {
     #[error("storage operation is not supported")]
@@ -119,14 +120,22 @@ mod test {
     use futures::{FutureExt, io::AsyncWriteExt};
     use std::{cell::RefCell, rc::Rc};
 
+    async fn start_session(
+        storage: &dyn Storage,
+    ) -> Box<dyn WriteFileSession + '_> {
+        storage
+            .start_write_file(StoragePath::root())
+            .await
+            .expect("start session")
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn borrowed_non_send_sessions_write_incrementally_and_commit_explicitly()
      {
         let state = Rc::new(RefCell::new(WriteSessionState::default()));
         let storage: Box<dyn Storage + '_> =
             Box::new(MemoryWriteStorage(&state));
-        let mut session =
-            storage.open_write(StoragePath::root()).await.expect("open");
+        let mut session = start_session(&storage).await;
         assert_eq!(session.write(b"abcdef").await.expect("partial write"), 2);
         session
             .write_all(b"cdef")
@@ -161,11 +170,10 @@ mod test {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn abort_is_awaited_and_drop_does_not_commit() {
+    async fn abort_is_awaited_and_discards_staged_output() {
         let state = Rc::new(RefCell::new(WriteSessionState::default()));
         let storage = MemoryWriteStorage(&state);
-        let mut session =
-            storage.open_write(StoragePath::root()).await.expect("open");
+        let mut session = start_session(&storage).await;
         session.write_all(b"discard").await.expect("write");
         state.borrow_mut().delay_abort = true;
         assert!(session.abort().now_or_never().is_none());
@@ -177,9 +185,13 @@ mod test {
         assert!(state.borrow().staged.is_empty());
         assert!(session.write(b"late").await.is_err());
         assert!(state.borrow().committed.is_none());
+    }
 
-        let mut dropped =
-            storage.open_write(StoragePath::root()).await.expect("open");
+    #[tokio::test(flavor = "current_thread")]
+    async fn drop_does_not_commit() {
+        let state = Rc::new(RefCell::new(WriteSessionState::default()));
+        let storage = MemoryWriteStorage(&state);
+        let mut dropped = start_session(&storage).await;
         dropped.write_all(b"uncommitted").await.expect("write");
         drop(dropped);
         assert!(state.borrow().committed.is_none());
@@ -190,8 +202,7 @@ mod test {
         for failure in ["write", "finish", "abort"] {
             let state = Rc::new(RefCell::new(WriteSessionState::default()));
             let storage = MemoryWriteStorage(&state);
-            let mut session =
-                storage.open_write(StoragePath::root()).await.expect("open");
+            let mut session = start_session(&storage).await;
             match failure {
                 "write" => {
                     state.borrow_mut().fail_write = true;
@@ -218,8 +229,7 @@ mod test {
     async fn transforms_finalize_before_downstream_commit_even_after_close() {
         let state = Rc::new(RefCell::new(WriteSessionState::default()));
         let storage = MemoryWriteStorage(&state);
-        let inner =
-            storage.open_write(StoragePath::root()).await.expect("open");
+        let inner = start_session(&storage).await;
         let mut session = TrailerWriteSession::new(inner);
         session.write_all(b"body").await.expect("write");
         session.close().await.expect("seal");
@@ -248,8 +258,7 @@ mod test {
         for fail_downstream in [false, true] {
             let state = Rc::new(RefCell::new(WriteSessionState::default()));
             let storage = MemoryWriteStorage(&state);
-            let inner =
-                storage.open_write(StoragePath::root()).await.expect("open");
+            let inner = start_session(&storage).await;
             let mut session = TrailerWriteSession::new(Box::new(
                 TrailerWriteSession::new(inner),
             ));
@@ -277,8 +286,7 @@ mod test {
     async fn transform_finalization_failure_aborts_without_downstream_finish() {
         let state = Rc::new(RefCell::new(WriteSessionState::default()));
         let storage = MemoryWriteStorage(&state);
-        let inner =
-            storage.open_write(StoragePath::root()).await.expect("open");
+        let inner = start_session(&storage).await;
         let mut session = TrailerWriteSession::new(inner);
         session.write_all(b"body").await.expect("write");
         session.fail_finalize = true;

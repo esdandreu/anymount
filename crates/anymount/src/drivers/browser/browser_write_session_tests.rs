@@ -1,6 +1,6 @@
 use super::super::BrowserWorkspace;
 use super::*;
-use crate::domain::Storage;
+use crate::domain::{StartWriteFileError, Storage};
 use futures::{FutureExt, io::AsyncWriteExt};
 use js_sys::{Function, Reflect};
 use wasm_bindgen_test::wasm_bindgen_test;
@@ -10,7 +10,12 @@ fn handle() -> JsValue {
         const h = { chunks: [], writes: 0, closes: 0, aborts: 0, committed: null };
         const fail = name => { if (name) throw new DOMException('denied', name); };
         h.queryPermission = async () => 'granted';
-        h.getFileHandle = async () => ({ createWritable: async () => ({
+        h.getFileHandle = async () => {
+            fail(h.rejectGetFileHandle);
+            if (h.holdStart) await new Promise(resolve => h.releaseStart = resolve);
+            return { createWritable: async () => {
+                fail(h.rejectCreateWritable);
+                return {
             write: async bytes => {
                 h.writes++;
                 fail(h.rejectWrite);
@@ -30,7 +35,9 @@ fn handle() -> JsValue {
                 if (h.holdAbort) await new Promise(resolve => h.releaseAbort = resolve);
                 h.chunks = [];
             }
-        }) });
+                };
+            } };
+        };
         return h;
     "#).call0(&JsValue::NULL).expect("create browser fake")
 }
@@ -58,11 +65,78 @@ fn path() -> crate::domain::StoragePath {
 }
 
 #[wasm_bindgen_test]
+async fn start_failures_are_typed_and_only_permission_denials_disconnect() {
+    for phase in ["rejectGetFileHandle", "rejectCreateWritable"] {
+        for name in [
+            "NotAllowedError",
+            "NotFoundError",
+            "TypeMismatchError",
+            "OperationError",
+        ] {
+            let handle = handle();
+            let workspace = BrowserWorkspace::new(
+                Rc::new(FileSystemAccessStorage::new(handle.clone())),
+                Some(handle.clone()),
+            );
+            workspace.connect(false).await.expect("connect");
+            set(&handle, phase, JsValue::from_str(name));
+            let error = workspace
+                .start_write_file(path())
+                .await
+                .err()
+                .expect("start failure");
+            match error {
+                StartWriteFileError::PermissionDenied => {
+                    assert_eq!(name, "NotAllowedError");
+                }
+                StartWriteFileError::NotFound => {
+                    assert_eq!(name, "NotFoundError");
+                }
+                StartWriteFileError::NotAFile => {
+                    assert_eq!(name, "TypeMismatchError");
+                }
+                StartWriteFileError::Failed { message } => {
+                    assert_eq!(name, "OperationError");
+                    assert_eq!(message, "denied");
+                }
+                error => panic!("unexpected start error: {error:?}"),
+            }
+            assert_eq!(workspace.is_connected(), name != "NotAllowedError");
+            assert_eq!(get(&handle, "writes").as_f64(), Some(0.0));
+            assert_eq!(get(&handle, "closes").as_f64(), Some(0.0));
+            assert_eq!(get(&handle, "aborts").as_f64(), Some(0.0));
+        }
+    }
+}
+
+#[wasm_bindgen_test]
+async fn disconnection_during_start_aborts_the_new_session() {
+    let handle = handle();
+    set(&handle, "holdStart", JsValue::TRUE);
+    let workspace = BrowserWorkspace::new(
+        Rc::new(FileSystemAccessStorage::new(handle.clone())),
+        Some(handle.clone()),
+    );
+    workspace.connect(false).await.expect("connect");
+    let mut start = Box::pin(workspace.start_write_file(path()));
+    assert!(start.as_mut().now_or_never().is_none());
+    workspace.disconnect();
+    release(&handle, "releaseStart");
+    assert!(matches!(
+        start.await,
+        Err(StartWriteFileError::Disconnected)
+    ));
+    assert_eq!(get(&handle, "aborts").as_f64(), Some(1.0));
+    assert_eq!(get(&handle, "closes").as_f64(), Some(0.0));
+    assert!(get(&handle, "committed").is_null());
+}
+
+#[wasm_bindgen_test]
 async fn browser_writes_are_bounded_and_pending_writes_accept_no_extra_input() {
     let handle = handle();
     set(&handle, "holdWrite", JsValue::TRUE);
     let storage = FileSystemAccessStorage::new(handle.clone());
-    let mut session = storage.open_write(path()).await.expect("open");
+    let mut session = storage.start_write_file(path()).await.expect("start");
     let input = vec![42; WRITE_CHUNK_SIZE * 3];
     assert_eq!(
         session.write(&input).await.expect("first partial write"),
@@ -107,7 +181,7 @@ async fn finish_waits_for_close_and_resumes_without_duplicate_commit() {
         Some(handle.clone()),
     );
     storage.connect(false).await.expect("connect");
-    let mut session = storage.open_write(path()).await.expect("open");
+    let mut session = storage.start_write_file(path()).await.expect("start");
     session.write_all(b"content").await.expect("write");
     session.flush().await.expect("flush");
     assert!(session.finish().now_or_never().is_none());
@@ -129,7 +203,7 @@ async fn abort_waits_for_cleanup_and_drop_does_not_close() {
     let handle = handle();
     set(&handle, "holdAbort", JsValue::TRUE);
     let storage = FileSystemAccessStorage::new(handle.clone());
-    let mut session = storage.open_write(path()).await.expect("open");
+    let mut session = storage.start_write_file(path()).await.expect("start");
     session.write_all(b"discard").await.expect("write");
     session.flush().await.expect("flush");
     assert!(session.abort().now_or_never().is_none());
@@ -141,7 +215,7 @@ async fn abort_waits_for_cleanup_and_drop_does_not_close() {
     assert_eq!(get(&handle, "aborts").as_f64(), Some(1.0));
     assert!(session.write(b"late").await.is_err());
     drop(session);
-    let mut dropped = storage.open_write(path()).await.expect("open");
+    let mut dropped = storage.start_write_file(path()).await.expect("start");
     dropped.write_all(b"uncommitted").await.expect("write");
     drop(dropped);
     assert_eq!(get(&handle, "closes").as_f64(), Some(0.0));
@@ -152,7 +226,7 @@ async fn abort_waits_for_cleanup_and_drop_does_not_close() {
 async fn empty_file_finishes_without_a_write() {
     let handle = handle();
     let storage = FileSystemAccessStorage::new(handle.clone());
-    let mut session = storage.open_write(path()).await.expect("open");
+    let mut session = storage.start_write_file(path()).await.expect("start");
     assert_eq!(session.write(&[]).await.expect("empty write"), 0);
     session.finish().await.expect("finish empty file");
     assert_eq!(get(&handle, "writes").as_f64(), Some(0.0));
@@ -168,7 +242,8 @@ async fn permission_denials_disconnect_at_write_finish_and_abort() {
             Some(handle.clone()),
         );
         workspace.connect(false).await.expect("connect");
-        let mut session = workspace.open_write(path()).await.expect("open");
+        let mut session =
+            workspace.start_write_file(path()).await.expect("start");
         set(&handle, phase, JsValue::from_str("NotAllowedError"));
         match phase {
             "rejectWrite" => {
@@ -211,7 +286,7 @@ async fn disconnection_blocks_existing_sessions_and_pending_finish() {
         Some(handle.clone()),
     );
     workspace.connect(false).await.expect("connect");
-    let mut session = workspace.open_write(path()).await.expect("open");
+    let mut session = workspace.start_write_file(path()).await.expect("start");
     session.write_all(b"data").await.expect("accept write");
     assert!(session.finish().now_or_never().is_none());
     workspace.disconnect();
@@ -239,7 +314,7 @@ async fn disconnection_blocks_existing_sessions_and_pending_finish() {
 async fn synchronous_browser_failures_are_latched_without_committing() {
     let handle = handle();
     let storage = FileSystemAccessStorage::new(handle.clone());
-    let mut session = storage.open_write(path()).await.expect("open");
+    let mut session = storage.start_write_file(path()).await.expect("start");
     // A missing method throws before any promise can be created.
     let writable = Function::new_no_args("return { abort: async () => {} }")
         .call0(&JsValue::NULL)
@@ -265,7 +340,7 @@ async fn close_waits_for_pending_output_without_committing() {
         Some(handle.clone()),
     );
     storage.connect(false).await.expect("connect");
-    let mut session = storage.open_write(path()).await.expect("open");
+    let mut session = storage.start_write_file(path()).await.expect("start");
     session.write_all(b"data").await.expect("accept input");
     assert!(session.close().now_or_never().is_none());
     assert!(session.write(b"late").await.is_err());
@@ -278,6 +353,60 @@ async fn close_waits_for_pending_output_without_committing() {
         Uint8Array::new(&get(&handle, "committed")).to_vec(),
         b"data"
     );
+}
+
+#[wasm_bindgen_test]
+async fn text_helper_preserves_start_error_names_and_messages() {
+    for phase in ["rejectGetFileHandle", "rejectCreateWritable"] {
+        for (name, expected_name, message) in [
+            (
+                "NotAllowedError",
+                "NotAllowedError",
+                "storage permission denied",
+            ),
+            ("NotFoundError", "NotFoundError", "storage entry not found"),
+            ("TypeMismatchError", "Error", "path is not a file"),
+            (
+                "OperationError",
+                "Error",
+                "storage operation failed: denied",
+            ),
+        ] {
+            let handle = handle();
+            let api = super::super::BrowserDriverApi::new();
+            assert!(
+                api.restore_workspace(
+                    "workspace".into(),
+                    "workspace".into(),
+                    handle.clone(),
+                )
+                .await
+                .expect("restore workspace")
+            );
+            set(&handle, phase, JsValue::from_str(name));
+            let error = api
+                .write_text(
+                    "workspace".into(),
+                    "file.txt".into(),
+                    "content".into(),
+                )
+                .await
+                .expect_err("start failure")
+                .dyn_into::<js_sys::Error>()
+                .expect("JavaScript error");
+            assert_eq!(error.name(), expected_name);
+            assert_eq!(error.message(), message);
+            assert_eq!(
+                api.is_connected("workspace".into())
+                    .expect("connection state"),
+                name != "NotAllowedError"
+            );
+            assert_eq!(get(&handle, "writes").as_f64(), Some(0.0));
+            assert_eq!(get(&handle, "closes").as_f64(), Some(0.0));
+            assert_eq!(get(&handle, "aborts").as_f64(), Some(0.0));
+            assert!(get(&handle, "committed").is_null());
+        }
+    }
 }
 
 #[wasm_bindgen_test]

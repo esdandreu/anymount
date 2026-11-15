@@ -1,4 +1,6 @@
-use crate::domain::{Storage, StoragePath, WriteFileError, WriteSession};
+use crate::domain::{
+    StartWriteFileError, Storage, StoragePath, WriteFileError, WriteFileSession,
+};
 use async_trait::async_trait;
 use futures::{
     future::poll_fn,
@@ -42,10 +44,10 @@ pub struct MemoryWriteStorage<'a>(pub &'a Rc<RefCell<WriteSessionState>>);
 
 #[async_trait(?Send)]
 impl Storage for MemoryWriteStorage<'_> {
-    async fn open_write(
+    async fn start_write_file(
         &self,
         _: StoragePath,
-    ) -> Result<Box<dyn WriteSession + '_>, WriteFileError> {
+    ) -> Result<Box<dyn WriteFileSession + '_>, StartWriteFileError> {
         Ok(Box::new(MemoryWriteSession {
             state: self.0,
             sealed: false,
@@ -109,7 +111,7 @@ impl AsyncWrite for MemoryWriteSession<'_> {
 }
 
 #[async_trait(?Send)]
-impl WriteSession for MemoryWriteSession<'_> {
+impl WriteFileSession for MemoryWriteSession<'_> {
     async fn finish(&mut self) -> Result<(), WriteFileError> {
         if self.finished {
             return Ok(());
@@ -170,7 +172,7 @@ impl WriteSession for MemoryWriteSession<'_> {
 }
 
 pub struct TrailerWriteSession<'a> {
-    inner: Box<dyn WriteSession + 'a>,
+    inner: Box<dyn WriteFileSession + 'a>,
     trailer_offset: usize,
     sealed: bool,
     failed: bool,
@@ -179,7 +181,7 @@ pub struct TrailerWriteSession<'a> {
 }
 
 impl<'a> TrailerWriteSession<'a> {
-    pub fn new(inner: Box<dyn WriteSession + 'a>) -> Self {
+    pub fn new(inner: Box<dyn WriteFileSession + 'a>) -> Self {
         Self {
             inner,
             trailer_offset: 0,
@@ -231,7 +233,7 @@ impl AsyncWrite for TrailerWriteSession<'_> {
 }
 
 #[async_trait(?Send)]
-impl WriteSession for TrailerWriteSession<'_> {
+impl WriteFileSession for TrailerWriteSession<'_> {
     async fn finish(&mut self) -> Result<(), WriteFileError> {
         if self.finished {
             return Ok(());

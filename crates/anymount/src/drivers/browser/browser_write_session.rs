@@ -1,5 +1,5 @@
 use super::{FileSystemAccessStorage, call};
-use crate::domain::{WriteFileError, WriteSession};
+use crate::domain::{WriteFileError, WriteFileSession};
 use async_trait::async_trait;
 use futures::{Future, future::poll_fn, io::AsyncWrite};
 use js_sys::{Array, Promise, Uint8Array};
@@ -144,7 +144,7 @@ impl AsyncWrite for BrowserWriteSession<'_> {
 }
 
 #[async_trait(?Send)]
-impl WriteSession for BrowserWriteSession<'_> {
+impl WriteFileSession for BrowserWriteSession<'_> {
     async fn finish(&mut self) -> Result<(), WriteFileError> {
         if self.state == State::Finished {
             return Ok(());
@@ -206,7 +206,7 @@ impl WriteSession for BrowserWriteSession<'_> {
 }
 
 pub struct WorkspaceWriteSession<'a> {
-    inner: Box<dyn WriteSession + 'a>,
+    inner: Box<dyn WriteFileSession + 'a>,
     connected: Rc<Cell<bool>>,
     failure: Option<WriteFileError>,
     sealed: bool,
@@ -215,7 +215,7 @@ pub struct WorkspaceWriteSession<'a> {
 
 impl<'a> WorkspaceWriteSession<'a> {
     pub fn new(
-        inner: Box<dyn WriteSession + 'a>,
+        inner: Box<dyn WriteFileSession + 'a>,
         connected: Rc<Cell<bool>>,
     ) -> Self {
         Self {
@@ -227,11 +227,12 @@ impl<'a> WorkspaceWriteSession<'a> {
         }
     }
 
-    fn check(&self) -> Result<(), WriteFileError> {
+    fn check(&mut self) -> Result<(), WriteFileError> {
         if let Some(error) = &self.failure {
             return Err(error.clone());
         }
         if !self.connected.get() {
+            self.failure = Some(WriteFileError::Disconnected);
             return Err(WriteFileError::Disconnected);
         }
         Ok(())
@@ -258,7 +259,6 @@ impl AsyncWrite for WorkspaceWriteSession<'_> {
         bytes: &[u8],
     ) -> Poll<io::Result<usize>> {
         if let Err(error) = self.check() {
-            self.failure = Some(error.clone());
             return Poll::Ready(Err(error.into()));
         }
         if self.sealed {
@@ -273,7 +273,6 @@ impl AsyncWrite for WorkspaceWriteSession<'_> {
         cx: &mut Context<'_>,
     ) -> Poll<io::Result<()>> {
         if let Err(error) = self.check() {
-            self.failure = Some(error.clone());
             return Poll::Ready(Err(error.into()));
         }
         let result = Pin::new(&mut *self.inner).poll_flush(cx);
@@ -286,7 +285,6 @@ impl AsyncWrite for WorkspaceWriteSession<'_> {
     ) -> Poll<io::Result<()>> {
         self.sealed = true;
         if let Err(error) = self.check() {
-            self.failure = Some(error.clone());
             return Poll::Ready(Err(error.into()));
         }
         let result = Pin::new(&mut *self.inner).poll_close(cx);
@@ -295,16 +293,13 @@ impl AsyncWrite for WorkspaceWriteSession<'_> {
 }
 
 #[async_trait(?Send)]
-impl WriteSession for WorkspaceWriteSession<'_> {
+impl WriteFileSession for WorkspaceWriteSession<'_> {
     async fn finish(&mut self) -> Result<(), WriteFileError> {
         self.sealed = true;
         if self.finished {
             return Ok(());
         }
-        if let Err(error) = self.check() {
-            self.failure = Some(error.clone());
-            return Err(error);
-        }
+        self.check()?;
         let result = {
             let connected = &self.connected;
             let mut finish = self.inner.finish();

@@ -115,7 +115,9 @@ trait. Each storage implementation defines its own entry type.
 Storage configurations implement `Clone`; boxed configurations can be cloned
 when a driver needs to move one into an owned worker.
 
-Writable storage opens a `WriteSession` through `Storage::open_write`.
+Writable storage starts a `WriteFileSession` through `Storage::start_write_file`.
+Startup failures return `StartWriteFileError`; session failures use
+`WriteFileError`.
 Sessions implement `futures::io::AsyncWrite` with incremental backpressure;
 neither flush nor close commits a file. Close seals input. Call `finish` to
 finalize any transforming wrappers before committing downstream, or await

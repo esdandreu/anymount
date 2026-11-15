@@ -1,9 +1,9 @@
 mod path;
-mod write_session;
+mod write_file_session;
 
 pub use path::{InvalidStoragePath, StoragePath};
 #[doc(inline)]
-pub use write_session::{WriteFileError, WriteSession};
+pub use write_file_session::{WriteFileError, WriteFileSession};
 
 use std::{ops::Range, pin::Pin, time::SystemTime};
 
@@ -67,19 +67,19 @@ pub trait Storage {
     ) -> Result<u64, ReadFileAtError> {
         Err(ReadFileAtError::NotSupported)
     }
-    /// Opens a streaming replacement for a file.
+    /// Starts a streaming replacement for a file.
     ///
     /// The session may borrow this storage and need not be `Send`. Writes and
     /// flushes do not commit; callers must finish or explicitly abort it.
     ///
     /// # Errors
     ///
-    /// Returns an error if writing is unsupported or the file cannot be opened.
-    async fn open_write(
+    /// Returns an error if writing is unsupported or the session cannot start.
+    async fn start_write_file(
         &self,
         _path: StoragePath,
-    ) -> Result<Box<dyn WriteSession + '_>, WriteFileError> {
-        Err(WriteFileError::NotSupported)
+    ) -> Result<Box<dyn WriteFileSession + '_>, StartWriteFileError> {
+        Err(StartWriteFileError::NotSupported)
     }
 }
 
@@ -99,11 +99,11 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
     ) -> Result<u64, ReadFileAtError> {
         (**self).read_file_at(path, writer, range).await
     }
-    async fn open_write(
+    async fn start_write_file(
         &self,
         path: StoragePath,
-    ) -> Result<Box<dyn WriteSession + '_>, WriteFileError> {
-        (**self).open_write(path).await
+    ) -> Result<Box<dyn WriteFileSession + '_>, StartWriteFileError> {
+        (**self).start_write_file(path).await
     }
 }
 
@@ -199,6 +199,27 @@ pub enum ReadFileAtError {
     Unknown { message: String },
 }
 
+/// A failure to start a file write session.
+#[derive(Debug, thiserror::Error)]
+pub enum StartWriteFileError {
+    #[error("storage operation is not supported")]
+    NotSupported,
+    #[error("storage entry not found")]
+    NotFound,
+    #[error("path is not a directory")]
+    NotADirectory,
+    #[error("path is not a file")]
+    NotAFile,
+    #[error("storage permission denied")]
+    PermissionDenied,
+    #[error("storage is disconnected")]
+    Disconnected,
+    #[error("storage is unavailable: {message}")]
+    Unavailable { message: String },
+    #[error("storage operation failed: {message}")]
+    Failed { message: String },
+}
+
 impl From<std::io::Error> for ReadFileAtError {
     fn from(source: std::io::Error) -> Self {
         match source.kind() {
@@ -222,8 +243,8 @@ mod test {
     async fn writes_are_unsupported_by_default() {
         let storage: Box<dyn Storage> = Box::new(NoOpStorage);
         assert!(matches!(
-            storage.open_write(StoragePath::root()).await,
-            Err(WriteFileError::NotSupported)
+            storage.start_write_file(StoragePath::root()).await,
+            Err(StartWriteFileError::NotSupported)
         ));
     }
 
