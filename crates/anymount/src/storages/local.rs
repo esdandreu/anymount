@@ -368,7 +368,7 @@ mod tests {
     async fn large_sparse_reads_are_chunked_and_writer_errors_stop_reads() {
         let dir = TempDir::new().expect("temporary directory");
         let start = 1_u64 << 40;
-        let _file = crate::drivers::create_sparse_file(
+        let _file = crate::test_utils::create_sparse_file(
             &dir.path().join("sparse"),
             start + 131_073,
         )

@@ -141,6 +141,9 @@ fn allowed_attribute(path: &Path, meta: &Meta) -> bool {
                 }
                 _ => false,
             },
+            "crates/anymount/src/test_utils/create_sparse_file.rs" => {
+                matches!(&predicate, Meta::Path(p) if p.is_ident("windows"))
+            }
             "crates/anymount/src/storages/local.rs" => {
                 matches!(&predicate, Meta::Path(p) if p.is_ident("unix") || p.is_ident("windows"))
             }
@@ -180,6 +183,19 @@ fn rejects_cfg_even_in_inactive_code() {
     assert_eq!(
         check_source(Path::new("crates/anymount/src/read_dir.rs"), source).unwrap(),
         2
+    );
+}
+
+#[test]
+fn sparse_file_fixture_allows_only_windows_setup() {
+    let path = Path::new("crates/anymount/src/test_utils/create_sparse_file.rs");
+    assert_eq!(
+        check_source(path, "fn f() { #[cfg(windows)] {} }").unwrap(),
+        0
+    );
+    assert_eq!(
+        check_source(path, "fn f() { #[cfg(unix)] {} }").unwrap(),
+        1
     );
 }
 
