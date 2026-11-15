@@ -2,12 +2,18 @@ use std::path::PathBuf;
 
 use crate::domain::{Config, ConfigRepository};
 
+mod config_file_persistence;
+mod native_configuration;
 mod read_config;
+
+#[doc(inline)]
+pub use config_file_persistence::ConfigFilePersistence;
+#[doc(inline)]
+pub use native_configuration::NativeConfiguration;
 
 use read_config::{ReadConfigError, read_config};
 
-/// A configuration repository that reads configuration from files within a
-/// folder. The name of the file determines the name of the configuration.
+/// Reads named configurations and preserves their format when saving credentials.
 #[derive(Debug, Clone)]
 pub struct ConfigDir {
     path: PathBuf,
@@ -17,6 +23,18 @@ impl ConfigDir {
     /// Creates a repository for an explicit configuration directory.
     pub fn new(path: PathBuf) -> Self {
         Self { path }
+    }
+
+    /// Opens persistence for an existing named configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns a save error for missing, ambiguous, or unreadable records.
+    pub fn persistence(
+        &self,
+        name: &str,
+    ) -> Result<ConfigFilePersistence, crate::domain::HostSaveError> {
+        ConfigFilePersistence::open(&self.path, name)
     }
 }
 
@@ -171,6 +189,34 @@ storage:
             }
             Err(error) => panic!("unexpected connection error: {error}"),
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn retains_a_host_session_for_a_named_onedrive_record() {
+        let directory = TempDir::new().expect("temporary directory");
+        let path = directory.path().join("drive.json");
+        let original = r#"{
+            "path": "/mnt/drive",
+            "storage": {
+                "type": "onedrive",
+                "root": "/documents",
+                "endpoint": "https://graph.microsoft.com/v1.0",
+                "access_token": "opaque-access-only"
+            }
+        }"#;
+        std::fs::write(&path, original).expect("write named record");
+        let repository = ConfigDir::new(directory.path().to_path_buf());
+        let config = repository.find("drive").expect("load named record");
+        let session =
+            config.mount.session.as_ref().expect("host-owned session");
+        let _first = session.connect().await.expect("first connection");
+        let _second = session.connect().await.expect("second connection");
+        assert_eq!(session.save_status(), crate::domain::SaveStatus::Clean);
+        assert!(session.authorization().pending_update().is_none());
+        assert_eq!(
+            std::fs::read_to_string(path).expect("read original"),
+            original
+        );
     }
     #[test]
     #[traced_test]

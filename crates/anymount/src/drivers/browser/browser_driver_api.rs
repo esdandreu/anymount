@@ -6,6 +6,7 @@ use crate::domain::{
     Driver, Mount, MountError, StartWriteFileError, Storage, StoragePath,
     WriteFileError,
 };
+use crate::drivers::browser::OneDriveBrowserApi;
 use futures::io::AsyncWriteExt;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -25,6 +26,27 @@ impl BrowserDriverApi {
         Self {
             driver: BrowserDriver::default(),
         }
+    }
+
+    /// Mounts a workspace sharing the host's existing OneDrive authorization.
+    ///
+    /// # Errors
+    ///
+    /// Returns a sign-in error when the shared session has no credentials.
+    pub fn mount_onedrive(
+        &self,
+        name: String,
+        path: String,
+        authorization: &OneDriveBrowserApi,
+    ) -> Result<(), JsValue> {
+        let storage = authorization.session().connect().map_err(|_| {
+            let error = js_sys::Error::new("sign-in is required");
+            error.set_name("SignInRequiredError");
+            JsValue::from(error)
+        })?;
+        self.driver
+            .register(name, PathBuf::from(path), Rc::new(storage), None);
+        Ok(())
     }
 
     /// Selects a directory and registers it as a browser workspace.

@@ -9,9 +9,8 @@ use std::{ops::Range, pin::Pin, time::SystemTime};
 
 use futures::Stream;
 
+use super::AuthorizationError;
 use async_trait::async_trait;
-
-use super::started_authorization::{AuthStorageError, StartedAuthorization};
 
 #[typetag::serde(tag = "type")]
 #[async_trait(?Send)]
@@ -20,17 +19,6 @@ pub trait StorageConfig: dyn_clone::DynClone + Send + Sync {
 
     fn kind(&self) -> &'static str {
         std::any::type_name::<Self>()
-    }
-
-    /// Starts authorization for this storage configuration.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when authorization cannot be started.
-    fn start_authorization(
-        self: Box<Self>,
-    ) -> Result<Box<dyn StartedAuthorization>, AuthStorageError> {
-        Err(AuthStorageError::NotImplemented { kind: self.kind() })
     }
 }
 
@@ -122,6 +110,8 @@ pub trait WriteAt {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReadDirError {
+    #[error(transparent)]
+    Authorization(#[from] AuthorizationError),
     #[error("invalid storage path")]
     InvalidPath(#[from] InvalidStoragePath),
 
@@ -168,6 +158,8 @@ pub enum WriteAtError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReadFileAtError {
+    #[error(transparent)]
+    Authorization(#[from] AuthorizationError),
     #[error("invalid storage path")]
     InvalidPath(#[from] InvalidStoragePath),
 
@@ -271,21 +263,6 @@ mod test {
         ) -> Result<Box<dyn Storage>, ConnectStorageError> {
             Ok(Box::new(TestStorageConnection {}))
         }
-    }
-
-    #[test]
-    fn authorization_is_not_implemented_by_default() {
-        let config = Box::new(TestStorageConfig {
-            endpoint: None,
-            bucket: "documents".to_owned(),
-            username: "user".to_owned(),
-            password: "secret".to_owned(),
-        });
-
-        assert!(matches!(
-            config.start_authorization(),
-            Err(AuthStorageError::NotImplemented { .. })
-        ));
     }
 
     #[tokio::test(flavor = "current_thread")]

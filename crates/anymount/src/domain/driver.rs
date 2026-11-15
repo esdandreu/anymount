@@ -70,6 +70,7 @@ mod tests {
             name: "local".to_owned(),
             path: PathBuf::from("/"),
             storage: Box::new(EmptyStorageConfig),
+            session: None,
         };
         let mount = driver.mount(&config).await.expect("mount should succeed");
         mount.connect().await.expect("connect should succeed");
@@ -100,6 +101,7 @@ mod tests {
             name: "test".to_owned(),
             path: PathBuf::from("/tmp/test"),
             storage: Box::new(EmptyStorageConfig),
+            session: None,
         };
         let mount = driver.mount(&config).await.expect("mount should succeed");
         mount.connect().await.expect("mount should connect");

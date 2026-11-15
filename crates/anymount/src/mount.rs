@@ -1,7 +1,14 @@
 use crate::domain::{Config, Mount};
 use crate::drivers::{NoDefaultDriver, init_driver};
 
-pub async fn mount(config: Config) -> Result<Box<dyn Mount>, MountError> {
+/// Mounts a retained host-owned configuration.
+///
+/// Borrowing preserves its shared authorization session across reconnects.
+///
+/// # Errors
+///
+/// Returns an error if driver selection, storage connection, or mounting fails.
+pub async fn mount(config: &Config) -> Result<Box<dyn Mount>, MountError> {
     let driver = init_driver(config.driver.as_deref())?;
     driver.mount(&config.mount).await.map_err(MountError::from)
 }
@@ -30,10 +37,11 @@ mod tests {
                 name: "workspace".to_owned(),
                 path: PathBuf::from("workspace"),
                 storage: Box::new(EmptyStorageConfig),
+                session: None,
             },
         };
 
-        let mount = super::mount(config).await.expect("mount should succeed");
+        let mount = super::mount(&config).await.expect("mount should succeed");
 
         assert_eq!(mount.name(), "no-op");
     }

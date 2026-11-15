@@ -233,12 +233,15 @@ impl Driver for BrowserDriver {
             let handle = storage.handle.clone();
             (Rc::new(storage), Some(handle))
         } else {
-            let storage = config.storage.connect().await.map_err(|error| {
-                MountError::CannotMountAtPath {
+            let connection = match &config.session {
+                Some(session) => session.connect().await,
+                None => config.storage.connect().await,
+            };
+            let storage =
+                connection.map_err(|error| MountError::CannotMountAtPath {
                     path: config.path.clone(),
                     message: error.to_string(),
-                }
-            })?;
+                })?;
             (Rc::from(storage), None)
         };
         Ok(Box::new(self.register(
@@ -748,9 +751,10 @@ mod tests {
                 name: "workspace".to_owned(),
                 path: PathBuf::from("workspace"),
                 storage,
+                session: None,
             },
         };
-        let mount = crate::mount(config).await.expect("mount workspace");
+        let mount = crate::mount(&config).await.expect("mount workspace");
 
         assert_eq!(mount.name(), "workspace");
         assert!(!mount.is_connected());
@@ -782,6 +786,7 @@ mod tests {
             name: "other".into(),
             path: PathBuf::from("other"),
             storage: Box::new(EmptyStorageConfig),
+            session: None,
         };
         let mount = driver.mount(&config).await.expect("mount");
         assert!(mount.is_connected());

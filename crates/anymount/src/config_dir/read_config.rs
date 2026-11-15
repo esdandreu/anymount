@@ -4,6 +4,7 @@ use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
+use super::{ConfigFilePersistence, NativeConfiguration};
 use crate::domain::DriverConfig;
 use crate::domain::{Config, MountConfig, StorageConfig};
 
@@ -14,11 +15,20 @@ pub fn read_config(path: &Path) -> Result<Config, ReadConfigError> {
         .ok_or(ReadConfigError::NotAConfigFile)?
         .to_owned();
     let content = read_config_file(path)?;
+    let persistence = ConfigFilePersistence::open(
+        path.parent().ok_or(ReadConfigError::NotAConfigFile)?,
+        &name,
+    )
+    .map_err(|_| ReadConfigError::CannotInitializeSession)?;
+    let session =
+        NativeConfiguration::for_storage(content.storage.as_ref(), persistence)
+            .map_err(|_| ReadConfigError::CannotInitializeSession)?;
     Ok(Config {
         mount: MountConfig {
             name,
             path: content.path,
             storage: content.storage,
+            session,
         },
         driver: content.driver,
     })
@@ -31,12 +41,14 @@ fn read_config_file(path: &Path) -> Result<ConfigFileContent, ReadConfigError> {
     let mut contents = String::new();
     file.read_to_string(&mut contents)
         .map_err(|source| ReadConfigError::CannotReadFile { source })?;
-    format
-        .deserialize(&contents)
-        .map_err(|message| ReadConfigError::CannotDeserialize { message })
+    format.deserialize(&contents).map_err(|_| {
+        ReadConfigError::CannotDeserialize {
+            message: "invalid configuration".to_owned(),
+        }
+    })
 }
 
-fn open_config_file(path: &Path) -> Result<File, ReadConfigError> {
+pub fn open_config_file(path: &Path) -> Result<File, ReadConfigError> {
     let file = File::open(path)
         .map_err(|source| ReadConfigError::CannotReadFile { source })?;
 
@@ -88,15 +100,11 @@ impl ConfigFormat {
         }
     }
 
-    fn deserialize(&self, contents: &str) -> Result<ConfigFileContent, String> {
+    fn deserialize(&self, contents: &str) -> Result<ConfigFileContent, ()> {
         match self {
-            Self::Toml => {
-                toml::from_str(contents).map_err(|error| error.to_string())
-            }
-            Self::Json => serde_json::from_str(contents)
-                .map_err(|error| error.to_string()),
-            Self::Yaml => serde_yaml::from_str(contents)
-                .map_err(|error| error.to_string()),
+            Self::Toml => toml::from_str(contents).map_err(|_| ()),
+            Self::Json => serde_json::from_str(contents).map_err(|_| ()),
+            Self::Yaml => serde_yaml::from_str(contents).map_err(|_| ()),
         }
     }
 }
@@ -121,6 +129,9 @@ pub enum ReadConfigError {
 
     #[error("failed to deserialize configuration: {message}")]
     CannotDeserialize { message: String },
+
+    #[error("failed to initialize configuration session")]
+    CannotInitializeSession,
 }
 
 #[cfg(test)]
@@ -159,8 +170,7 @@ key = "value"
 
         match read_config_file(&path) {
             Err(ReadConfigError::CannotDeserialize { message }) => {
-                assert!(message.starts_with("TOML parse error"));
-                assert!(message.contains("unknown variant"));
+                assert_eq!(message, "invalid configuration");
             }
             Err(other) => panic!("expected deserialize error, got {other:?}"),
             Ok(_) => panic!("expected failure"),
@@ -209,5 +219,49 @@ error_message = "symlink"
         symlink(&target, &link).expect("create symlink");
 
         assert!(read_config_file(&link).is_ok());
+    }
+    #[test]
+    fn parse_errors_do_not_expose_configuration_secrets() {
+        let directory = TempDir::new().expect("temporary directory");
+        let path = directory.path().join("drive.toml");
+        std::fs::write(&path, "access_token = sentinel-secret")
+            .expect("write invalid configuration");
+        let error = match read_config_file(&path) {
+            Err(error) => error,
+            Ok(_) => panic!("expected parse failure"),
+        };
+        assert!(!format!("{error:?} {error}").contains("sentinel-secret"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn saved_credentials_have_owner_only_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = TempDir::new().expect("temporary directory");
+        let path = directory.path().join("demo.json");
+        std::fs::write(
+            &path,
+            r#"{"path":"/mnt/demo","storage":{"type":"onedrive"}}"#,
+        )
+        .expect("write config");
+        let storage = serde_json::from_value::<
+            crate::storages::onedrive::OneDriveConfig,
+        >(serde_json::json!({
+            "access_token": "replacement-access",
+            "root": "documents",
+            "endpoint": "https://graph.microsoft.com/v1.0"
+        }))
+        .expect("configuration");
+        ConfigFilePersistence::open(directory.path(), "demo")
+            .expect("open record")
+            .save_storage(&storage)
+            .expect("save credentials");
+        assert_eq!(
+            std::fs::metadata(path)
+                .expect("metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
     }
 }
