@@ -1,16 +1,14 @@
-#[cfg(target_arch = "wasm32")]
-pub mod browser_file_system;
 mod bytes_writer;
 mod cannot_connect_storage_config;
 mod counting_writer;
 mod empty_storage_config;
+mod fake_writer;
 mod memory_write_storage;
 mod mock_storage;
 mod no_op_driver;
 mod no_op_driver_config;
 mod no_op_mount;
 mod no_op_storage;
-mod recording_writer;
 mod short_storage;
 mod test_dir_entry;
 
@@ -18,6 +16,7 @@ pub use bytes_writer::BytesWriter;
 pub use cannot_connect_storage_config::CannotConnectStorageConfig;
 pub use counting_writer::CountingWriter;
 pub use empty_storage_config::EmptyStorageConfig;
+pub use fake_writer::FakeWriter;
 pub use memory_write_storage::{
     MemoryWriteStorage, TrailerWriteSession, WriteSessionState,
 };
@@ -26,6 +25,5 @@ pub use no_op_driver::NoOpDriver;
 pub use no_op_driver_config::NoOpDriverConfig;
 pub use no_op_mount::NoOpMount;
 pub use no_op_storage::NoOpStorage;
-pub use recording_writer::RecordingWriter;
 pub use short_storage::ShortStorage;
 pub use test_dir_entry::TestDirEntry;

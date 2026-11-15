@@ -572,7 +572,7 @@ impl<T: BearerToken, F: HttpGet> Storage for OneDriveStorage<T, F> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::mocks::{BytesWriter, RecordingWriter};
+    use crate::test_utils::mocks::{BytesWriter, FakeWriter};
 
     type DefaultStorage = OneDriveStorage<OneDriveTokenSource, UreqHttpGet>;
 
@@ -853,7 +853,7 @@ endpoint = "https://graph.microsoft.com/v1.0"
     async fn async_range_returns_backend_bytes_and_rejects_invalid_ranges() {
         let storage = storage_with_response(206, &[1, 2, 3]);
         let path = storage_path("f");
-        let mut writer = RecordingWriter::new();
+        let mut writer = FakeWriter::new();
         let count =
             Storage::read_file_at(&storage, path.clone(), &mut writer, 10..12)
                 .await
@@ -870,7 +870,7 @@ endpoint = "https://graph.microsoft.com/v1.0"
     #[tokio::test(flavor = "current_thread")]
     async fn range_reads_honor_pending_partial_writes_and_current_position() {
         let storage = storage_with_response(206, b"2345");
-        let mut writer = RecordingWriter::new();
+        let mut writer = FakeWriter::new();
         writer.bytes.extend_from_slice(b"prefix:");
         writer.max_write = 1;
         writer.pending = true;
@@ -892,7 +892,7 @@ endpoint = "https://graph.microsoft.com/v1.0"
     async fn range_reads_forward_sink_io_errors_and_zero_writes() {
         let storage = storage_with_response(206, b"2345");
         for zero in [false, true] {
-            let mut writer = RecordingWriter::new();
+            let mut writer = FakeWriter::new();
             writer.pending = true;
             writer.max_write = 1;
             let expected = if zero {
@@ -931,7 +931,7 @@ endpoint = "https://graph.microsoft.com/v1.0"
                 body: body.clone(),
             }),
         };
-        let mut writer = RecordingWriter::new();
+        let mut writer = FakeWriter::new();
         storage
             .read_file_at(storage_path("f"), &mut writer, 0..5000)
             .await
@@ -949,7 +949,7 @@ endpoint = "https://graph.microsoft.com/v1.0"
             token: std::sync::Arc::new(StubToken("test".into())),
             fetch: std::sync::Arc::new(MockHttpGet { status: 206, body }),
         };
-        let mut writer = RecordingWriter::new();
+        let mut writer = FakeWriter::new();
         storage
             .read_file_at(storage_path("f"), &mut writer, 0..5000)
             .await

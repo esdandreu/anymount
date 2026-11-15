@@ -6,7 +6,7 @@ use std::{
 };
 
 #[derive(Debug)]
-pub struct RecordingWriter {
+pub struct FakeWriter {
     pub bytes: Vec<u8>,
     pub max_write: usize,
     pub pending: bool,
@@ -18,7 +18,7 @@ pub struct RecordingWriter {
     ready: bool,
 }
 
-impl RecordingWriter {
+impl FakeWriter {
     pub fn new() -> Self {
         Self {
             bytes: Vec::new(),
@@ -42,7 +42,7 @@ impl RecordingWriter {
     }
 }
 
-impl AsyncWrite for RecordingWriter {
+impl AsyncWrite for FakeWriter {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -74,7 +74,7 @@ impl AsyncWrite for RecordingWriter {
     }
 }
 
-impl io::Write for RecordingWriter {
+impl io::Write for FakeWriter {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         if self
             .fail_after
@@ -102,7 +102,7 @@ impl io::Write for RecordingWriter {
     }
 }
 
-impl Default for RecordingWriter {
+impl Default for FakeWriter {
     fn default() -> Self {
         Self::new()
     }

@@ -941,14 +941,13 @@ mod tests {
     #[wasm_bindgen_test]
     async fn browser_ranges_await_partial_pending_sinks_at_current_position() {
         use crate::domain::StoragePath;
-        use crate::test_utils::mocks::{
-            RecordingWriter, browser_file_system::handle,
-        };
+        use crate::drivers::browser::test_utils::handle;
+        use crate::test_utils::mocks::FakeWriter;
 
         let storage = workspace(handle());
         storage.connect(false).await.expect("connect");
         let path = StoragePath::try_from(PathBuf::from("file")).expect("path");
-        let mut writer = RecordingWriter::new();
+        let mut writer = FakeWriter::new();
         writer.bytes.push(9);
         writer.max_write = 2;
         writer.pending = true;
@@ -965,9 +964,8 @@ mod tests {
     #[wasm_bindgen_test]
     async fn browser_sink_errors_do_not_disconnect_or_finalize_the_sink() {
         use crate::domain::{ReadFileAtError, StoragePath};
-        use crate::test_utils::mocks::{
-            RecordingWriter, browser_file_system::handle,
-        };
+        use crate::drivers::browser::test_utils::handle;
+        use crate::test_utils::mocks::FakeWriter;
 
         for zero in [false, true] {
             let handle = handle();
@@ -975,7 +973,7 @@ mod tests {
             storage.connect(false).await.expect("connect");
             let path =
                 StoragePath::try_from(PathBuf::from("file")).expect("path");
-            let mut writer = RecordingWriter::new();
+            let mut writer = FakeWriter::new();
             writer.pending = true;
             if zero {
                 writer.zero_after = Some(2);
@@ -1013,7 +1011,7 @@ mod tests {
     async fn browser_ranges_stage_directly_into_sessions_until_caller_finishes()
     {
         use crate::domain::StoragePath;
-        use crate::test_utils::mocks::browser_file_system::handle;
+        use crate::drivers::browser::test_utils::handle;
 
         for abort in [false, true] {
             let handle = handle();

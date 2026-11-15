@@ -215,7 +215,7 @@ impl Storage for LocalStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::mocks::RecordingWriter;
+    use crate::test_utils::mocks::FakeWriter;
     use crate::{read_dir, read_file_at};
     use tempfile::TempDir;
 
@@ -242,14 +242,14 @@ mod tests {
             .expect("entry");
         assert_eq!(entry.size(), Some(4));
         let path = storage_path("note");
-        let mut writer = RecordingWriter::new();
+        let mut writer = FakeWriter::new();
         let count =
             Storage::read_file_at(&storage, path.clone(), &mut writer, 1..3)
                 .await
                 .expect("range");
         assert_eq!(count, 2);
         assert_eq!(writer.flat_bytes(), [1, 254]);
-        let mut writer = RecordingWriter::new();
+        let mut writer = FakeWriter::new();
         assert_eq!(
             Storage::read_file_at(&storage, path.clone(), &mut writer, 3..7)
                 .await
@@ -277,7 +277,7 @@ mod tests {
             .expect("write");
         let storage =
             LocalStorage::new(dir.path().to_path_buf()).with_chunk_size(3);
-        let mut writer = RecordingWriter::new();
+        let mut writer = FakeWriter::new();
         writer.bytes.push(9);
         writer.max_write = 1;
         writer.pending = true;
@@ -307,7 +307,7 @@ mod tests {
         let storage =
             LocalStorage::new(dir.path().to_path_buf()).with_chunk_size(3);
         for zero in [false, true] {
-            let mut writer = RecordingWriter::new();
+            let mut writer = FakeWriter::new();
             writer.max_write = 1;
             writer.pending = true;
             if zero {
@@ -461,7 +461,7 @@ mod tests {
             Storage::read_file_at(
                 &storage,
                 storage_path("link"),
-                &mut RecordingWriter::new(),
+                &mut FakeWriter::new(),
                 0..6
             )
             .await
@@ -567,7 +567,7 @@ mod tests {
         std::fs::write(&file_path, &body).expect("test file should be written");
 
         let storage = LocalStorage::new(path.to_path_buf());
-        let mut writer = RecordingWriter::new();
+        let mut writer = FakeWriter::new();
         storage
             .read_file_at(storage_path("f"), &mut writer, 0..5000)
             .await
@@ -586,7 +586,7 @@ mod tests {
         std::fs::write(nested.join("f.txt"), b"nested")
             .expect("nested test file should be written");
         let storage = LocalStorage::new(dir.path().to_path_buf());
-        let mut writer = RecordingWriter::new();
+        let mut writer = FakeWriter::new();
 
         storage
             .read_file_at(storage_path("nested/f.txt"), &mut writer, 0..6)
@@ -601,7 +601,7 @@ mod tests {
         let dir =
             TempDir::new().expect("temporary directory should be created");
         let storage = LocalStorage::new(dir.path().to_path_buf());
-        let mut writer = RecordingWriter::new();
+        let mut writer = FakeWriter::new();
 
         let result = read_file_at(
             &storage,
@@ -622,7 +622,7 @@ mod tests {
         let dir =
             TempDir::new().expect("temporary directory should be created");
         let storage = LocalStorage::new(dir.path().to_path_buf());
-        let mut writer = RecordingWriter::new();
+        let mut writer = FakeWriter::new();
 
         let parent = read_file_at(
             &storage,
@@ -667,7 +667,7 @@ mod tests {
         )
         .expect("outside file symlink should be created");
         let storage = LocalStorage::new(root.path().to_path_buf());
-        let mut writer = RecordingWriter::new();
+        let mut writer = FakeWriter::new();
 
         let directory = storage.read_dir(storage_path("outside-dir"));
         let file = storage
@@ -695,7 +695,7 @@ mod tests {
         symlink("nested/f.txt", root.path().join("internal-file"))
             .expect("internal file symlink should be created");
         let storage = LocalStorage::new(root.path().to_path_buf());
-        let mut writer = RecordingWriter::new();
+        let mut writer = FakeWriter::new();
 
         let entries: Vec<_> = storage
             .read_dir(storage_path("internal-dir"))
@@ -722,7 +722,7 @@ mod tests {
         std::fs::write(&file_path, &body).expect("test file should be written");
 
         let storage = LocalStorage::new(path.to_path_buf());
-        let mut writer = RecordingWriter::new();
+        let mut writer = FakeWriter::new();
         storage
             .read_file_at(storage_path("f"), &mut writer, 0..5000)
             .await
