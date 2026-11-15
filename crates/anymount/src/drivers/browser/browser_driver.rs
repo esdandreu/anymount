@@ -4,6 +4,9 @@
 mod browser_driver_api;
 #[path = "browser_write_session.rs"]
 mod browser_write_session;
+#[cfg(test)]
+#[path = "test_utils/mod.rs"]
+mod test_utils;
 
 pub use browser_driver_api::BrowserDriverApi;
 
@@ -16,7 +19,10 @@ use crate::domain::{
     UnregisterMountError, WriteFileError, WriteFileSession,
 };
 use async_trait::async_trait;
-use futures::StreamExt;
+use futures::{
+    StreamExt,
+    io::{AsyncWrite, AsyncWriteExt},
+};
 use js_sys::{Array, Function, Object, Promise, Reflect, Uint8Array};
 use serde::{Deserialize, Serialize};
 use std::cell::{Cell, RefCell};
@@ -144,7 +150,7 @@ impl Storage for BrowserWorkspace {
     async fn read_file_at(
         &self,
         path: StoragePath,
-        writer: &mut dyn crate::domain::WriteAt,
+        writer: &mut (dyn AsyncWrite + Unpin),
         range: std::ops::Range<u64>,
     ) -> Result<u64, ReadFileAtError> {
         if !self.is_connected() {
@@ -426,7 +432,7 @@ impl Storage for FileSystemAccessStorage {
     async fn read_file_at(
         &self,
         path: StoragePath,
-        writer: &mut dyn crate::domain::WriteAt,
+        writer: &mut (dyn AsyncWrite + Unpin),
         range: std::ops::Range<u64>,
     ) -> Result<u64, ReadFileAtError> {
         if range.start > range.end || range.end > 9_007_199_254_740_991 {
@@ -465,7 +471,10 @@ impl Storage for FileSystemAccessStorage {
                     message: "provider returned too much data".into(),
                 });
             }
-            writer.write_at(&bytes, offset)?;
+            writer
+                .write_all(&bytes)
+                .await
+                .map_err(ReadFileAtError::Write)?;
             offset += bytes.len() as u64;
         }
         Ok(offset - range.start)
@@ -930,6 +939,137 @@ mod tests {
             &JsValue::from_str("showDirectoryPicker"),
         )
         .expect("remove picker");
+    }
+
+    #[wasm_bindgen_test]
+    async fn browser_ranges_await_partial_pending_sinks_at_current_position() {
+        use crate::domain::StoragePath;
+        use crate::drivers::browser::browser_driver::test_utils::handle;
+        use crate::test_utils::mocks::FakeWriter;
+
+        let storage = workspace(handle());
+        storage.connect(false).await.expect("connect");
+        let path = StoragePath::try_from(PathBuf::from("file")).expect("path");
+        let mut writer = FakeWriter::new();
+        writer.bytes.push(9);
+        writer.max_write = 2;
+        writer.pending = true;
+        let count = storage
+            .read_file_at(path, &mut writer, 2..6)
+            .await
+            .expect("range");
+        assert_eq!(count, 4);
+        assert_eq!(writer.bytes, [9, 2, 3, 4, 5]);
+        assert_eq!(writer.pending_polls, 2);
+        assert_eq!((writer.flushes, writer.closes), (0, 0));
+    }
+
+    #[wasm_bindgen_test]
+    async fn browser_sink_errors_do_not_disconnect_or_finalize_the_sink() {
+        use crate::domain::{ReadFileAtError, StoragePath};
+        use crate::drivers::browser::browser_driver::test_utils::handle;
+        use crate::test_utils::mocks::FakeWriter;
+
+        for zero in [false, true] {
+            let handle = handle();
+            let storage = workspace(handle.clone());
+            storage.connect(false).await.expect("connect");
+            let path =
+                StoragePath::try_from(PathBuf::from("file")).expect("path");
+            let mut writer = FakeWriter::new();
+            writer.pending = true;
+            if zero {
+                writer.zero_after = Some(2);
+            } else {
+                writer.fail_after = Some(2);
+            }
+            let error = storage
+                .read_file_at(path, &mut writer, 1..6)
+                .await
+                .expect_err("sink must fail");
+            let ReadFileAtError::Write(source) = error else {
+                panic!("expected sink error, got {error:?}");
+            };
+            assert_eq!(
+                source.kind(),
+                if zero {
+                    std::io::ErrorKind::WriteZero
+                } else {
+                    std::io::ErrorKind::PermissionDenied
+                }
+            );
+            assert_eq!(writer.bytes, [1, 2]);
+            assert_eq!((writer.flushes, writer.closes), (0, 0));
+            assert!(storage.is_connected());
+            assert_eq!(
+                Reflect::get(&handle, &JsValue::from_str("reads"))
+                    .expect("read count")
+                    .as_f64(),
+                Some(1.0)
+            );
+        }
+    }
+
+    #[wasm_bindgen_test]
+    async fn browser_ranges_stage_directly_into_sessions_until_caller_finishes()
+    {
+        use crate::domain::StoragePath;
+        use crate::drivers::browser::browser_driver::test_utils::handle;
+
+        for abort in [false, true] {
+            let handle = handle();
+            let storage = workspace(handle.clone());
+            storage.connect(false).await.expect("connect");
+            let path =
+                StoragePath::try_from(PathBuf::from("file")).expect("path");
+            let mut session =
+                storage.start_write_file(path.clone()).await.expect("start");
+            session.write_all(&[9]).await.expect("prefix");
+            assert_eq!(
+                storage
+                    .read_file_at(path, session.as_mut(), 2..6)
+                    .await
+                    .expect("copy directly into session"),
+                4
+            );
+            for key in ["closes", "aborts"] {
+                assert_eq!(
+                    Reflect::get(&handle, &JsValue::from_str(key))
+                        .expect("lifecycle count")
+                        .as_f64(),
+                    Some(0.0)
+                );
+            }
+            assert!(
+                Reflect::get(&handle, &JsValue::from_str("committed"))
+                    .expect("commit state")
+                    .is_null()
+            );
+            session.write_all(&[8]).await.expect("sink stays open");
+            if abort {
+                session.abort().await.expect("caller abort");
+                assert!(
+                    Reflect::get(&handle, &JsValue::from_str("committed"))
+                        .expect("commit state")
+                        .is_null()
+                );
+                assert_eq!(
+                    Reflect::get(&handle, &JsValue::from_str("aborts"))
+                        .expect("abort count")
+                        .as_f64(),
+                    Some(1.0)
+                );
+            } else {
+                session.finish().await.expect("caller commit");
+                let bytes =
+                    Reflect::get(&handle, &JsValue::from_str("committed"))
+                        .expect("committed bytes");
+                assert_eq!(
+                    js_sys::Uint8Array::new(&bytes).to_vec(),
+                    [9, 2, 3, 4, 5, 8]
+                );
+            }
+        }
     }
 
     #[wasm_bindgen_test]

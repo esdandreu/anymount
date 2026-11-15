@@ -5,6 +5,7 @@ mod token_source;
 
 use authorization::OneDriveAuthorization;
 use chrono::{DateTime, Utc};
+use futures::io::{AsyncWrite, AsyncWriteExt};
 use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -14,7 +15,7 @@ use token_source::{OneDriveTokenSource, jwt_expires_at};
 use crate::domain::{AuthStorageError, StartedAuthorization};
 use crate::domain::{
     ConnectStorageError, DirEntry, ReadDirError, ReadFileAtError, Storage,
-    StorageConfig, StoragePath, WriteAt,
+    StorageConfig, StoragePath,
 };
 
 /// Default buffer (seconds) before token expiry to trigger refresh when not set in config.
@@ -452,12 +453,11 @@ where
         Ok(Box::new(entries.into_iter()))
     }
 
-    fn read_file_at(
+    fn read_range(
         &self,
         path: StoragePath,
-        writer: &mut dyn WriteAt,
         range: std::ops::Range<u64>,
-    ) -> std::result::Result<(), ReadFileAtError> {
+    ) -> std::result::Result<Vec<u8>, ReadFileAtError> {
         let token = self
             .token
             .access_token()
@@ -473,7 +473,7 @@ where
             ("Authorization", auth.as_str()),
             ("Range", range_header.as_str()),
         ];
-        let (status, body) = self
+        let (status, mut body) = self
             .fetch
             .get(&url, &headers)
             .map_err(read_file_at_backend_error)?;
@@ -485,17 +485,9 @@ where
                 message: "server ignored the range request".into(),
             });
         }
-        let mut pos = range.start;
-        let mut remaining = range.end - range.start;
-        let mut offset = 0;
-        while remaining > 0 && offset < body.len() {
-            let take = remaining.min((body.len() - offset) as u64) as usize;
-            writer.write_at(&body[offset..offset + take], pos)?;
-            pos += take as u64;
-            remaining -= take as u64;
-            offset += take;
-        }
-        Ok(())
+        let length = (range.end - range.start).min(body.len() as u64) as usize;
+        body.truncate(length);
+        Ok(body)
     }
 }
 
@@ -513,17 +505,6 @@ impl<T: BearerToken, F: HttpGet> Clone for OneDriveStorage<T, F> {
             token: self.token.clone(),
             fetch: self.fetch.clone(),
         }
-    }
-}
-struct BytesWriter(Vec<u8>);
-impl WriteAt for BytesWriter {
-    fn write_at(
-        &mut self,
-        data: &[u8],
-        _offset: u64,
-    ) -> std::result::Result<(), crate::domain::WriteAtError> {
-        self.0.extend_from_slice(data);
-        Ok(())
     }
 }
 #[async_trait::async_trait(?Send)]
@@ -550,7 +531,7 @@ impl<T: BearerToken, F: HttpGet> Storage for OneDriveStorage<T, F> {
     async fn read_file_at(
         &self,
         path: StoragePath,
-        writer: &mut dyn WriteAt,
+        writer: &mut (dyn AsyncWrite + Unpin),
         range: std::ops::Range<u64>,
     ) -> std::result::Result<u64, ReadFileAtError> {
         if range.start > range.end {
@@ -566,14 +547,10 @@ impl<T: BearerToken, F: HttpGet> Storage for OneDriveStorage<T, F> {
             let path = path.clone();
             let storage = self.clone();
             let bytes = tokio::task::spawn_blocking(move || {
-                let mut writer = BytesWriter(Vec::new());
-                let result =
-                    storage.read_file_at(path, &mut writer, offset..end);
-                if matches!(result, Err(ReadFileAtError::RangeNotSatisfiable)) {
-                    return Ok::<_, ReadFileAtError>(Vec::new());
+                match storage.read_range(path, offset..end) {
+                    Err(ReadFileAtError::RangeNotSatisfiable) => Ok(Vec::new()),
+                    result => result,
                 }
-                result?;
-                Ok(writer.0)
             })
             .await
             .map_err(|e| ReadFileAtError::Unknown {
@@ -582,7 +559,10 @@ impl<T: BearerToken, F: HttpGet> Storage for OneDriveStorage<T, F> {
             if bytes.is_empty() {
                 break;
             }
-            writer.write_at(&bytes, offset)?;
+            writer
+                .write_all(&bytes)
+                .await
+                .map_err(ReadFileAtError::Write)?;
             offset += bytes.len() as u64;
         }
         Ok(offset - range.start)
@@ -592,7 +572,7 @@ impl<T: BearerToken, F: HttpGet> Storage for OneDriveStorage<T, F> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::WriteAtError;
+    use crate::test_utils::mocks::{BytesWriter, FakeWriter};
 
     type DefaultStorage = OneDriveStorage<OneDriveTokenSource, UreqHttpGet>;
 
@@ -844,31 +824,6 @@ endpoint = "https://graph.microsoft.com/v1.0"
         }
     }
 
-    struct RecordingWriter {
-        writes: Vec<(u64, Vec<u8>)>,
-    }
-
-    impl RecordingWriter {
-        fn new() -> Self {
-            Self { writes: Vec::new() }
-        }
-        fn total_bytes(&self) -> u64 {
-            self.writes.iter().map(|(_, b)| b.len() as u64).sum()
-        }
-    }
-
-    // private test util: Records writes in OneDrive tests.
-    impl WriteAt for RecordingWriter {
-        fn write_at(
-            &mut self,
-            buf: &[u8],
-            offset: u64,
-        ) -> std::result::Result<(), WriteAtError> {
-            self.writes.push((offset, buf.to_vec()));
-            Ok(())
-        }
-    }
-
     #[test]
     fn read_dir_returns_entry_from_mock() {
         let list_json = br#"{"value":[{"name":"f.txt","size":100,"lastModifiedDateTime":"2024-01-01T00:00:00Z"}]}"#;
@@ -898,13 +853,13 @@ endpoint = "https://graph.microsoft.com/v1.0"
     async fn async_range_returns_backend_bytes_and_rejects_invalid_ranges() {
         let storage = storage_with_response(206, &[1, 2, 3]);
         let path = storage_path("f");
-        let mut writer = RecordingWriter::new();
+        let mut writer = FakeWriter::new();
         let count =
             Storage::read_file_at(&storage, path.clone(), &mut writer, 10..12)
                 .await
                 .expect("range");
         assert_eq!(count, 2);
-        assert_eq!(writer.writes[0], (10, vec![1, 2]));
+        assert_eq!(writer.flat_bytes(), [1, 2]);
         assert!(
             Storage::read_file_at(&storage, path, &mut writer, 2..1)
                 .await
@@ -912,8 +867,60 @@ endpoint = "https://graph.microsoft.com/v1.0"
         );
     }
 
-    #[test]
-    fn read_file_at_writes_exact_range_from_mock() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn range_reads_honor_pending_partial_writes_and_current_position() {
+        let storage = storage_with_response(206, b"2345");
+        let mut writer = FakeWriter::new();
+        writer.bytes.extend_from_slice(b"prefix:");
+        writer.max_write = 1;
+        writer.pending = true;
+        let count = Storage::read_file_at(
+            &storage,
+            storage_path("file"),
+            &mut writer,
+            2..6,
+        )
+        .await
+        .expect("range");
+        assert_eq!(count, 4);
+        assert_eq!(writer.flat_bytes(), b"prefix:2345");
+        assert_eq!(writer.pending_polls, 4);
+        assert_eq!((writer.flushes, writer.closes), (0, 0));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn range_reads_forward_sink_io_errors_and_zero_writes() {
+        let storage = storage_with_response(206, b"2345");
+        for zero in [false, true] {
+            let mut writer = FakeWriter::new();
+            writer.pending = true;
+            writer.max_write = 1;
+            let expected = if zero {
+                writer.zero_after = Some(2);
+                std::io::ErrorKind::WriteZero
+            } else {
+                writer.fail_after = Some(2);
+                std::io::ErrorKind::PermissionDenied
+            };
+            let error = Storage::read_file_at(
+                &storage,
+                storage_path("file"),
+                &mut writer,
+                2..6,
+            )
+            .await
+            .expect_err("sink failure");
+            let ReadFileAtError::Write(error) = error else {
+                panic!("expected sink I/O error")
+            };
+            assert_eq!(error.kind(), expected);
+            assert_eq!(writer.flat_bytes(), b"23");
+            assert_eq!((writer.flushes, writer.closes), (0, 0));
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn read_file_at_writes_exact_range_from_mock() {
         let body: Vec<u8> = (0..5000).map(|i| (i % 256) as u8).collect();
         let storage = OneDriveStorage::<StubToken, MockHttpGet> {
             root: PathBuf::from("/"),
@@ -924,21 +931,17 @@ endpoint = "https://graph.microsoft.com/v1.0"
                 body: body.clone(),
             }),
         };
-        let mut writer = RecordingWriter::new();
+        let mut writer = FakeWriter::new();
         storage
             .read_file_at(storage_path("f"), &mut writer, 0..5000)
+            .await
             .expect("mock range read should succeed");
         assert_eq!(writer.total_bytes(), 5000);
-        let flat: Vec<u8> = writer
-            .writes
-            .iter()
-            .flat_map(|(_, b)| b.iter().copied())
-            .collect();
-        assert_eq!(flat, body);
+        assert_eq!(writer.flat_bytes(), body);
     }
 
-    #[test]
-    fn read_file_at_caps_at_range_when_mock_returns_more() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn read_file_at_caps_at_range_when_mock_returns_more() {
         let body: Vec<u8> = (0..10_000).map(|i| (i % 256) as u8).collect();
         let storage = OneDriveStorage::<StubToken, MockHttpGet> {
             root: PathBuf::from("/"),
@@ -946,9 +949,10 @@ endpoint = "https://graph.microsoft.com/v1.0"
             token: std::sync::Arc::new(StubToken("test".into())),
             fetch: std::sync::Arc::new(MockHttpGet { status: 206, body }),
         };
-        let mut writer = RecordingWriter::new();
+        let mut writer = FakeWriter::new();
         storage
             .read_file_at(storage_path("f"), &mut writer, 0..5000)
+            .await
             .expect("mock range read should succeed");
         assert_eq!(writer.total_bytes(), 5000);
     }

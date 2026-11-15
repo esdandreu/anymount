@@ -10,6 +10,9 @@ use futures::io::AsyncWrite;
 /// a later finish from committing incomplete output. Rejected writes after
 /// sealing do not alter already-staged output.
 ///
+/// A session can be passed directly to [`super::Storage::read_file_at`].
+/// Reading into it only stages bytes; the caller still owns finish and abort.
+///
 /// A successful finish or abort is terminal. Repeating the same operation is
 /// harmless; conflicting operations and writes after sealing return errors.
 /// Implementations retain in-flight operations across cancellation of their

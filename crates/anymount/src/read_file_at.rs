@@ -1,8 +1,12 @@
 use std::{ops::Range, path::PathBuf};
 
-use crate::domain::{ReadFileAtError, Storage, WriteAt};
+use crate::domain::{ReadFileAtError, Storage};
+use futures::io::AsyncWrite;
 
 /// Reads a file range after validating its storage-relative path.
+///
+/// Appends the requested source bytes at the sink's current position without
+/// flushing, closing, finishing, or aborting it. The sink may be non-`Send`.
 ///
 /// # Errors
 ///
@@ -11,7 +15,7 @@ use crate::domain::{ReadFileAtError, Storage, WriteAt};
 pub async fn read_file_at<S>(
     storage: &S,
     path: PathBuf,
-    writer: &mut dyn WriteAt,
+    writer: &mut (dyn AsyncWrite + Unpin),
     range: Range<u64>,
 ) -> Result<(), ReadFileAtError>
 where

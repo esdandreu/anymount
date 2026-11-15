@@ -4,45 +4,12 @@ use std::time::SystemTime;
 use cap_std::ambient_authority;
 use cap_std::fs::Dir;
 
-#[cfg(test)]
-use crate::domain::WriteAt;
 use crate::domain::{
     DirEntry, ReadDirError, ReadFileAtError, Storage, StoragePath,
 };
+use futures::io::{AsyncWrite, AsyncWriteExt};
 
 pub const DEFAULT_LOCAL_CHUNK_SIZE: usize = 65536;
-
-/// Reads the exact number of bytes required to fill buf from the given offset.
-/// The offset is relative to the start of the file and thus independent from
-/// the current cursor.
-#[cfg(test)]
-fn read_exact_at(
-    file: &std::fs::File,
-    buf: &mut [u8],
-    offset: u64,
-) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::FileExt;
-        FileExt::read_exact_at(file, buf, offset)
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::FileExt;
-        let mut pos = 0;
-        while pos < buf.len() {
-            let n = file.seek_read(&mut buf[pos..], offset + pos as u64)?;
-            if n == 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "failed to fill whole buffer",
-                ));
-            }
-            pos += n;
-        }
-        Ok(())
-    }
-}
 
 #[derive(Clone)]
 pub struct LocalStorage {
@@ -95,15 +62,6 @@ fn read_dir_error(source: std::io::Error) -> ReadDirError {
     }
 }
 
-#[cfg(test)]
-fn read_file_error(source: std::io::Error) -> ReadFileAtError {
-    if source.kind() == std::io::ErrorKind::PermissionDenied {
-        ReadFileAtError::PermissionDenied
-    } else {
-        source.into()
-    }
-}
-
 impl DirEntry for LocalDirEntry {
     fn file_name(&self) -> String {
         self.file_name.clone()
@@ -150,30 +108,6 @@ impl LocalStorage {
             }) as Box<dyn DirEntry>)
         })))
     }
-
-    #[cfg(test)]
-    fn read_file_at(
-        &self,
-        path: StoragePath,
-        writer: &mut dyn WriteAt,
-        range: std::ops::Range<u64>,
-    ) -> Result<(), ReadFileAtError> {
-        let root = self.root.as_ref().map_err(root_io_error)?;
-        let file = root.open(path.as_path()).map_err(read_file_error)?;
-        let file = file.into_std();
-        let len = (range.end - range.start) as usize;
-        let chunk_size = self.chunk_size.min(len);
-        let mut buf = vec![0u8; chunk_size];
-        let mut pos = range.start;
-        let end = range.end;
-        while pos < end {
-            let to_read = (end - pos).min(buf.len() as u64) as usize;
-            read_exact_at(&file, &mut buf[..to_read], pos)?;
-            writer.write_at(&buf[..to_read], pos)?;
-            pos += to_read as u64;
-        }
-        Ok(())
-    }
 }
 
 #[async_trait::async_trait(?Send)]
@@ -214,7 +148,7 @@ impl Storage for LocalStorage {
     async fn read_file_at(
         &self,
         path: StoragePath,
-        writer: &mut dyn crate::domain::WriteAt,
+        writer: &mut (dyn AsyncWrite + Unpin),
         range: std::ops::Range<u64>,
     ) -> Result<u64, ReadFileAtError> {
         if range.start > range.end {
@@ -268,7 +202,10 @@ impl Storage for LocalStorage {
             if bytes.is_empty() {
                 break;
             }
-            writer.write_at(&bytes, offset)?;
+            writer
+                .write_all(&bytes)
+                .await
+                .map_err(ReadFileAtError::Write)?;
             offset += bytes.len() as u64;
         }
         Ok(offset - range.start)
@@ -278,40 +215,9 @@ impl Storage for LocalStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::WriteAtError;
+    use crate::test_utils::mocks::FakeWriter;
     use crate::{read_dir, read_file_at};
     use tempfile::TempDir;
-
-    struct RecordingWriter {
-        writes: Vec<(u64, Vec<u8>)>,
-    }
-
-    impl RecordingWriter {
-        fn new() -> Self {
-            Self { writes: Vec::new() }
-        }
-        fn total_bytes(&self) -> u64 {
-            self.writes.iter().map(|(_, b)| b.len() as u64).sum()
-        }
-        fn flat_bytes(&self) -> Vec<u8> {
-            self.writes
-                .iter()
-                .flat_map(|(_, b)| b.iter().copied())
-                .collect()
-        }
-    }
-
-    // private test util: Records writes in local storage tests.
-    impl WriteAt for RecordingWriter {
-        fn write_at(
-            &mut self,
-            buf: &[u8],
-            offset: u64,
-        ) -> Result<(), WriteAtError> {
-            self.writes.push((offset, buf.to_vec()));
-            Ok(())
-        }
-    }
 
     fn storage_path(value: impl Into<PathBuf>) -> StoragePath {
         StoragePath::try_from(value.into())
@@ -336,14 +242,14 @@ mod tests {
             .expect("entry");
         assert_eq!(entry.size(), Some(4));
         let path = storage_path("note");
-        let mut writer = RecordingWriter::new();
+        let mut writer = FakeWriter::new();
         let count =
             Storage::read_file_at(&storage, path.clone(), &mut writer, 1..3)
                 .await
                 .expect("range");
         assert_eq!(count, 2);
         assert_eq!(writer.flat_bytes(), [1, 254]);
-        let mut writer = RecordingWriter::new();
+        let mut writer = FakeWriter::new();
         assert_eq!(
             Storage::read_file_at(&storage, path.clone(), &mut writer, 3..7)
                 .await
@@ -365,6 +271,131 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn range_reads_await_partial_pending_writes_without_seeking_sink() {
+        let dir = TempDir::new().expect("temporary directory");
+        std::fs::write(dir.path().join("file"), [0, 1, 2, 3, 4, 5])
+            .expect("write");
+        let storage =
+            LocalStorage::new(dir.path().to_path_buf()).with_chunk_size(3);
+        let mut writer = FakeWriter::new();
+        writer.bytes.push(9);
+        writer.max_write = 1;
+        writer.pending = true;
+        let count = storage
+            .read_file_at(storage_path("file"), &mut writer, 2..6)
+            .await
+            .expect("range");
+        assert_eq!(count, 4);
+        assert_eq!(writer.bytes, [9, 2, 3, 4, 5]);
+        assert_eq!(writer.pending_polls, 4);
+        assert_eq!((writer.flushes, writer.closes), (0, 0));
+
+        let mut cursor = futures::io::Cursor::new(vec![9; 6]);
+        cursor.set_position(1);
+        crate::read_file_at(&storage, PathBuf::from("file"), &mut cursor, 2..5)
+            .await
+            .expect("read at sink cursor");
+        assert_eq!(cursor.position(), 4);
+        assert_eq!(cursor.into_inner(), [9, 2, 3, 4, 9, 9]);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn range_reads_preserve_sink_errors_and_reject_zero_writes() {
+        let dir = TempDir::new().expect("temporary directory");
+        std::fs::write(dir.path().join("file"), [0, 1, 2, 3, 4, 5])
+            .expect("write");
+        let storage =
+            LocalStorage::new(dir.path().to_path_buf()).with_chunk_size(3);
+        for zero in [false, true] {
+            let mut writer = FakeWriter::new();
+            writer.max_write = 1;
+            writer.pending = true;
+            if zero {
+                writer.zero_after = Some(2);
+            } else {
+                writer.fail_after = Some(2);
+            }
+            let error = crate::read_file_at(
+                &storage,
+                PathBuf::from("file"),
+                &mut writer,
+                1..6,
+            )
+            .await
+            .expect_err("sink must fail");
+            let ReadFileAtError::Write(source) = error else {
+                panic!("expected sink error, got {error:?}");
+            };
+            assert_eq!(
+                source.kind(),
+                if zero {
+                    std::io::ErrorKind::WriteZero
+                } else {
+                    std::io::ErrorKind::PermissionDenied
+                }
+            );
+            if !zero {
+                assert_eq!(source.to_string(), "test sink failure");
+            }
+            assert_eq!(writer.bytes, [1, 2]);
+            assert_eq!((writer.flushes, writer.closes), (0, 0));
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn ranges_compose_with_non_send_sessions_without_finalizing() {
+        use crate::test_utils::mocks::{MemoryWriteStorage, WriteSessionState};
+        use futures::io::AsyncWriteExt;
+        use std::{cell::RefCell, rc::Rc};
+
+        let dir = TempDir::new().expect("temporary directory");
+        std::fs::write(dir.path().join("file"), [0, 1, 2, 3, 4, 5])
+            .expect("write");
+        let storage = LocalStorage::new(dir.path().to_path_buf());
+        for short in [false, true] {
+            let state = Rc::new(RefCell::new(WriteSessionState::default()));
+            let destination = MemoryWriteStorage(&state);
+            let mut session = destination
+                .start_write_file(storage_path("copy"))
+                .await
+                .expect("start");
+            session.write_all(&[9]).await.expect("prefix");
+            let result = crate::read_file_at(
+                &storage,
+                PathBuf::from("file"),
+                session.as_mut(),
+                2..if short { 8 } else { 6 },
+            )
+            .await;
+            if short {
+                assert!(matches!(
+                    result,
+                    Err(ReadFileAtError::RangeNotSatisfiable)
+                ));
+            } else {
+                result.expect("copy range");
+            }
+            assert_eq!(state.borrow().staged, [9, 2, 3, 4, 5]);
+            assert!(state.borrow().committed.is_none());
+            assert!(
+                state.borrow().events.iter().all(|event| *event == "write")
+            );
+            session.write_all(&[8]).await.expect("sink stays open");
+            if short {
+                session.abort().await.expect("caller abort");
+                assert!(state.borrow().committed.is_none());
+                assert!(state.borrow().staged.is_empty());
+            } else {
+                session.finish().await.expect("caller commit");
+                assert_eq!(
+                    state.borrow().committed.as_deref(),
+                    Some([9, 2, 3, 4, 5, 8].as_slice())
+                );
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn large_sparse_reads_are_chunked_and_writer_errors_stop_reads() {
         let dir = TempDir::new().expect("temporary directory");
         let start = 1_u64 << 40;
@@ -375,7 +406,7 @@ mod tests {
         .expect("create sparse file");
         let storage = LocalStorage::new(dir.path().to_path_buf());
         let path = storage_path("sparse");
-        let mut writer = crate::test_utils::mocks::CountingWriter::new(start);
+        let mut writer = crate::test_utils::mocks::CountingWriter::new();
         let count = Storage::read_file_at(
             &storage,
             path.clone(),
@@ -388,11 +419,11 @@ mod tests {
         assert_eq!(writer.total, count);
         assert!(writer.max_chunk <= crate::domain::MAX_READ_FILE_AT_RANGE_SIZE);
         assert_eq!(writer.calls, 3);
-        let mut writer = crate::test_utils::mocks::CountingWriter::new(0);
+        let mut writer = crate::test_utils::mocks::CountingWriter::new();
         writer.fail_after = Some(2);
         let result =
             Storage::read_file_at(&storage, path, &mut writer, 0..start).await;
-        assert!(matches!(result, Err(ReadFileAtError::WriteAt(_))));
+        assert!(matches!(result, Err(ReadFileAtError::Write(_))));
         assert_eq!(writer.calls, 2);
         assert_eq!(
             writer.total,
@@ -430,7 +461,7 @@ mod tests {
             Storage::read_file_at(
                 &storage,
                 storage_path("link"),
-                &mut RecordingWriter::new(),
+                &mut FakeWriter::new(),
                 0..6
             )
             .await
@@ -526,8 +557,8 @@ mod tests {
         assert!(matches!(nested, Err(crate::ReadDirError::InvalidPath(_))));
     }
 
-    #[test]
-    fn read_file_at_writes_exact_range() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn read_file_at_writes_exact_range() {
         let dir =
             TempDir::new().expect("temporary directory should be created");
         let path = dir.path();
@@ -536,16 +567,17 @@ mod tests {
         std::fs::write(&file_path, &body).expect("test file should be written");
 
         let storage = LocalStorage::new(path.to_path_buf());
-        let mut writer = RecordingWriter::new();
+        let mut writer = FakeWriter::new();
         storage
             .read_file_at(storage_path("f"), &mut writer, 0..5000)
+            .await
             .expect("test range should be readable");
         assert_eq!(writer.total_bytes(), 5000);
         assert_eq!(writer.flat_bytes(), body);
     }
 
-    #[test]
-    fn read_file_at_allows_nested_file() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn read_file_at_allows_nested_file() {
         let dir =
             TempDir::new().expect("temporary directory should be created");
         let nested = dir.path().join("nested");
@@ -554,10 +586,11 @@ mod tests {
         std::fs::write(nested.join("f.txt"), b"nested")
             .expect("nested test file should be written");
         let storage = LocalStorage::new(dir.path().to_path_buf());
-        let mut writer = RecordingWriter::new();
+        let mut writer = FakeWriter::new();
 
         storage
             .read_file_at(storage_path("nested/f.txt"), &mut writer, 0..6)
+            .await
             .expect("nested file should be readable");
 
         assert_eq!(writer.flat_bytes(), b"nested");
@@ -568,7 +601,7 @@ mod tests {
         let dir =
             TempDir::new().expect("temporary directory should be created");
         let storage = LocalStorage::new(dir.path().to_path_buf());
-        let mut writer = RecordingWriter::new();
+        let mut writer = FakeWriter::new();
 
         let result = read_file_at(
             &storage,
@@ -589,7 +622,7 @@ mod tests {
         let dir =
             TempDir::new().expect("temporary directory should be created");
         let storage = LocalStorage::new(dir.path().to_path_buf());
-        let mut writer = RecordingWriter::new();
+        let mut writer = FakeWriter::new();
 
         let parent = read_file_at(
             &storage,
@@ -617,8 +650,8 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn operations_reject_symlinks_outside_root() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn operations_reject_symlinks_outside_root() {
         use std::os::unix::fs::symlink;
 
         let root = TempDir::new().expect("storage root should be created");
@@ -634,14 +667,12 @@ mod tests {
         )
         .expect("outside file symlink should be created");
         let storage = LocalStorage::new(root.path().to_path_buf());
-        let mut writer = RecordingWriter::new();
+        let mut writer = FakeWriter::new();
 
         let directory = storage.read_dir(storage_path("outside-dir"));
-        let file = storage.read_file_at(
-            storage_path("outside-file"),
-            &mut writer,
-            0..6,
-        );
+        let file = storage
+            .read_file_at(storage_path("outside-file"), &mut writer, 0..6)
+            .await;
 
         assert!(matches!(directory, Err(ReadDirError::PermissionDenied)));
         assert!(matches!(file, Err(ReadFileAtError::PermissionDenied)));
@@ -649,8 +680,8 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn operations_allow_symlinks_inside_root() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn operations_allow_symlinks_inside_root() {
         use std::os::unix::fs::symlink;
 
         let root = TempDir::new().expect("storage root should be created");
@@ -664,7 +695,7 @@ mod tests {
         symlink("nested/f.txt", root.path().join("internal-file"))
             .expect("internal file symlink should be created");
         let storage = LocalStorage::new(root.path().to_path_buf());
-        let mut writer = RecordingWriter::new();
+        let mut writer = FakeWriter::new();
 
         let entries: Vec<_> = storage
             .read_dir(storage_path("internal-dir"))
@@ -673,6 +704,7 @@ mod tests {
             .expect("entries");
         storage
             .read_file_at(storage_path("internal-file"), &mut writer, 0..6)
+            .await
             .expect("internal file symlink should be readable");
 
         assert_eq!(entries.len(), 1);
@@ -680,8 +712,8 @@ mod tests {
         assert_eq!(writer.flat_bytes(), b"inside");
     }
 
-    #[test]
-    fn read_file_at_caps_at_range() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn read_file_at_caps_at_range() {
         let dir =
             TempDir::new().expect("temporary directory should be created");
         let path = dir.path();
@@ -690,9 +722,10 @@ mod tests {
         std::fs::write(&file_path, &body).expect("test file should be written");
 
         let storage = LocalStorage::new(path.to_path_buf());
-        let mut writer = RecordingWriter::new();
+        let mut writer = FakeWriter::new();
         storage
             .read_file_at(storage_path("f"), &mut writer, 0..5000)
+            .await
             .expect("test range should be readable");
         assert_eq!(writer.total_bytes(), 5000);
     }

@@ -115,6 +115,14 @@ trait. Each storage implementation defines its own entry type.
 Storage configurations implement `Clone`; boxed configurations can be cloned
 when a driver needs to move one into an owned worker.
 
+Range reads accept `futures::io::AsyncWrite + Unpin` sinks, including
+`WriteFileSession` directly. Requested source bytes are written sequentially at
+the sink's current position, independently of the source offset. Reads await
+partial writes and backpressure, but never flush, close, finish, or abort the
+caller-owned sink. Storage reads return the copied byte count, including short
+reads at EOF; the `read_file_at` helper requires the entire requested range.
+Sink failures retain their `std::io::Error` in `ReadFileAtError::Write`.
+
 Writable storage starts a `WriteFileSession` through `Storage::start_write_file`.
 Startup failures return `StartWriteFileError`; session failures use
 `WriteFileError`.
