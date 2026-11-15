@@ -367,10 +367,12 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn large_sparse_reads_are_chunked_and_writer_errors_stop_reads() {
         let dir = TempDir::new().expect("temporary directory");
-        let file = std::fs::File::create(dir.path().join("sparse"))
-            .expect("create sparse file");
         let start = 1_u64 << 40;
-        file.set_len(start + 131_073).expect("extend sparse file");
+        let _file = crate::drivers::create_sparse_file(
+            &dir.path().join("sparse"),
+            start + 131_073,
+        )
+        .expect("create sparse file");
         let storage = LocalStorage::new(dir.path().to_path_buf());
         let path = storage_path("sparse");
         let mut writer = crate::test_utils::mocks::CountingWriter::new(start);
