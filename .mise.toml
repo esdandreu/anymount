@@ -13,10 +13,6 @@ description = "Run tests"
 depends = ["lint"]
 run = "cargo test --all"
 
-[tasks."test:storage"]
-description = "Test streaming storage write contracts on native"
-run = "cargo test -p anymount --lib domain::storage::test"
-
 [tasks.coverage]
 description = "Run tests with code coverage"
 run = "cargo llvm-cov --all-features"
