@@ -14,4 +14,5 @@ pub use storage::{
     ConnectStorageError, DirEntry, DirStream, InvalidStoragePath,
     MAX_READ_FILE_AT_RANGE_SIZE, ReadDirError, ReadFileAtError, Storage,
     StorageConfig, StoragePath, WriteAt, WriteAtError, WriteFileError,
+    WriteSession,
 };

@@ -13,7 +13,7 @@ pub mod test_utils;
 pub use config_dir::ConfigDir;
 pub use domain::{
     Config, ConfigRepository, DirEntry, DirStream, ReadDirError,
-    ReadFileAtError, Storage, StoragePath, WriteFileError,
+    ReadFileAtError, Storage, StoragePath, WriteFileError, WriteSession,
 };
 pub use mount::{MountError, mount};
 pub use read_dir::read_dir;

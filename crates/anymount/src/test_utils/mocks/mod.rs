@@ -9,6 +9,7 @@ mod no_op_mount;
 mod no_op_storage;
 mod short_storage;
 mod test_dir_entry;
+mod write_session;
 
 pub use bytes_writer::BytesWriter;
 pub use cannot_connect_storage_config::CannotConnectStorageConfig;
@@ -21,3 +22,6 @@ pub use no_op_mount::NoOpMount;
 pub use no_op_storage::NoOpStorage;
 pub use short_storage::ShortStorage;
 pub use test_dir_entry::TestDirEntry;
+pub use write_session::{
+    MemoryWriteStorage, TrailerWriteSession, WriteSessionState,
+};

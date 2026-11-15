@@ -5,6 +5,7 @@ use super::{
 use crate::domain::{
     Driver, Mount, MountError, Storage, StoragePath, WriteFileError,
 };
+use futures::io::AsyncWriteExt;
 use std::path::PathBuf;
 use std::rc::Rc;
 use wasm_bindgen::{JsValue, prelude::wasm_bindgen};
@@ -201,10 +202,18 @@ impl BrowserDriverApi {
     ) -> Result<(), JsValue> {
         let path = StoragePath::try_from(PathBuf::from(file_name))
             .map_err(|error| JsValue::from_str(&error.to_string()))?;
-        self.workspace(&name)?
-            .write_file(path, value.as_bytes())
-            .await
-            .map_err(write_js_error)
+        let workspace = self.workspace(&name)?;
+        let mut session =
+            workspace.open_write(path).await.map_err(write_js_error)?;
+        if let Err(error) = session.write_all(value.as_bytes()).await {
+            let _ = session.abort().await;
+            return Err(write_js_error(error.into()));
+        }
+        if let Err(error) = session.finish().await {
+            let _ = session.abort().await;
+            return Err(write_js_error(error));
+        }
+        Ok(())
     }
 
     /// Returns the browser handle for a mounted workspace.
