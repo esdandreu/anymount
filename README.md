@@ -115,6 +115,16 @@ trait. Each storage implementation defines its own entry type.
 Storage configurations implement `Clone`; boxed configurations can be cloned
 when a driver needs to move one into an owned worker.
 
+Writable storage starts a `WriteFileSession` through `Storage::start_write_file`.
+Startup failures return `StartWriteFileError`; session failures use
+`WriteFileError`.
+Sessions implement `futures::io::AsyncWrite` with incremental backpressure;
+neither flush nor close commits a file. Close seals input. Call `finish` to
+finalize any transforming wrappers before committing downstream, or await
+`abort` to discard staged output. Dropping a session cannot await cleanup, and
+canceling a finish cannot undo a commit already submitted to the provider.
+The browser adapter supports these writes; Local and OneDrive remain read-only.
+
 ## Notable dependencies
 
 ### Windows
@@ -133,7 +143,7 @@ mise run test
 
 ## Roadmap
 
-- [ ] Storage write interface.
+- [x] Storage write interface.
 - [ ] Storage auth interface.
 - [ ] Local storage.
 - [ ] FUSE driver.

@@ -3,8 +3,10 @@ use super::{
     ConnectPermissionError, FileSystemAccessStorage,
 };
 use crate::domain::{
-    Driver, Mount, MountError, Storage, StoragePath, WriteFileError,
+    Driver, Mount, MountError, StartWriteFileError, Storage, StoragePath,
+    WriteFileError,
 };
+use futures::io::AsyncWriteExt;
 use std::path::PathBuf;
 use std::rc::Rc;
 use wasm_bindgen::{JsValue, prelude::wasm_bindgen};
@@ -201,10 +203,23 @@ impl BrowserDriverApi {
     ) -> Result<(), JsValue> {
         let path = StoragePath::try_from(PathBuf::from(file_name))
             .map_err(|error| JsValue::from_str(&error.to_string()))?;
-        self.workspace(&name)?
-            .write_file(path, value.as_bytes())
+        let workspace = self.workspace(&name)?;
+        let mut session = workspace
+            .start_write_file(path)
             .await
-            .map_err(write_js_error)
+            .map_err(start_write_file_js_error)?;
+        let result = async {
+            session
+                .write_all(value.as_bytes())
+                .await
+                .map_err(WriteFileError::from)?;
+            session.finish().await
+        }
+        .await;
+        if result.is_err() {
+            let _ = session.abort().await;
+        }
+        result.map_err(write_js_error)
     }
 
     /// Returns the browser handle for a mounted workspace.
@@ -253,6 +268,15 @@ fn connect_js_error(error: ConnectPermissionError) -> JsValue {
     js_error(&error.to_string(), name)
 }
 
+fn start_write_file_js_error(error: StartWriteFileError) -> JsValue {
+    let name = match error {
+        StartWriteFileError::NotFound => Some("NotFoundError"),
+        StartWriteFileError::PermissionDenied => Some("NotAllowedError"),
+        _ => None,
+    };
+    js_error(&error.to_string(), name)
+}
+
 fn write_js_error(error: WriteFileError) -> JsValue {
     let name = match error {
         WriteFileError::NotFound => Some("NotFoundError"),
@@ -283,6 +307,23 @@ mod tests {
                 connect_js_error(ConnectPermissionError::PermissionDenied),
                 "NotAllowedError",
                 "storage permission denied",
+            ),
+            (
+                start_write_file_js_error(StartWriteFileError::NotFound),
+                "NotFoundError",
+                "storage entry not found",
+            ),
+            (
+                start_write_file_js_error(
+                    StartWriteFileError::PermissionDenied,
+                ),
+                "NotAllowedError",
+                "storage permission denied",
+            ),
+            (
+                start_write_file_js_error(StartWriteFileError::NotAFile),
+                "Error",
+                "path is not a file",
             ),
             (
                 write_js_error(WriteFileError::NotFound),

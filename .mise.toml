@@ -12,6 +12,7 @@ run = "cargo fmt"
 description = "Run tests"
 depends = ["lint"]
 run = "cargo test --all"
+
 [tasks.coverage]
 description = "Run tests with code coverage"
 run = "cargo llvm-cov --all-features"

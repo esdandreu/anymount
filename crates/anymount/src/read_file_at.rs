@@ -32,28 +32,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::WriteAtError;
-    use crate::test_utils::mocks::NoOpStorage;
-
-    struct TestWriter;
-
-    // private test util: Supplies a writer for path validation tests.
-    impl WriteAt for TestWriter {
-        fn write_at(
-            &mut self,
-            _buf: &[u8],
-            _offset: u64,
-        ) -> Result<(), WriteAtError> {
-            Ok(())
-        }
-    }
+    use crate::test_utils::mocks::{BytesWriter, NoOpStorage};
 
     #[tokio::test(flavor = "current_thread")]
     async fn rejects_invalid_storage_path() {
         let result = read_file_at(
             &NoOpStorage,
             PathBuf::from("../outside"),
-            &mut TestWriter,
+            &mut BytesWriter::default(),
             0..1,
         )
         .await;
@@ -66,7 +52,7 @@ mod tests {
         let result = read_file_at(
             &NoOpStorage,
             PathBuf::new(),
-            &mut TestWriter,
+            &mut BytesWriter::default(),
             Range { start: 2, end: 1 },
         )
         .await;
@@ -76,9 +62,13 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn forwards_storage_error() {
-        let result =
-            read_file_at(&NoOpStorage, PathBuf::new(), &mut TestWriter, 0..1)
-                .await;
+        let result = read_file_at(
+            &NoOpStorage,
+            PathBuf::new(),
+            &mut BytesWriter::default(),
+            0..1,
+        )
+        .await;
 
         assert!(matches!(result, Err(ReadFileAtError::NotSupported)));
     }
@@ -89,7 +79,7 @@ mod tests {
         let result = read_file_at(
             &storage,
             PathBuf::from("file"),
-            &mut TestWriter,
+            &mut BytesWriter::default(),
             0..2,
         )
         .await;

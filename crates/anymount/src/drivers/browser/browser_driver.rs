@@ -2,14 +2,18 @@
 
 #[path = "browser_driver_api.rs"]
 mod browser_driver_api;
+#[path = "browser_write_session.rs"]
+mod browser_write_session;
 
 pub use browser_driver_api::BrowserDriverApi;
+
+use browser_write_session::{BrowserWriteSession, WorkspaceWriteSession};
 
 use crate::domain::{
     ConnectMountError, ConnectStorageError, DirEntry, DisconnectMountError,
     Driver, DriverConfig, Mount, MountConfig, MountError, ReadDirError,
-    ReadFileAtError, Storage, StorageConfig, StoragePath, UnregisterMountError,
-    WriteFileError,
+    ReadFileAtError, StartWriteFileError, Storage, StorageConfig, StoragePath,
+    UnregisterMountError, WriteFileError, WriteFileSession,
 };
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -157,20 +161,29 @@ impl Storage for BrowserWorkspace {
             })
     }
 
-    async fn write_file(
+    async fn start_write_file(
         &self,
         path: StoragePath,
-        bytes: &[u8],
-    ) -> Result<(), WriteFileError> {
+    ) -> Result<Box<dyn WriteFileSession + '_>, StartWriteFileError> {
         if !self.is_connected() {
-            return Err(WriteFileError::Disconnected);
+            return Err(StartWriteFileError::Disconnected);
         }
-        self.storage.write_file(path, bytes).await.map_err(|error| {
-            if matches!(error, WriteFileError::PermissionDenied) {
-                self.disconnect();
-            }
-            error
-        })
+        let session =
+            self.storage.start_write_file(path).await.map_err(|error| {
+                if matches!(error, StartWriteFileError::PermissionDenied) {
+                    self.disconnect();
+                }
+                error
+            })?;
+        if !self.is_connected() {
+            let mut session = session;
+            let _ = session.abort().await;
+            return Err(StartWriteFileError::Disconnected);
+        }
+        Ok(Box::new(WorkspaceWriteSession::new(
+            session,
+            self.connected.clone(),
+        )))
     }
 }
 
@@ -458,30 +471,19 @@ impl Storage for FileSystemAccessStorage {
         Ok(offset - range.start)
     }
 
-    async fn write_file(
+    async fn start_write_file(
         &self,
         path: StoragePath,
-        value: &[u8],
-    ) -> Result<(), WriteFileError> {
+    ) -> Result<Box<dyn WriteFileSession + '_>, StartWriteFileError> {
         let file_handle = self
             .file_handle(path, true)
             .await
-            .map_err(|error| self.write_error(error))?;
+            .map_err(|error| self.start_write_file_error(error))?;
         let writable =
             call_async(&file_handle, "createWritable", &Array::new())
                 .await
-                .map_err(|error| self.write_error(error))?;
-        let result = async {
-            let bytes = Uint8Array::from(value);
-            call_async(&writable, "write", &Array::of1(&bytes)).await?;
-            call_async(&writable, "close", &Array::new()).await
-        }
-        .await;
-        if let Err(error) = result {
-            let _ = call_async(&writable, "abort", &Array::new()).await;
-            return Err(self.write_error(error));
-        }
-        Ok(())
+                .map_err(|error| self.start_write_file_error(error))?;
+        Ok(Box::new(BrowserWriteSession::new(self, writable)))
     }
 }
 
@@ -510,6 +512,17 @@ impl FileSystemAccessStorage {
             Some("NotAllowedError") => ReadFileAtError::PermissionDenied,
             Some("TypeMismatchError") => ReadFileAtError::NotAFile,
             _ => ReadFileAtError::Unknown {
+                message: js_message(&error),
+            },
+        }
+    }
+
+    fn start_write_file_error(&self, error: JsValue) -> StartWriteFileError {
+        match self.error_name(&error).as_deref() {
+            Some("NotFoundError") => StartWriteFileError::NotFound,
+            Some("NotAllowedError") => StartWriteFileError::PermissionDenied,
+            Some("TypeMismatchError") => StartWriteFileError::NotAFile,
+            _ => StartWriteFileError::Failed {
                 message: js_message(&error),
             },
         }
@@ -673,6 +686,7 @@ mod tests {
     use wasm_bindgen_test::wasm_bindgen_test;
 
     use crate::test_utils::mocks::BytesWriter as TestWriter;
+    use futures::io::AsyncWriteExt;
 
     fn workspace(handle: JsValue) -> super::BrowserWorkspace {
         super::BrowserWorkspace::new(
@@ -842,10 +856,10 @@ mod tests {
                 .await,
             Err(ReadFileAtError::NotFound)
         ));
-        storage
-            .write_file(path.clone(), &[0, 255, 42])
-            .await
-            .expect("write");
+        let mut session =
+            storage.start_write_file(path.clone()).await.expect("start");
+        session.write_all(&[0, 255, 42]).await.expect("write");
+        session.finish().await.expect("finish");
         assert_eq!(
             storage
                 .read_file_at(path.clone(), &mut writer, 1..2)
@@ -1022,7 +1036,7 @@ mod tests {
 
     #[wasm_bindgen_test]
     async fn browser_write_permission_failure_disconnects_storage() {
-        use crate::domain::{Storage, StoragePath, WriteFileError};
+        use crate::domain::{StartWriteFileError, Storage, StoragePath};
 
         let handle = Function::new_no_args(
             "return { queryPermission: async () => 'granted', getFileHandle: async () => { throw new DOMException('denied', 'NotAllowedError'); } }",
@@ -1031,18 +1045,18 @@ mod tests {
         let path =
             StoragePath::try_from(PathBuf::from("note.bin")).expect("path");
         assert!(matches!(
-            storage.write_file(path.clone(), &[]).await,
-            Err(WriteFileError::Disconnected)
+            storage.start_write_file(path.clone()).await,
+            Err(StartWriteFileError::Disconnected)
         ));
         assert!(storage.connect(false).await.expect("connect"));
         assert!(matches!(
-            storage.write_file(path.clone(), &[]).await,
-            Err(WriteFileError::PermissionDenied)
+            storage.start_write_file(path.clone()).await,
+            Err(StartWriteFileError::PermissionDenied)
         ));
         assert!(!storage.is_connected());
         assert!(matches!(
-            storage.write_file(path, &[]).await,
-            Err(WriteFileError::Disconnected)
+            storage.start_write_file(path).await,
+            Err(StartWriteFileError::Disconnected)
         ));
     }
 
@@ -1266,7 +1280,10 @@ mod tests {
         assert!(storage.connect(false).await.expect("connect"));
         let path =
             StoragePath::try_from(PathBuf::from("note.bin")).expect("path");
-        assert!(storage.write_file(path, &[1, 2]).await.is_err());
+        let mut session = storage.start_write_file(path).await.expect("start");
+        session.write_all(&[1, 2]).await.expect("write");
+        assert!(session.finish().await.is_err());
+        session.abort().await.expect("abort failed write");
         assert_eq!(
             Reflect::get(&handle, &JsValue::from_str("aborts"))
                 .expect("abort count")

@@ -14,6 +14,7 @@ Use [mise](https://mise.jdx.dev/walkthrough.html) for task execution.
 - Do not write markdown files that only explain how to run tasks.
 - Task run instructions should be self-explanatory from mise's
   configuration (e.g. `.mise.toml`).
+- Pass arguments to existing tasks (e.g. `mise run test --lib domain::storage::`) instead of creating new tasks.
 
 Run tasks via:
 

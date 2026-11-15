@@ -12,6 +12,7 @@ pub use mount::{
 pub use started_authorization::{AuthStorageError, StartedAuthorization};
 pub use storage::{
     ConnectStorageError, DirEntry, DirStream, InvalidStoragePath,
-    MAX_READ_FILE_AT_RANGE_SIZE, ReadDirError, ReadFileAtError, Storage,
-    StorageConfig, StoragePath, WriteAt, WriteAtError, WriteFileError,
+    MAX_READ_FILE_AT_RANGE_SIZE, ReadDirError, ReadFileAtError,
+    StartWriteFileError, Storage, StorageConfig, StoragePath, WriteAt,
+    WriteAtError, WriteFileError, WriteFileSession,
 };
