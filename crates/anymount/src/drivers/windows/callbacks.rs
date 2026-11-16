@@ -1,5 +1,5 @@
 use super::native_storage::NativeStorage;
-use crate::domain::{DirEntry, ReadDirError, WriteAt, WriteAtError};
+use crate::domain::{DirEntry, ReadDirError};
 use crate::drivers::windows::placeholder_utils::{
     dehydrate_file, get_placeholder_info,
 };
@@ -12,6 +12,7 @@ use cloud_filter::{
 };
 use parking_lot::Mutex;
 use std::collections::HashSet;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::SystemTime;
 use windows::Win32::Storage::CloudFilters::CF_PIN_STATE_UNPINNED;
@@ -61,7 +62,7 @@ impl SyncFilter for Callbacks {
             }
         };
         let range = info.required_file_range();
-        let mut writer = FetchDataWriter::new(ticket, range.end);
+        let mut writer = FetchDataWriter::new(ticket, range.clone());
         crate::domain::StoragePath::try_from(relative)
             .map_err(|_| cloud_filter::error::CloudErrorKind::Unsuccessful)
             .and_then(|path| {
@@ -310,6 +311,7 @@ mod tests {
     }
 }
 
+// Cloud Filter transfers use 4 KiB blocks except for the final range tail.
 const CF_TRANSFER_CHUNK: usize = 4096;
 
 struct FetchDataWriter {
@@ -320,73 +322,51 @@ struct FetchDataWriter {
 }
 
 impl FetchDataWriter {
-    fn new(ticket: ticket::FetchData, range_end: u64) -> Self {
+    fn new(ticket: ticket::FetchData, range: std::ops::Range<u64>) -> Self {
         Self {
             ticket,
-            range_end,
-            buffer: Vec::new(),
-            next_offset: 0,
+            range_end: range.end,
+            buffer: Vec::with_capacity(CF_TRANSFER_CHUNK),
+            next_offset: range.start,
         }
     }
 
-    fn flush_chunks(&mut self) -> Result<(), WriteAtError> {
-        while self.buffer.len() >= CF_TRANSFER_CHUNK
-            && self.next_offset + CF_TRANSFER_CHUNK as u64 <= self.range_end
-        {
-            let offset = self.next_offset;
-            let chunk: Vec<u8> =
-                self.buffer.drain(..CF_TRANSFER_CHUNK).collect();
-            CfWriteAt::write_at(&self.ticket, &chunk, offset).map_err(
-                |error| WriteAtError::Failed {
-                    offset,
-                    message: error.to_string(),
-                },
-            )?;
-            self.next_offset += CF_TRANSFER_CHUNK as u64;
-        }
-        Ok(())
-    }
-
-    fn flush_final(&mut self) -> Result<(), WriteAtError> {
+    fn transfer_buffer(&mut self) -> io::Result<()> {
         if !self.buffer.is_empty() {
-            let offset = self.range_end - self.buffer.len() as u64;
-            let chunk = std::mem::take(&mut self.buffer);
-            CfWriteAt::write_at(&self.ticket, &chunk, offset).map_err(
-                |error| WriteAtError::Failed {
-                    offset,
-                    message: error.to_string(),
-                },
-            )?;
+            CfWriteAt::write_at(&self.ticket, &self.buffer, self.next_offset)
+                .map_err(|error| io::Error::other(error.to_string()))?;
+            self.next_offset += self.buffer.len() as u64;
+            self.buffer.clear();
         }
         Ok(())
     }
 }
 
-impl WriteAt for FetchDataWriter {
-    fn write_at(
-        &mut self,
-        buf: &[u8],
-        offset: u64,
-    ) -> Result<(), WriteAtError> {
-        if buf.is_empty() {
-            return Ok(());
+impl Write for FetchDataWriter {
+    fn write(&mut self, mut bytes: &[u8]) -> io::Result<usize> {
+        let accepted_end = self.next_offset + self.buffer.len() as u64;
+        if bytes.len() as u64 > self.range_end - accepted_end {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "fetch_data: write exceeds requested range",
+            ));
         }
-        if self.next_offset != offset {
-            return Err(WriteAtError::Failed {
-                offset,
-                message: format!(
-                    "fetch_data: non-contiguous write at {} (expected {})",
-                    offset, self.next_offset
-                ),
-            });
+        let count = bytes.len();
+        while !bytes.is_empty() {
+            let take = bytes.len().min(CF_TRANSFER_CHUNK - self.buffer.len());
+            self.buffer.extend_from_slice(&bytes[..take]);
+            bytes = &bytes[take..];
+            if self.buffer.len() == CF_TRANSFER_CHUNK
+                || self.next_offset + self.buffer.len() as u64 == self.range_end
+            {
+                self.transfer_buffer()?;
+            }
         }
-        self.buffer.extend_from_slice(buf);
-        self.next_offset += buf.len() as u64;
-        self.flush_chunks()?;
-        if self.next_offset == self.range_end {
-            self.flush_final()?;
-        }
-        Ok(())
+        Ok(count)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.transfer_buffer()
     }
 }
 

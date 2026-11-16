@@ -2,6 +2,7 @@ mod bytes_writer;
 mod cannot_connect_storage_config;
 mod counting_writer;
 mod empty_storage_config;
+mod fake_writer;
 mod memory_write_storage;
 mod mock_storage;
 mod no_op_driver;
@@ -15,6 +16,7 @@ pub use bytes_writer::BytesWriter;
 pub use cannot_connect_storage_config::CannotConnectStorageConfig;
 pub use counting_writer::CountingWriter;
 pub use empty_storage_config::EmptyStorageConfig;
+pub use fake_writer::FakeWriter;
 pub use memory_write_storage::{
     MemoryWriteStorage, TrailerWriteSession, WriteSessionState,
 };

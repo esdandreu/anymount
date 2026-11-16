@@ -3,7 +3,7 @@ use crate::domain::{AuthorizationError, HostSaveError, SaveStatus};
 use crate::test_utils::fakeoauth::{
     FakeConfigurationPersistence, FakeOAuthRuntime,
 };
-use crate::test_utils::mocks::BytesWriter;
+use crate::test_utils::mocks::{BytesWriter, FakeWriter};
 use futures::FutureExt;
 use serde_json::json;
 
@@ -538,6 +538,67 @@ async fn browser_compatible_downloads_use_metadata_and_never_forward_bearer_toke
             .iter()
             .any(|(name, value)| name == "range" && value == "bytes=4-6")
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn range_reads_honor_pending_partial_writes_and_current_position() {
+    let fake = FakeOAuthRuntime::new(1000);
+    let storage = session(&fake).connect().expect("connection");
+    fake.push_json(
+        200,
+        json!({"@microsoft.graph.downloadUrl":"https://download.example/file"}),
+    );
+    fake.push_body(206, b"2345".to_vec());
+    let mut writer = FakeWriter::new();
+    writer.bytes.extend_from_slice(b"prefix:");
+    writer.max_write = 1;
+    writer.pending = true;
+    let count = storage
+        .read_file_at(
+            StoragePath::try_from(PathBuf::from("file")).expect("path"),
+            &mut writer,
+            2..6,
+        )
+        .await
+        .expect("range");
+    assert_eq!(count, 4);
+    assert_eq!(writer.flat_bytes(), b"prefix:2345");
+    assert_eq!(writer.pending_polls, 4);
+    assert_eq!((writer.flushes, writer.closes), (0, 0));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn range_reads_forward_sink_io_errors_and_zero_writes() {
+    for zero in [false, true] {
+        let fake = FakeOAuthRuntime::new(1000);
+        let storage = session(&fake).connect().expect("connection");
+        fake.push_json(200, json!({"@microsoft.graph.downloadUrl":"https://download.example/file"}));
+        fake.push_body(206, b"2345".to_vec());
+        let mut writer = FakeWriter::new();
+        writer.pending = true;
+        writer.max_write = 1;
+        let expected = if zero {
+            writer.zero_after = Some(2);
+            std::io::ErrorKind::WriteZero
+        } else {
+            writer.fail_after = Some(2);
+            std::io::ErrorKind::PermissionDenied
+        };
+        let error = storage
+            .read_file_at(
+                StoragePath::try_from(PathBuf::from("file")).expect("path"),
+                &mut writer,
+                2..6,
+            )
+            .await
+            .expect_err("sink failure");
+        let ReadFileAtError::Write(error) = error else {
+            panic!("expected sink I/O error")
+        };
+        assert_eq!(error.kind(), expected);
+        assert_eq!(writer.flat_bytes(), b"23");
+        assert_eq!((writer.flushes, writer.closes), (0, 0));
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]

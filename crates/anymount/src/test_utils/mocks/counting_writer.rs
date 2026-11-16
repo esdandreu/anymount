@@ -1,7 +1,12 @@
-use crate::domain::{WriteAt, WriteAtError};
+use futures::io::AsyncWrite;
+use std::{
+    io,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
+#[derive(Debug)]
 pub struct CountingWriter {
-    pub next: u64,
     pub total: u64,
     pub max_chunk: usize,
     pub fail_after: Option<usize>,
@@ -10,9 +15,8 @@ pub struct CountingWriter {
 }
 
 impl CountingWriter {
-    pub fn new(start: u64) -> Self {
+    pub fn new() -> Self {
         Self {
-            next: start,
             total: 0,
             max_chunk: 0,
             fail_after: None,
@@ -22,24 +26,39 @@ impl CountingWriter {
     }
 }
 
-impl WriteAt for CountingWriter {
-    fn write_at(
-        &mut self,
+impl AsyncWrite for CountingWriter {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        _: &mut Context<'_>,
         bytes: &[u8],
-        offset: u64,
-    ) -> Result<(), WriteAtError> {
+    ) -> Poll<io::Result<usize>> {
         assert_eq!(std::thread::current().id(), self.thread);
-        assert_eq!(offset, self.next);
         if self.fail_after == Some(self.calls) {
-            return Err(WriteAtError::Failed {
-                offset,
-                message: "test failure".into(),
-            });
+            return Poll::Ready(Err(io::Error::other("test failure")));
         }
         self.calls += 1;
         self.max_chunk = self.max_chunk.max(bytes.len());
-        self.next += bytes.len() as u64;
         self.total += bytes.len() as u64;
-        Ok(())
+        Poll::Ready(Ok(bytes.len()))
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+    ) -> Poll<io::Result<()>> {
+        panic!("range reads must not flush the sink")
+    }
+
+    fn poll_close(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+    ) -> Poll<io::Result<()>> {
+        panic!("range reads must not close the sink")
+    }
+}
+
+impl Default for CountingWriter {
+    fn default() -> Self {
+        Self::new()
     }
 }

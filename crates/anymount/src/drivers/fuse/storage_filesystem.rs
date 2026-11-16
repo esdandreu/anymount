@@ -1,6 +1,5 @@
 use super::native_storage::NativeStorage;
 use super::{CachePort, CachedDirCache, CachedDirEntry, Result};
-use crate::domain::{WriteAt, WriteAtError};
 use fuser::{
     Errno, FileAttr, FileHandle, FileType, Generation, INodeNo, OpenFlags,
     ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request,
@@ -203,29 +202,7 @@ impl fuser::Filesystem for StorageFilesystem {
             return;
         }
         let range_len = (end - offset) as usize;
-        struct VecWriter {
-            buf: Vec<u8>,
-            range_start: u64,
-        }
-        impl WriteAt for VecWriter {
-            fn write_at(
-                &mut self,
-                buf: &[u8],
-                at: u64,
-            ) -> std::result::Result<(), WriteAtError> {
-                let start = (at.saturating_sub(self.range_start)) as usize;
-                let end = start + buf.len();
-                if end > self.buf.len() {
-                    self.buf.resize(end, 0);
-                }
-                self.buf[start..end].copy_from_slice(buf);
-                Ok(())
-            }
-        }
-        let mut writer = VecWriter {
-            buf: vec![0u8; range_len],
-            range_start: offset,
-        };
+        let mut writer = Vec::with_capacity(range_len);
         if crate::domain::StoragePath::try_from(info.path.clone())
             .map_err(|_| ())
             .and_then(|path| {
@@ -238,9 +215,9 @@ impl fuser::Filesystem for StorageFilesystem {
             reply.error(Errno::from_i32(libc::EIO));
             return;
         }
-        if let Err(err) =
-            self.cache
-                .write_range(&info.path, offset, &writer.buf, info.size)
+        if let Err(err) = self
+            .cache
+            .write_range(&info.path, offset, &writer, info.size)
         {
             tracing::warn!(
                 path = %info.path.display(),
@@ -248,7 +225,7 @@ impl fuser::Filesystem for StorageFilesystem {
                 "failed to write data cache"
             );
         }
-        reply.data(&writer.buf);
+        reply.data(&writer);
     }
 
     fn readdir(

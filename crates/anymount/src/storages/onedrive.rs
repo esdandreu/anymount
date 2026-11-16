@@ -10,8 +10,9 @@ pub use session::{OneDriveSession, OneDriveStatus, RequestCredential};
 
 use crate::domain::{
     AuthorizationError, ConnectStorageError, DirEntry, DirStream, ReadDirError,
-    ReadFileAtError, Storage, StorageConfig, StoragePath, WriteAt,
+    ReadFileAtError, Storage, StorageConfig, StoragePath,
 };
+use futures::io::{AsyncWrite, AsyncWriteExt};
 use serde::{Deserialize, Serialize};
 use std::{
     fmt,
@@ -344,7 +345,7 @@ impl Storage for OneDriveStorage {
     async fn read_file_at(
         &self,
         path: StoragePath,
-        writer: &mut dyn WriteAt,
+        writer: &mut (dyn AsyncWrite + Unpin),
         range: std::ops::Range<u64>,
     ) -> Result<u64, ReadFileAtError> {
         if range.start > range.end {
@@ -397,7 +398,10 @@ impl Storage for OneDriveStorage {
             if body.is_empty() {
                 break;
             }
-            writer.write_at(body, offset)?;
+            writer
+                .write_all(body)
+                .await
+                .map_err(ReadFileAtError::Write)?;
             offset += body.len() as u64;
             if body.len() < (end - (offset - body.len() as u64)) as usize {
                 break;

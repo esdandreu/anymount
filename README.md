@@ -167,6 +167,14 @@ download requests never carry bearer credentials. Authorization, configuration,
 and error debug output redact tokens, codes, callback queries, and raw responses.
 Device codes are displayed intentionally only as sign-in instructions.
 
+Range reads accept `futures::io::AsyncWrite + Unpin` sinks, including
+`WriteFileSession` directly. Requested source bytes are written sequentially at
+the sink's current position, independently of the source offset. Reads await
+partial writes and backpressure, but never flush, close, finish, or abort the
+caller-owned sink. Storage reads return the copied byte count, including short
+reads at EOF; the `read_file_at` helper requires the entire requested range.
+Sink failures retain their `std::io::Error` in `ReadFileAtError::Write`.
+
 Writable storage starts a `WriteFileSession` through `Storage::start_write_file`.
 Startup failures return `StartWriteFileError`; session failures use
 `WriteFileError`.

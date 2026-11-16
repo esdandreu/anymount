@@ -7,7 +7,7 @@ pub use write_file_session::{WriteFileError, WriteFileSession};
 
 use std::{ops::Range, pin::Pin, time::SystemTime};
 
-use futures::Stream;
+use futures::{Stream, io::AsyncWrite};
 
 use super::AuthorizationError;
 use async_trait::async_trait;
@@ -47,10 +47,21 @@ pub trait Storage {
     ) -> Result<DirStream, ReadDirError> {
         Err(ReadDirError::NotSupported)
     }
+    /// Copies a source range sequentially into the sink's current position.
+    ///
+    /// Returns the number of bytes copied, which may be shorter at EOF.
+    /// Source offsets do not reposition the sink. Partial writes and
+    /// backpressure are awaited. The sink and future need not be `Send`.
+    /// This operation never flushes, closes, finishes, or aborts the sink.
+    ///
+    /// # Errors
+    ///
+    /// Returns source access or range errors, or [`ReadFileAtError::Write`]
+    /// if the sink fails or cannot make progress.
     async fn read_file_at(
         &self,
         _path: StoragePath,
-        _writer: &mut dyn WriteAt,
+        _writer: &mut (dyn AsyncWrite + Unpin),
         _range: std::ops::Range<u64>,
     ) -> Result<u64, ReadFileAtError> {
         Err(ReadFileAtError::NotSupported)
@@ -82,7 +93,7 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
     async fn read_file_at(
         &self,
         path: StoragePath,
-        writer: &mut dyn WriteAt,
+        writer: &mut (dyn AsyncWrite + Unpin),
         range: Range<u64>,
     ) -> Result<u64, ReadFileAtError> {
         (**self).read_file_at(path, writer, range).await
@@ -101,11 +112,6 @@ pub trait DirEntry: Send + Sync {
     fn is_dir(&self) -> bool;
     fn size(&self) -> Option<u64>;
     fn accessed(&self) -> Option<SystemTime>;
-}
-
-pub trait WriteAt {
-    fn write_at(&mut self, buf: &[u8], offset: u64)
-    -> Result<(), WriteAtError>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -151,12 +157,6 @@ impl From<std::io::Error> for ReadDirError {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum WriteAtError {
-    #[error("failed to write at offset {offset}: {message}")]
-    Failed { offset: u64, message: String },
-}
-
-#[derive(Debug, thiserror::Error)]
 pub enum ReadFileAtError {
     #[error(transparent)]
     Authorization(#[from] AuthorizationError),
@@ -185,7 +185,7 @@ pub enum ReadFileAtError {
     Unavailable { message: String },
 
     #[error("failed to write content")]
-    WriteAt(#[from] WriteAtError),
+    Write(#[source] std::io::Error),
 
     #[error("failed to read file: {message}")]
     Unknown { message: String },

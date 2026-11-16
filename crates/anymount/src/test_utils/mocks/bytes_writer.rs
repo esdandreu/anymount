@@ -1,13 +1,33 @@
-#[derive(Default)]
+use futures::io::AsyncWrite;
+use std::{
+    io,
+    pin::Pin,
+    task::{Context, Poll},
+};
+
+#[derive(Debug, Default)]
 pub struct BytesWriter(pub Vec<u8>);
 
-impl crate::domain::WriteAt for BytesWriter {
-    fn write_at(
-        &mut self,
+impl AsyncWrite for BytesWriter {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
         bytes: &[u8],
-        _offset: u64,
-    ) -> Result<(), crate::domain::WriteAtError> {
-        self.0.extend_from_slice(bytes);
-        Ok(())
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.0).poll_write(cx, bytes)
+    }
+
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_flush(cx)
+    }
+
+    fn poll_close(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_close(cx)
     }
 }

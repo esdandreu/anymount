@@ -3,7 +3,7 @@
 use crate::domain::{
     AuthorizationError, ConfigurationPersistence, CredentialUpdate,
     HostSaveError, ReadDirError, ReadFileAtError, SaveStatus, Storage,
-    StoragePath, WriteAt, WriteAtError,
+    StoragePath,
 };
 use crate::storages::onedrive::{
     OneDriveConfig, OneDriveSession, OneDriveStorage,
@@ -261,12 +261,12 @@ impl OneDriveBrowserApi {
         let end = offset
             .checked_add(u64::from(length))
             .ok_or_else(|| js_error("RangeError", "invalid file range"))?;
-        let mut writer = BrowserReadBuffer(Vec::with_capacity(length as usize));
+        let mut writer = Vec::with_capacity(length as usize);
         storage
             .read_file_at(path, &mut writer, offset..end)
             .await
             .map_err(read_file_error)?;
-        Ok(writer.0)
+        Ok(writer)
     }
 
     /// Returns the latest unsaved credential snapshot JSON, or no value.
@@ -455,19 +455,6 @@ impl ConfigurationPersistence for BrowserConfigurationPersistence {
         JsFuture::from(Promise::resolve(&result))
             .await
             .map_err(|_| HostSaveError)?;
-        Ok(())
-    }
-}
-
-struct BrowserReadBuffer(Vec<u8>);
-
-impl WriteAt for BrowserReadBuffer {
-    fn write_at(
-        &mut self,
-        bytes: &[u8],
-        _offset: u64,
-    ) -> Result<(), WriteAtError> {
-        self.0.extend_from_slice(bytes);
         Ok(())
     }
 }
