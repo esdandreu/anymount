@@ -1,13 +1,9 @@
 ---
 name: test
 description: >
-  Always write tests for your code. Your tests are the specification.
+  When writing tests.
 ---
 # Test anymount
-
-## When to Use
-
-- Always. New functionality should be accompanied by at least unit tests.
 
 ## Instructions
 
