@@ -114,6 +114,42 @@ async fn redirect_survives_navigation_and_replaces_the_whole_grant_once() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn redirect_completion_replaces_grant_after_concurrent_renewal() {
+    let fake = FakeOAuthRuntime::new(1000);
+    let owner = session(&fake);
+    let begin = owner
+        .begin_redirect("https://app.example/callback")
+        .await
+        .expect("begin");
+    let callback = callback(&begin);
+    let response = fake.defer_response();
+    let mut completion = Box::pin(owner.complete_redirect(&callback));
+    assert!(completion.as_mut().now_or_never().is_none());
+    fake.push_json(200, token("renewed-old-grant", Some("rotated-old-grant")));
+    owner
+        .request_credentials(Some(0))
+        .await
+        .expect("renew old grant");
+    response
+        .send(
+            oauth2::http::Response::builder()
+                .status(200)
+                .header("content-type", "application/json")
+                .body(
+                    serde_json::to_vec(&token("fresh-grant", None))
+                        .expect("response"),
+                )
+                .expect("response"),
+        )
+        .expect("exchange waiting");
+    completion.await.expect("complete sign-in");
+    let update = snapshot(&owner);
+    assert_eq!(update["access_token"], "fresh-grant");
+    assert!(update["refresh_token"].is_null());
+    assert_eq!(update["credential_generation"], 2);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn callbacks_reject_mismatch_expiry_cancel_supersession_and_wrong_identity()
  {
     let fake = FakeOAuthRuntime::new(1000);
@@ -253,6 +289,32 @@ async fn opaque_unknown_expiry_access_only_credentials_need_no_refresh() {
         owner.request_credentials(Some(0)).await.err(),
         Some(AuthorizationError::SignInRequired)
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn access_only_token_remains_usable_until_actual_expiry() {
+    let fake = FakeOAuthRuntime::new(1000);
+    let mut config = config();
+    config.refresh_token = None;
+    config.token_expiry_buffer_secs = None;
+    config.expires_at = Some(1030);
+    let owner =
+        OneDriveSession::with_runtime(config, "record".into(), fake.runtime())
+            .expect("session");
+    assert_eq!(
+        &*owner
+            .request_credentials(None)
+            .await
+            .expect("still valid")
+            .token,
+        "opaque-old-access"
+    );
+    fake.advance(30);
+    assert_eq!(
+        owner.request_credentials(None).await.err(),
+        Some(AuthorizationError::SignInRequired)
+    );
+    assert!(fake.requests().is_empty());
 }
 
 #[tokio::test(flavor = "current_thread")]

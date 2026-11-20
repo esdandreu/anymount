@@ -20,6 +20,7 @@ use crate::domain::{
 #[derive(Debug, Clone)]
 pub struct ConfigFilePersistence {
     path: PathBuf,
+    format: &'static str,
     ordering: Arc<SaveOrder>,
 }
 
@@ -53,9 +54,16 @@ impl ConfigFilePersistence {
             return Err(HostSaveError);
         }
         open_config_file(&path).map_err(|_| HostSaveError)?;
+        let format = match path.extension().and_then(|value| value.to_str()) {
+            Some("json") => "json",
+            Some("toml") => "toml",
+            Some("yaml" | "yml") => "yaml",
+            _ => return Err(HostSaveError),
+        };
         let path = path.canonicalize().map_err(|_| HostSaveError)?;
         Ok(Self {
             path,
+            format,
             ordering: Arc::new(SaveOrder::default()),
         })
     }
@@ -83,7 +91,7 @@ impl ConfigFilePersistence {
             .map_err(|_| HostSaveError)?
             .read_to_string(&mut contents)
             .map_err(|_| HostSaveError)?;
-        let replacement = replace_storage(&self.path, &contents, storage)?;
+        let replacement = replace_storage(self.format, &contents, storage)?;
         let directory = self.path.parent().ok_or(HostSaveError)?;
         let mut temporary = tempfile::NamedTempFile::new_in(directory)
             .map_err(|_| HostSaveError)?;
@@ -130,21 +138,18 @@ impl ConfigurationPersistence for ConfigFilePersistence {
 }
 
 fn replace_storage(
-    path: &Path,
+    format: &str,
     contents: &str,
     storage: &dyn crate::domain::StorageConfig,
 ) -> Result<String, HostSaveError> {
-    let extension = path.extension().and_then(|value| value.to_str());
-    let mut document: serde_json::Value = match extension {
-        Some("json") => {
-            serde_json::from_str(contents).map_err(|_| HostSaveError)?
-        }
-        Some("toml") => serde_json::to_value(
+    let mut document: serde_json::Value = match format {
+        "json" => serde_json::from_str(contents).map_err(|_| HostSaveError)?,
+        "toml" => serde_json::to_value(
             toml::from_str::<toml::Value>(contents)
                 .map_err(|_| HostSaveError)?,
         )
         .map_err(|_| HostSaveError)?,
-        Some("yaml" | "yml") => serde_json::to_value(
+        "yaml" => serde_json::to_value(
             serde_yaml::from_str::<serde_yaml::Value>(contents)
                 .map_err(|_| HostSaveError)?,
         )
@@ -184,17 +189,15 @@ fn replace_storage(
             }
         }
     }
-    match extension {
-        Some("json") => {
+    match format {
+        "json" => {
             serde_json::to_string_pretty(&document).map_err(|_| HostSaveError)
         }
-        Some("toml") => toml::to_string_pretty(
+        "toml" => toml::to_string_pretty(
             &toml::Value::try_from(document).map_err(|_| HostSaveError)?,
         )
         .map_err(|_| HostSaveError),
-        Some("yaml" | "yml") => {
-            serde_yaml::to_string(&document).map_err(|_| HostSaveError)
-        }
+        "yaml" => serde_yaml::to_string(&document).map_err(|_| HostSaveError),
         _ => Err(HostSaveError),
     }
 }

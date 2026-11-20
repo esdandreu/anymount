@@ -280,14 +280,16 @@ impl OneDriveSession {
             if rejected {
                 state.request_token = None;
             }
+            let buffer = if state.config.refresh_token.is_some() {
+                state
+                    .config
+                    .token_expiry_buffer_secs
+                    .unwrap_or(DEFAULT_TOKEN_EXPIRY_BUFFER_SECS)
+            } else {
+                0
+            };
             let expired = state.config.expires_at.is_some_and(|expiry| {
-                expiry
-                    <= self.0.runtime.now().saturating_add(
-                        state
-                            .config
-                            .token_expiry_buffer_secs
-                            .unwrap_or(DEFAULT_TOKEN_EXPIRY_BUFFER_SECS),
-                    )
+                expiry <= self.0.runtime.now().saturating_add(buffer)
             });
             if !rejected && !expired {
                 if let Some(token) = &state.request_token {
@@ -527,7 +529,7 @@ impl OneDriveSession {
             .await
             .map_err(classify_basic)?;
         let mut state = self.0.state.lock().expect("session state");
-        if state.epoch != epoch || state.generation != record.generation {
+        if state.epoch != epoch {
             return Err(AuthorizationError::Cancelled);
         }
         install(&mut state, response, false, self.0.runtime.now());

@@ -157,9 +157,10 @@ replayed callbacks are rejected. Hosts must prevent concurrent owners of the sam
 saved record across processes or tabs; no distributed coordination or crash-safe
 provider/local-save transaction is promised. Failed renewal results remain shared;
 `Authorization::retry_renewal` (browser `retryRenewal`) explicitly permits another
-exchange only after a temporary failure. Ambiguous exchanges are never replayed
-automatically. A restart can require fresh sign-in when rotated credentials were
-not saved.
+exchange only after a temporary failure. Requests have a 60-second deadline;
+browser timer throttling can delay it in suspended tabs. Ambiguous exchanges are
+never replayed automatically. A restart can require fresh sign-in when rotated
+credentials were not saved.
 
 OneDrive browser downloads obtain the provider's preauthenticated metadata URL
 instead of following authenticated `/content` redirects. These URLs are secrets;

@@ -220,6 +220,44 @@ error_message = "symlink"
 
         assert!(read_config_file(&link).is_ok());
     }
+    #[cfg(unix)]
+    #[test]
+    fn saves_symlinked_toml_with_extensionless_target() {
+        let directory = TempDir::new().expect("temporary directory");
+        let target = directory.path().join("credentials");
+        let link = directory.path().join("drive.toml");
+        std::fs::write(
+            &target,
+            "path = '/mnt/demo'\n[storage]\ntype = 'onedrive'\naccess_token = 'old'\n",
+        )
+        .expect("write config");
+        std::os::unix::fs::symlink(&target, &link).expect("create symlink");
+        let persistence =
+            ConfigFilePersistence::open(directory.path(), "drive")
+                .expect("open record");
+        let storage: crate::storages::onedrive::OneDriveConfig = serde_json::from_value(
+            serde_json::json!({"access_token":"replacement-access", "refresh_token":"replacement-refresh"})
+        ).expect("config");
+        persistence
+            .save_storage(&storage)
+            .expect("save credentials");
+
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .expect("link metadata")
+                .file_type()
+                .is_symlink()
+        );
+        let actual: toml::Value = toml::from_str(
+            &std::fs::read_to_string(&target).expect("read target"),
+        )
+        .expect("toml format retained");
+        assert_eq!(
+            actual["storage"]["refresh_token"].as_str(),
+            Some("replacement-refresh")
+        );
+        assert!(read_config(&link).is_ok());
+    }
     #[test]
     fn parse_errors_do_not_expose_configuration_secrets() {
         let directory = TempDir::new().expect("temporary directory");

@@ -4,6 +4,9 @@ use crate::domain::AuthorizationError;
 use oauth2::{HttpRequest, HttpResponse};
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
+// Bound slow upstreams while allowing time for large storage responses.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// A runtime future that remains Send on native platforms.
 #[cfg(not(target_arch = "wasm32"))]
 pub type RuntimeFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
@@ -107,39 +110,45 @@ impl OAuthRuntimePort for PlatformRuntime {
         {
             let client = self.client.clone();
             let limit = response_limit(&request);
-            Box::pin(async move {
-                let (parts, body) = request.into_parts();
-                let mut response = client
-                    .request(parts.method, parts.uri.to_string())
-                    .headers(parts.headers)
-                    .body(body)
-                    .send()
-                    .await
-                    .map_err(|_| AuthorizationError::Temporary)?;
-                let mut builder =
-                    oauth2::http::Response::builder().status(response.status());
-                for (name, value) in response.headers() {
-                    builder = builder.header(name, value);
-                }
-                let mut body = Vec::new();
-                while let Some(chunk) = response
-                    .chunk()
-                    .await
-                    .map_err(|_| AuthorizationError::Temporary)?
-                {
-                    if body.len().saturating_add(chunk.len()) > limit {
-                        return Err(AuthorizationError::Temporary);
+            Box::pin(request_with_timeout(
+                async move {
+                    let (parts, body) = request.into_parts();
+                    let mut response = client
+                        .request(parts.method, parts.uri.to_string())
+                        .headers(parts.headers)
+                        .body(body)
+                        .send()
+                        .await
+                        .map_err(|_| AuthorizationError::Temporary)?;
+                    let mut builder = oauth2::http::Response::builder()
+                        .status(response.status());
+                    for (name, value) in response.headers() {
+                        builder = builder.header(name, value);
                     }
-                    body.extend_from_slice(&chunk);
-                }
-                builder
-                    .body(body)
-                    .map_err(|_| AuthorizationError::Temporary)
-            })
+                    let mut body = Vec::new();
+                    while let Some(chunk) = response
+                        .chunk()
+                        .await
+                        .map_err(|_| AuthorizationError::Temporary)?
+                    {
+                        if body.len().saturating_add(chunk.len()) > limit {
+                            return Err(AuthorizationError::Temporary);
+                        }
+                        body.extend_from_slice(&chunk);
+                    }
+                    builder
+                        .body(body)
+                        .map_err(|_| AuthorizationError::Temporary)
+                },
+                REQUEST_TIMEOUT,
+            ))
         }
         #[cfg(target_arch = "wasm32")]
         {
-            Box::pin(browser_request(request))
+            Box::pin(request_with_timeout(
+                browser_request(request),
+                REQUEST_TIMEOUT,
+            ))
         }
     }
     fn sleep(&self, duration: Duration) -> RuntimeFuture<()> {
@@ -179,6 +188,25 @@ impl OAuthRuntimePort for PlatformRuntime {
     }
 }
 
+async fn request_with_timeout(
+    request: impl Future<Output = Result<HttpResponse, AuthorizationError>>,
+    duration: Duration,
+) -> Result<HttpResponse, AuthorizationError> {
+    #[cfg(not(target_arch = "wasm32"))]
+    let timer = tokio::time::sleep(duration);
+    #[cfg(target_arch = "wasm32")]
+    let timer = gloo_timers::future::TimeoutFuture::new(
+        duration.as_millis().min(u128::from(u32::MAX)) as u32,
+    );
+    futures::pin_mut!(request, timer);
+    match futures::future::select(request, timer).await {
+        futures::future::Either::Left((result, _)) => result,
+        futures::future::Either::Right(((), _)) => {
+            Err(AuthorizationError::Temporary)
+        }
+    }
+}
+
 // Metadata can be larger than a range; do not buffer a full ignored download.
 fn response_limit(request: &HttpRequest) -> usize {
     request
@@ -201,6 +229,52 @@ fn response_limit(request: &HttpRequest) -> usize {
 }
 
 #[cfg(target_arch = "wasm32")]
+struct FetchAbort(js_sys::Object);
+
+#[cfg(target_arch = "wasm32")]
+impl FetchAbort {
+    fn new(options: &web_sys::RequestInit) -> Result<Self, AuthorizationError> {
+        use wasm_bindgen::{JsCast, JsValue};
+        let constructor = js_sys::Reflect::get(
+            &js_sys::global(),
+            &JsValue::from_str("AbortController"),
+        )
+        .map_err(|_| AuthorizationError::Setup)?
+        .dyn_into::<js_sys::Function>()
+        .map_err(|_| AuthorizationError::Setup)?;
+        let controller =
+            js_sys::Reflect::construct(&constructor, &js_sys::Array::new())
+                .map_err(|_| AuthorizationError::Setup)?;
+        let signal =
+            js_sys::Reflect::get(&controller, &JsValue::from_str("signal"))
+                .map_err(|_| AuthorizationError::Setup)?;
+        if !js_sys::Reflect::set(
+            options.as_ref(),
+            &JsValue::from_str("signal"),
+            &signal,
+        )
+        .map_err(|_| AuthorizationError::Setup)?
+        {
+            return Err(AuthorizationError::Setup);
+        }
+        Ok(Self(controller.into()))
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Drop for FetchAbort {
+    fn drop(&mut self) {
+        use wasm_bindgen::{JsCast, JsValue};
+        if let Ok(abort) =
+            js_sys::Reflect::get(&self.0, &JsValue::from_str("abort"))
+        {
+            if let Some(abort) = abort.dyn_ref::<js_sys::Function>() {
+                let _ = abort.call0(&self.0);
+            }
+        }
+    }
+}
+#[cfg(target_arch = "wasm32")]
 async fn browser_request(
     request: HttpRequest,
 ) -> Result<HttpResponse, AuthorizationError> {
@@ -209,6 +283,7 @@ async fn browser_request(
     let limit = response_limit(&request);
     let (parts, body) = request.into_parts();
     let options = web_sys::RequestInit::new();
+    let _abort = FetchAbort::new(&options)?;
     options.set_method(parts.method.as_str());
     options.set_mode(web_sys::RequestMode::Cors);
     options.set_credentials(web_sys::RequestCredentials::Omit);
@@ -291,6 +366,53 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
 
+    async fn stalled_response_times_out(send_headers: bool) {
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("listener");
+        let address = listener.local_addr().expect("address");
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut request = [0; 4096];
+            stream.read(&mut request).expect("request");
+            if send_headers {
+                stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nx",
+                    )
+                    .expect("response");
+            }
+            let _ = ready_tx.send(());
+            let _ = release_rx.recv();
+        });
+        let request = oauth2::http::Request::builder()
+            .uri(format!("http://{address}/token"))
+            .body(Vec::new())
+            .expect("request");
+        let runtime = OAuthRuntime::new().expect("runtime");
+        let mut request = runtime.request(request);
+        assert!(matches!(
+            futures::future::select(request.as_mut(), ready_rx).await,
+            futures::future::Either::Right((Ok(()), _))
+        ));
+        let result =
+            request_with_timeout(request, Duration::from_millis(50)).await;
+        assert!(matches!(result, Err(AuthorizationError::Temporary)));
+        release_tx.send(()).expect("release server");
+        server.join().expect("server");
+    }
+
+    #[tokio::test]
+    async fn stalled_response_headers_time_out() {
+        stalled_response_times_out(false).await;
+    }
+
+    #[tokio::test]
+    async fn stalled_response_body_times_out() {
+        stalled_response_times_out(true).await;
+    }
+
     #[tokio::test]
     async fn ignored_range_cannot_buffer_the_full_download() {
         let listener =
@@ -321,6 +443,41 @@ mod tests {
     use super::*;
     use wasm_bindgen::JsCast;
     use wasm_bindgen_test::wasm_bindgen_test;
+
+    #[wasm_bindgen_test]
+    async fn stalled_browser_body_times_out_and_aborts_fetch() {
+        use wasm_bindgen::JsValue;
+        let options = web_sys::RequestInit::new();
+        let abort = FetchAbort::new(&options).expect("abort controller");
+        let signal = js_sys::Reflect::get(
+            options.as_ref(),
+            &JsValue::from_str("signal"),
+        )
+        .expect("signal");
+        let response = js_sys::Function::new_no_args(
+            "return new Response(new ReadableStream({ start() {} }));",
+        )
+        .call0(&JsValue::UNDEFINED)
+        .expect("response")
+        .dyn_into::<web_sys::Response>()
+        .expect("response type");
+        let result = request_with_timeout(
+            async move {
+                let _abort = abort;
+                browser_body(response, 4).await?;
+                Ok(oauth2::http::Response::new(Vec::new()))
+            },
+            Duration::from_millis(1),
+        )
+        .await;
+        assert!(matches!(result, Err(AuthorizationError::Temporary)));
+        assert_eq!(
+            js_sys::Reflect::get(&signal, &JsValue::from_str("aborted"))
+                .expect("aborted")
+                .as_bool(),
+            Some(true)
+        );
+    }
 
     #[wasm_bindgen_test]
     async fn oversized_browser_stream_is_cancelled_before_buffering_it() {
