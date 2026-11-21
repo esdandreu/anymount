@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::app::MountConfig;
-use anymount::{Config, ConfigRepository, domain::Mount, mount};
+use anymount::{ConfigRepository, LoadedConfig, domain::Mount, mount};
 use async_trait::async_trait;
 
 #[async_trait(?Send)]
@@ -12,7 +12,7 @@ pub trait MountService {
 }
 
 pub struct AnymountMountService {
-    configurations: Vec<Config>,
+    configurations: Vec<LoadedConfig>,
     active_mounts: HashMap<String, Box<dyn Mount>>,
 }
 
@@ -29,7 +29,8 @@ impl AnymountMountService {
 impl MountService for AnymountMountService {
     async fn list(&self) -> color_eyre::Result<Vec<MountConfig>> {
         let mut mounts = Vec::new();
-        for config in &self.configurations {
+        for record in &self.configurations {
+            let config = &record.config;
             let name = config.mount.name.clone();
             let path = config.mount.path.clone();
             let storage_type = config.mount.storage.kind().to_owned();
@@ -51,14 +52,14 @@ impl MountService for AnymountMountService {
         if self.active_mounts.contains_key(name) {
             return Ok(());
         }
-        let config = self
+        let record = self
             .configurations
             .iter()
-            .find(|config| config.mount.name == name)
+            .find(|record| record.config.mount.name == name)
             .ok_or_else(|| {
                 color_eyre::eyre::eyre!("configuration '{name}' was not found")
             })?;
-        let mount = mount(config).await?;
+        let mount = mount(record).await?;
         mount.connect().await?;
         self.active_mounts.insert(name.to_owned(), mount);
         Ok(())

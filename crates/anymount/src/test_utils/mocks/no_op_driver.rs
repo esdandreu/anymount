@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use async_trait::async_trait;
 
-use crate::domain::{Driver, Mount, MountConfig, MountError};
+use crate::domain::{Driver, LoadedConfig, Mount, MountError};
 use crate::test_utils::mocks::NoOpMount;
 
 #[derive(Default)]
@@ -12,7 +12,7 @@ pub struct NoOpDriver(Rc<()>);
 impl Driver for NoOpDriver {
     async fn mount(
         &self,
-        _config: &MountConfig,
+        _record: &LoadedConfig,
     ) -> Result<Box<dyn Mount>, MountError> {
         tokio::task::yield_now().await;
         let _ = &self.0;

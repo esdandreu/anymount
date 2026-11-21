@@ -14,12 +14,13 @@ pub type RuntimeFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 #[cfg(target_arch = "wasm32")]
 pub type RuntimeFuture<T> = Pin<Box<dyn Future<Output = T> + 'static>>;
 
-/// Preserves native thread interoperability without imposing it on browsers.
+/// Requires thread-safe runtime state on native platforms.
 #[cfg(not(target_arch = "wasm32"))]
 pub trait RuntimeBounds: Send + Sync {}
 #[cfg(not(target_arch = "wasm32"))]
 impl<T: Send + Sync> RuntimeBounds for T {}
-/// Browser runtime ports may contain non-Send handles.
+
+/// Allows browser runtime state to own thread-local handles.
 #[cfg(target_arch = "wasm32")]
 pub trait RuntimeBounds {}
 #[cfg(target_arch = "wasm32")]

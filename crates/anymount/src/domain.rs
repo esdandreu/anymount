@@ -11,7 +11,7 @@ pub use authorization::{
     RedirectAuthorization, SaveStatus,
 };
 pub use config::{
-    Config, ConfigNotFound, ConfigRepository, MountConfig, MountSession,
+    Config, ConfigNotFound, ConfigRepository, LoadedConfig, MountConfig,
 };
 pub use driver::{DefaultDriverConfig, Driver, DriverConfig, MountError};
 pub use mount::{
@@ -20,6 +20,6 @@ pub use mount::{
 pub use storage::{
     ConnectStorageError, DirEntry, DirStream, InvalidStoragePath,
     MAX_READ_FILE_AT_RANGE_SIZE, ReadDirError, ReadFileAtError,
-    StartWriteFileError, Storage, StorageConfig, StoragePath, WriteFileError,
-    WriteFileSession,
+    StartWriteFileError, Storage, StorageConfig, StoragePath, StorageSession,
+    WriteFileError, WriteFileSession,
 };

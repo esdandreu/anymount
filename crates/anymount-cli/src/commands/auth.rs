@@ -19,22 +19,26 @@ impl AuthCommand {
     ) -> color_eyre::Result<()> {
         let repository =
             config_dir.map_or_else(ConfigDir::default, ConfigDir::new);
-        let config = repository.find(&self.name)?;
-        let session = config.mount.session.as_ref().ok_or_else(|| {
-            eyre!("this storage does not support OAuth authorization")
+        let record = repository.find(&self.name)?;
+        let authorization =
+            record.session.authorization().ok_or_else(|| {
+                eyre!("this storage does not support OAuth authorization")
+            })?;
+        let persistence = record.persistence.as_deref().ok_or_else(|| {
+            eyre!("no credential persistence for '{}'", self.name)
         })?;
-        let device = session.authorization().begin_device().await?;
+        let device = authorization.begin_device().await?;
         write_instructions(&mut std::io::stderr().lock(), &device)?;
         tokio::select! {
-            result = session.authorization().poll_device() => result?,
+            result = authorization.poll_device() => result?,
             result = tokio::signal::ctrl_c() => {
                 result?;
-                session.authorization().cancel();
+                authorization.cancel();
                 return Err(eyre!("authorization cancelled"));
             }
         }
         loop {
-            match session.save_pending().await {
+            match authorization.save_pending(persistence).await {
                 Ok(()) => break,
                 Err(_) => {
                     eprintln!(

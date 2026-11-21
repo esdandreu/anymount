@@ -4,7 +4,6 @@ use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use super::{ConfigFilePersistence, NativeConfiguration};
 use crate::domain::DriverConfig;
 use crate::domain::{Config, MountConfig, StorageConfig};
 
@@ -15,20 +14,11 @@ pub fn read_config(path: &Path) -> Result<Config, ReadConfigError> {
         .ok_or(ReadConfigError::NotAConfigFile)?
         .to_owned();
     let content = read_config_file(path)?;
-    let persistence = ConfigFilePersistence::open(
-        path.parent().ok_or(ReadConfigError::NotAConfigFile)?,
-        &name,
-    )
-    .map_err(|_| ReadConfigError::CannotInitializeSession)?;
-    let session =
-        NativeConfiguration::for_storage(content.storage.as_ref(), persistence)
-            .map_err(|_| ReadConfigError::CannotInitializeSession)?;
     Ok(Config {
         mount: MountConfig {
             name,
             path: content.path,
             storage: content.storage,
-            session,
         },
         driver: content.driver,
     })
@@ -138,6 +128,11 @@ pub enum ReadConfigError {
 mod tests {
     use super::*;
     #[cfg(unix)]
+    use crate::{
+        config_dir::ConfigFilePersistence,
+        domain::{ConfigurationPersistence, CredentialUpdate},
+    };
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use tempfile::TempDir;
 
@@ -221,8 +216,8 @@ error_message = "symlink"
         assert!(read_config_file(&link).is_ok());
     }
     #[cfg(unix)]
-    #[test]
-    fn saves_symlinked_toml_with_extensionless_target() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn saves_symlinked_toml_with_extensionless_target() {
         let directory = TempDir::new().expect("temporary directory");
         let target = directory.path().join("credentials");
         let link = directory.path().join("drive.toml");
@@ -239,7 +234,13 @@ error_message = "symlink"
             serde_json::json!({"access_token":"replacement-access", "refresh_token":"replacement-refresh"})
         ).expect("config");
         persistence
-            .save_storage(&storage)
+            .save(&CredentialUpdate {
+                generation: 1,
+                config: Box::new(storage),
+                storage_type: "onedrive",
+                fields: &[&["access_token"], &["refresh_token"]],
+            })
+            .await
             .expect("save credentials");
 
         assert!(
@@ -271,8 +272,8 @@ error_message = "symlink"
         assert!(!format!("{error:?} {error}").contains("sentinel-secret"));
     }
     #[cfg(unix)]
-    #[test]
-    fn saved_credentials_have_owner_only_permissions() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn saved_credentials_have_owner_only_permissions() {
         use std::os::unix::fs::PermissionsExt;
         let directory = TempDir::new().expect("temporary directory");
         let path = directory.path().join("demo.json");
@@ -291,7 +292,13 @@ error_message = "symlink"
         .expect("configuration");
         ConfigFilePersistence::open(directory.path(), "demo")
             .expect("open record")
-            .save_storage(&storage)
+            .save(&CredentialUpdate {
+                generation: 1,
+                config: Box::new(storage),
+                storage_type: "onedrive",
+                fields: &[&["access_token"]],
+            })
+            .await
             .expect("save credentials");
         assert_eq!(
             std::fs::metadata(path)

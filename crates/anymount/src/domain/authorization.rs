@@ -5,6 +5,7 @@
 //! across processes or tabs. UI and saving never run as storage side effects.
 
 use super::StorageConfig;
+use crate::drivers::oauth::RuntimeBounds;
 use async_trait::async_trait;
 use std::fmt;
 
@@ -64,7 +65,15 @@ impl fmt::Debug for DeviceAuthorization {
 /// Retains a credential-bearing configuration until its host saves it.
 pub struct CredentialUpdate {
     pub generation: u64,
+    /// Saved provider data for this generation.
     pub config: Box<dyn StorageConfig>,
+    /// Provider tag used only to reject updates to a different storage type.
+    pub storage_type: &'static str,
+    /// Nonempty object paths relative to `storage`, excluding the `type` tag.
+    ///
+    /// A missing or null value at a listed path removes that field. Unlisted
+    /// fields, including siblings of a listed path, are not modified.
+    pub fields: &'static [&'static [&'static str]],
 }
 
 impl fmt::Debug for CredentialUpdate {
@@ -91,7 +100,7 @@ pub struct HostSaveError;
 
 /// Persists a session's configuration without participating in storage requests.
 #[async_trait(?Send)]
-pub trait ConfigurationPersistence {
+pub trait ConfigurationPersistence: RuntimeBounds {
     /// Saves this snapshot while preserving unrelated configuration fields.
     ///
     /// # Errors
@@ -138,6 +147,8 @@ pub trait Authorization {
     fn pending_update(&self) -> Option<CredentialUpdate>;
     /// Reports the independent persistence outcome.
     fn save_status(&self) -> SaveStatus;
+    /// Waits for a newer credential generation without polling.
+    async fn wait_for_update(&self, after_generation: u64) -> u64;
     /// Serializes saves and catches up to the newest received generation.
     async fn save_pending(
         &self,

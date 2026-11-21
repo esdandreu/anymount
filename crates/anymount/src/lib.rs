@@ -12,7 +12,7 @@ pub mod test_utils;
 #[cfg(not(target_arch = "wasm32"))]
 pub use config_dir::ConfigDir;
 pub use domain::{
-    Config, ConfigRepository, DirEntry, DirStream, ReadDirError,
+    Config, ConfigRepository, DirEntry, DirStream, LoadedConfig, ReadDirError,
     ReadFileAtError, StartWriteFileError, Storage, StoragePath, WriteFileError,
     WriteFileSession,
 };

@@ -1,4 +1,4 @@
-use anymount::{Config, ConfigDir, ConfigRepository};
+use anymount::{ConfigDir, ConfigRepository, LoadedConfig};
 use clap::{Args, Subcommand};
 use color_eyre::eyre::eyre;
 
@@ -32,12 +32,12 @@ impl ConnectCommand {
             return Err(eyre!("no configured mounts"));
         }
         let mut mounts = Vec::with_capacity(configurations.len());
-        for config in &configurations {
-            let mount = anymount::mount(config).await?;
+        for record in &configurations {
+            let mount = anymount::mount(record).await?;
             mount.connect().await?;
             eprintln!(
                 "Connected '{}'. Press Ctrl-C to disconnect.",
-                config.mount.name
+                record.config.mount.name
             );
             mounts.push(mount);
         }
@@ -52,7 +52,7 @@ impl ConnectCommand {
     fn configurations(
         &self,
         repository: &impl ConfigRepository,
-    ) -> color_eyre::Result<Vec<Config>> {
+    ) -> color_eyre::Result<Vec<LoadedConfig>> {
         self.validate_arguments()?;
         if self.all {
             return Ok(repository.list().collect());

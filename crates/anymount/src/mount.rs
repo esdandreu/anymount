@@ -1,4 +1,4 @@
-use crate::domain::{Config, Mount};
+use crate::domain::{LoadedConfig, Mount};
 use crate::drivers::{NoDefaultDriver, init_driver};
 
 /// Mounts a retained host-owned configuration.
@@ -8,9 +8,11 @@ use crate::drivers::{NoDefaultDriver, init_driver};
 /// # Errors
 ///
 /// Returns an error if driver selection, storage connection, or mounting fails.
-pub async fn mount(config: &Config) -> Result<Box<dyn Mount>, MountError> {
-    let driver = init_driver(config.driver.as_deref())?;
-    driver.mount(&config.mount).await.map_err(MountError::from)
+pub async fn mount(
+    record: &LoadedConfig,
+) -> Result<Box<dyn Mount>, MountError> {
+    let driver = init_driver(record.config.driver.as_deref())?;
+    driver.mount(record).await.map_err(MountError::from)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -26,6 +28,7 @@ pub enum MountError {
 mod tests {
     use std::path::PathBuf;
 
+    use super::LoadedConfig;
     use crate::domain::{Config, MountConfig};
     use crate::test_utils::mocks::{EmptyStorageConfig, NoOpDriverConfig};
 
@@ -37,11 +40,12 @@ mod tests {
                 name: "workspace".to_owned(),
                 path: PathBuf::from("workspace"),
                 storage: Box::new(EmptyStorageConfig),
-                session: None,
             },
         };
 
-        let mount = super::mount(&config).await.expect("mount should succeed");
+        let record = LoadedConfig::new(config, "workspace".to_owned())
+            .expect("open storage session");
+        let mount = super::mount(&record).await.expect("mount should succeed");
 
         assert_eq!(mount.name(), "no-op");
     }

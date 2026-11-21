@@ -67,14 +67,14 @@ invalidate another. Existing filesystem permission and streaming-write APIs
 remain separate.
 
 Successful sign-in and renewal update in-memory credentials immediately.
-`pendingUpdate()` returns sensitive JSON `{generation, config}`, or no value;
-it is not a manual save acknowledgement. Independently call
-`await api.savePending(async updateJson => { ... })`. The callback parses that
-JSON and replaces only the selected record's storage configuration, preserving
-unrelated host settings. It must resolve only when the host considers its
-write successful; throwing or rejecting reports `HostSaveError` without
-exposing callback details. The session serializes callbacks and follows newer
-generations so a stale save cannot overwrite its latest queued snapshot.
+`pendingUpdate()` returns sensitive JSON `{generation, config, fields}`, or no
+value; it is not a manual save acknowledgement. Independently call
+`await api.savePending(async updateJson => { ... })`. Verify that `config.type`
+matches the saved storage type. For each storage-relative path in `fields`, copy
+the value from `config` or delete the field if the value is absent or null.
+Leave unlisted fields and siblings untouched. Resolve only when the write
+succeeds; throwing or rejecting reports `HostSaveError` without exposing
+callback details. The session serializes callbacks and follows newer generations.
 Once started, the save task owns its callback until completion even if the
 caller stops awaiting its promise; another save cannot overtake that write.
 `saveStatus()` reports clean, pending, saved, or failed state separately.

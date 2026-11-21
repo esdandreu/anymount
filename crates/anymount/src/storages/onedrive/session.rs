@@ -5,7 +5,7 @@ use super::{
 use crate::domain::{
     Authorization, AuthorizationError, ConfigurationPersistence,
     ConnectStorageError, CredentialUpdate, DeviceAuthorization, HostSaveError,
-    RedirectAuthorization, SaveStatus,
+    RedirectAuthorization, SaveStatus, Storage, StorageSession,
 };
 use crate::drivers::oauth::{OAuthRuntime, RuntimeFuture};
 use futures::{
@@ -153,16 +153,6 @@ impl fmt::Debug for OneDriveSession {
     }
 }
 impl OneDriveSession {
-    /// Creates a host-owned identity using real portable asynchronous I/O.
-    ///
-    /// # Errors
-    /// Rejects unsupported resource endpoints and mismatched grant bindings.
-    pub fn new(
-        config: OneDriveConfig,
-        identity: String,
-    ) -> Result<Self, AuthorizationError> {
-        Self::with_runtime(config, identity, OAuthRuntime::new()?)
-    }
     /// Creates a session with an injected HTTP, execution, and clock port.
     ///
     /// # Errors
@@ -679,6 +669,18 @@ impl OneDriveSession {
         (state.generation > state.saved_generation).then(|| CredentialUpdate {
             generation: state.generation,
             config: Box::new(state.config.clone()),
+            storage_type: "onedrive",
+            fields: &[
+                &["access_token"],
+                &["refresh_token"],
+                &["expires_at"],
+                &["scopes"],
+                &["binding", "provider"],
+                &["binding", "client_id"],
+                &["binding", "authority"],
+                &["binding", "resource"],
+                &["credential_generation"],
+            ],
         })
     }
     pub fn save_status(&self) -> SaveStatus {
@@ -806,8 +808,12 @@ fn install(
     state.save_status = SaveStatus::Pending {
         generation: state.generation,
     };
-    for (_, sender) in state.waiters.drain(..) {
-        let _ = sender.send(state.generation);
+    let generation = state.generation;
+    for (_, sender) in state
+        .waiters
+        .extract_if(.., |(after, _)| generation > *after)
+    {
+        let _ = sender.send(generation);
     }
 }
 fn classify_basic(
@@ -869,6 +875,17 @@ fn classify_device(
 }
 
 #[async_trait::async_trait(?Send)]
+impl StorageSession for OneDriveSession {
+    fn authorization(&self) -> Option<&dyn Authorization> {
+        Some(self)
+    }
+
+    async fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError> {
+        Ok(Box::new(self.connect()?))
+    }
+}
+
+#[async_trait::async_trait(?Send)]
 impl Authorization for OneDriveSession {
     async fn begin_redirect(
         &self,
@@ -904,6 +921,9 @@ impl Authorization for OneDriveSession {
     }
     fn save_status(&self) -> SaveStatus {
         self.save_status()
+    }
+    async fn wait_for_update(&self, after_generation: u64) -> u64 {
+        self.wait_for_update(after_generation).await
     }
     async fn save_pending(
         &self,

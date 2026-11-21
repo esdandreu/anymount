@@ -621,6 +621,34 @@ async fn device_host_surface_preserves_provider_instructions_and_activates_crede
         parse_json(&api.pending_update().expect("snapshot").expect("pending"));
     assert_eq!(pending["config"]["access_token"], "device-access-token");
     assert!(pending["config"]["refresh_token"].is_null());
+
+    let save = Function::new_with_args("raw", "
+        const saved = {type: 'onedrive', root: 'keep-root', refresh_token: 'old',
+                       binding: {future: 'keep-extension'}};
+        const {config, fields} = JSON.parse(raw);
+        if (config.type !== saved.type) throw new Error('provider mismatch');
+        for (const path of fields) {
+            let target = saved;
+            let source = config;
+            for (const key of path.slice(0, -1)) {
+                source = source?.[key];
+                target = target[key] ??= {};
+            }
+            const key = path.at(-1);
+            if (source?.[key] == null) delete target[key];
+            else target[key] = source[key];
+        }
+        if (saved.access_token !== 'device-access-token' ||
+            'refresh_token' in saved ||
+            saved.root !== 'keep-root' ||
+            saved.binding.future !== 'keep-extension' ||
+            saved.binding.provider !== 'onedrive') {
+            throw new Error('incorrect persisted fields');
+        }
+    ");
+    api.save_pending(save)
+        .await
+        .expect("save provider-owned fields");
 }
 
 #[wasm_bindgen_test]

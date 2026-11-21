@@ -1,7 +1,7 @@
 //! Portable OneDrive storage backed by an explicitly shared OAuth session.
 //!
-//! Hosts retain one `OneDriveSession` per configuration identity and pass it to
-//! connections. Cloning serialized configuration creates an independent owner.
+//! Hosts open one session per saved record and share it across connections.
+//! Cloning or deserializing saved data never shares that runtime state.
 //! Storage never presents UI or saves configuration. OneDrive remains read-only.
 
 mod session;
@@ -10,13 +10,14 @@ pub use session::{OneDriveSession, OneDriveStatus, RequestCredential};
 
 use crate::domain::{
     AuthorizationError, ConnectStorageError, DirEntry, DirStream, ReadDirError,
-    ReadFileAtError, Storage, StorageConfig, StoragePath,
+    ReadFileAtError, Storage, StorageConfig, StoragePath, StorageSession,
 };
 use futures::io::{AsyncWrite, AsyncWriteExt};
 use serde::{Deserialize, Serialize};
 use std::{
     fmt,
     path::{Component, Path, PathBuf},
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -72,14 +73,20 @@ impl fmt::Debug for OneDriveConfig {
     }
 }
 impl OneDriveConfig {
-    /// Creates an independent connection; hosts sharing identity use a session.
+    /// Opens an independent session from this saved OneDrive configuration.
     ///
     /// # Errors
-    /// Returns missing credentials or unsupported registration/resource binding.
-    pub fn connect(self) -> Result<OneDriveStorage, ConnectStorageError> {
-        OneDriveSession::new(self, String::new())
-            .map_err(connect_error)?
-            .connect()
+    ///
+    /// Rejects unsupported resource endpoints and mismatched grant bindings.
+    pub fn into_session(
+        self,
+        identity: String,
+    ) -> Result<OneDriveSession, AuthorizationError> {
+        OneDriveSession::with_runtime(
+            self,
+            identity,
+            crate::drivers::oauth::OAuthRuntime::new()?,
+        )
     }
     fn expected_binding(&self) -> GrantBinding {
         GrantBinding {
@@ -130,12 +137,12 @@ fn connect_error(error: AuthorizationError) -> ConnectStorageError {
     }
 }
 #[typetag::serde(name = "onedrive")]
-#[async_trait::async_trait(?Send)]
 impl StorageConfig for OneDriveConfig {
-    async fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError> {
-        self.clone()
-            .connect()
-            .map(|storage| Box::new(storage) as Box<dyn Storage>)
+    fn open_session(
+        &self,
+        identity: String,
+    ) -> Result<Arc<dyn StorageSession>, AuthorizationError> {
+        Ok(Arc::new(self.clone().into_session(identity)?))
     }
 }
 

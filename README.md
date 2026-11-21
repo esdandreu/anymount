@@ -110,22 +110,21 @@ external details around those layers.
 
 Storage implementations return directory entries through the domain `DirEntry`
 trait. Each storage implementation defines its own entry type.
-Storage configurations implement `Clone`; boxed configurations can be cloned
-when a driver needs to move one into an owned worker.
+Storage configurations are saved data. `StorageConfig::open_session` creates
+an independent live session; clone the session handle to share it across
+connections. `ConfigDir` returns a `LoadedConfig` that keeps the saved
+configuration, its session, and any host persistence separate.
 
 OAuth interaction is asynchronous and host-owned through `domain::Authorization`.
 OneDrive uses one portable implementation for native and browser requests.
-Retain one `OneDriveSession` per host-owned configuration and use
-`session.connect()` for multiple connections; cloning the session shares the
-grant and a single detached refresh result, including failures. Independent
-configuration copies are independent owners. Storage reads never open a browser
-or save configuration. Native configured mounts retain their session and save
+Storage reads never open a browser or save configuration. Native mounts save
 renewed snapshots independently; browser hosts use `OneDriveBrowserApi` and its
-`savePending` callback. Usable in-memory credentials do not wait for saves.
-`pending_update` retains the newest snapshot, and failed saves can be retried
-without refreshing again. Do not cancel a custom persistence task while its
-external write can still complete; native and exported browser hosts retain
-in-flight writes and serialize their completion.
+`savePending` callback. Save only the provider-designated paths, leaving
+unknown fields and siblings untouched.
+Usable in-memory credentials do not wait for saves. `pending_update` retains
+the newest snapshot, and failed saves can be retried without refreshing again.
+Do not cancel a custom persistence task while its external write can still
+complete; native and exported browser hosts serialize in-flight writes.
 
 Access and refresh tokens remain secret-bearing fields in local configuration.
 Copying a configuration copies its credentials; sharing or exporting it can

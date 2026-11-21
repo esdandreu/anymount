@@ -57,8 +57,8 @@ impl OneDriveBrowserApi {
         {
             return Err(authorization_error(AuthorizationError::Setup));
         }
-        let session = OneDriveSession::new(config, identity)
-            .map_err(authorization_error)?;
+        let session =
+            config.into_session(identity).map_err(authorization_error)?;
         Ok(Self::from_session(session))
     }
 
@@ -309,8 +309,9 @@ impl OneDriveBrowserApi {
 
     /// Saves pending configuration through a host-owned promise callback.
     ///
-    /// The callback receives JSON `{generation, config}` and must resolve only
-    /// after replacing its saved record while preserving unrelated settings.
+    /// The callback receives JSON `{generation, config, fields}`. Copy only
+    /// the listed storage-relative paths from `config`; remove absent or null
+    /// values. Resolve only after the external write finishes.
     /// Calls serialize through the session and retain newer updates on failure.
     /// Storage access never invokes or waits for this callback.
     /// Once started, saving continues even if its caller stops awaiting it.
@@ -465,6 +466,7 @@ fn update_json(update: &CredentialUpdate) -> Result<String, HostSaveError> {
     serde_json::to_string(&json!({
         "generation": update.generation,
         "config": config,
+        "fields": update.fields,
     }))
     .map_err(|_| HostSaveError)
 }

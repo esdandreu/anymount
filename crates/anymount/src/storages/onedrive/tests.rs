@@ -95,6 +95,13 @@ async fn redirect_survives_navigation_and_replaces_the_whole_grant_once() {
     let update = snapshot(&resumed);
     assert_eq!(update["access_token"], "new-opaque-access");
     assert!(update["refresh_token"].is_null());
+    assert!(
+        resumed
+            .pending_update()
+            .expect("pending credential update")
+            .fields
+            .contains(&&["refresh_token"][..])
+    );
     assert_eq!(update["expires_at"], 4600);
     assert_eq!(update["scopes"], json!(["Files.ReadWrite"]));
     assert_eq!(update["binding"]["client_id"], "test-public-client");
@@ -416,6 +423,26 @@ async fn cancelled_waiter_does_not_lose_completed_rotation_or_other_connection()
     assert_eq!(&*credential.token, "new-access");
     assert_eq!(snapshot(&owner)["refresh_token"], "replacement-refresh");
     assert_eq!(fake.requests().len(), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn update_waiter_only_resolves_for_a_newer_generation() {
+    let fake = FakeOAuthRuntime::new(1000);
+    let owner = session(&fake);
+    let mut waiting = Box::pin(owner.wait_for_update(1));
+    assert!(waiting.as_mut().now_or_never().is_none());
+    fake.push_json(200, token("first-access", None));
+    owner
+        .request_credentials(Some(0))
+        .await
+        .expect("first rotation");
+    assert!(waiting.as_mut().now_or_never().is_none());
+    fake.push_json(200, token("second-access", None));
+    owner
+        .request_credentials(Some(1))
+        .await
+        .expect("second rotation");
+    assert_eq!(waiting.await, 2);
 }
 
 #[tokio::test(flavor = "current_thread")]

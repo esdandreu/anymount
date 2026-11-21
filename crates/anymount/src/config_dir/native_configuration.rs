@@ -1,98 +1,35 @@
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
-use async_trait::async_trait;
+use crate::domain::LoadedConfig;
 
-use crate::domain::{
-    AuthorizationError, ConnectStorageError, HostSaveError, MountSession,
-    SaveStatus, Storage, StorageConfig,
+use super::{
+    ConfigFilePersistence,
+    read_config::{ReadConfigError, read_config},
 };
-use crate::storages::onedrive::{OneDriveConfig, OneDriveSession};
 
-use super::ConfigFilePersistence;
-
-/// Owns shared native authorization and independent configuration persistence.
-///
-/// Retain this object for the lifetime of a host-owned record. Cloning it
-/// shares the live credentials; loading a separate record creates a new owner.
-#[derive(Clone, Debug)]
-pub struct NativeConfiguration {
-    session: OneDriveSession,
-    persistence: ConfigFilePersistence,
-}
-
-impl NativeConfiguration {
-    /// Attaches native persistence to an explicitly retained provider session.
-    pub fn new(
-        session: OneDriveSession,
-        persistence: ConfigFilePersistence,
-    ) -> Self {
-        Self {
-            session,
-            persistence,
-        }
+pub fn load_configuration(
+    path: &Path,
+) -> Result<LoadedConfig, ReadConfigError> {
+    let config = read_config(path)?;
+    let persistence = ConfigFilePersistence::open(
+        path.parent().ok_or(ReadConfigError::NotAConfigFile)?,
+        &config.mount.name,
+    )
+    .map_err(|_| ReadConfigError::CannotInitializeSession)?;
+    let mut record = LoadedConfig::new(config, persistence.identity())
+        .map_err(|_| ReadConfigError::CannotInitializeSession)?;
+    if record.session.authorization().is_some() {
+        record.persistence = Some(Arc::new(persistence));
     }
-
-    /// Creates a native session for supported credential-bearing storage.
-    ///
-    /// Credential-free providers return `None` and keep their normal connection
-    /// path. The caller retains the returned session instead of looking it up
-    /// in a registry or comparing credential strings.
-    ///
-    /// # Errors
-    ///
-    /// Returns a setup error for invalid provider configuration.
-    pub fn for_storage(
-        storage: &dyn StorageConfig,
-        persistence: ConfigFilePersistence,
-    ) -> Result<Option<Arc<dyn MountSession>>, AuthorizationError> {
-        let encoded = serde_json::to_value(storage)
-            .map_err(|_| AuthorizationError::Setup)?;
-        if encoded.get("type").and_then(serde_json::Value::as_str)
-            != Some("onedrive")
-        {
-            return Ok(None);
-        }
-        let config: OneDriveConfig = serde_json::from_value(encoded)
-            .map_err(|_| AuthorizationError::Setup)?;
-        let session = OneDriveSession::new(config, persistence.identity())?;
-        Ok(Some(Arc::new(Self::new(session, persistence))))
-    }
-
-    /// Returns the retained provider session for explicit host interaction.
-    pub fn authorization(&self) -> &OneDriveSession {
-        &self.session
-    }
-}
-
-#[async_trait(?Send)]
-impl MountSession for NativeConfiguration {
-    fn authorization(&self) -> &dyn crate::domain::Authorization {
-        &self.session
-    }
-
-    async fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError> {
-        Ok(Box::new(self.session.connect()?))
-    }
-
-    fn save_status(&self) -> SaveStatus {
-        self.session.save_status()
-    }
-
-    async fn save_pending(&self) -> Result<(), HostSaveError> {
-        self.session.save_pending(&self.persistence).await
-    }
-
-    async fn wait_for_update(&self, after_generation: u64) -> u64 {
-        self.session.wait_for_update(after_generation).await
-    }
+    Ok(record)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::StoragePath;
+    use crate::domain::{SaveStatus, StoragePath, StorageSession};
+    use crate::storages::onedrive::{OneDriveConfig, OneDriveSession};
     use crate::test_utils::fakeoauth::FakeOAuthRuntime;
-    use crate::test_utils::mocks::EmptyStorageConfig;
 
     fn provider_config() -> OneDriveConfig {
         serde_json::from_value(serde_json::json!({
@@ -113,17 +50,19 @@ mod tests {
             .expect("open record")
     }
 
-    #[test]
-    fn credential_free_storage_keeps_its_connection_path() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn credential_free_storage_keeps_its_connection_path() {
         let directory = tempfile::TempDir::new().expect("temporary directory");
-        assert!(
-            NativeConfiguration::for_storage(
-                &EmptyStorageConfig,
-                record(&directory)
-            )
-            .expect("credential-free storage")
-            .is_none()
-        );
+        std::fs::write(
+            directory.path().join("local.json"),
+            r#"{"path":"/mnt/local","storage":{"type":"empty"}}"#,
+        )
+        .expect("write local configuration");
+        let record = load_configuration(&directory.path().join("local.json"))
+            .expect("load local configuration");
+        assert!(record.session.authorization().is_none());
+        assert!(record.persistence.is_none());
+        assert!(record.session.connect().await.is_ok());
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -152,8 +91,8 @@ mod tests {
             runtime.runtime(),
         )
         .expect("independent session");
-        let owner = NativeConfiguration::new(session, persistence);
-        let other = owner.clone();
+        let owner: Arc<dyn StorageSession> = Arc::new(session);
+        let other = Arc::clone(&owner);
         let first = owner.connect().await.expect("first connection");
         let second = other.connect().await.expect("second connection");
         let (first, second) = tokio::join!(
@@ -170,9 +109,21 @@ mod tests {
                 .count(),
             1
         );
-        assert!(matches!(other.save_status(), SaveStatus::Pending { .. }));
-        owner.save_pending().await.expect("save newest credentials");
-        assert!(matches!(other.save_status(), SaveStatus::Saved { .. }));
+        let authorization = other.authorization().expect("authorization");
+        assert!(matches!(
+            authorization.save_status(),
+            SaveStatus::Pending { .. }
+        ));
+        owner
+            .authorization()
+            .expect("authorization")
+            .save_pending(&persistence)
+            .await
+            .expect("save newest credentials");
+        assert!(matches!(
+            authorization.save_status(),
+            SaveStatus::Saved { .. }
+        ));
         assert_eq!(independent.save_status(), SaveStatus::Clean);
         assert!(independent.pending_update().is_none());
     }
@@ -198,7 +149,8 @@ mod tests {
             runtime.runtime(),
         )
         .expect("session");
-        let owner = NativeConfiguration::new(session, persistence);
+        let owner: Arc<dyn StorageSession> = Arc::new(session);
+        let authorization = owner.authorization().expect("authorization");
         let storage = owner.connect().await.expect("connection");
         std::fs::write(directory.path().join("drive.json"), "not json")
             .expect("break saving");
@@ -206,15 +158,18 @@ mod tests {
             .read_dir(StoragePath::root())
             .await
             .expect("refresh works");
-        assert!(owner.save_pending().await.is_err());
-        assert!(matches!(owner.save_status(), SaveStatus::Failed { .. }));
+        assert!(authorization.save_pending(&persistence).await.is_err());
+        assert!(matches!(
+            authorization.save_status(),
+            SaveStatus::Failed { .. }
+        ));
         storage
             .read_dir(StoragePath::root())
             .await
             .expect("live credentials still work");
         record(&directory);
-        owner
-            .save_pending()
+        authorization
+            .save_pending(&persistence)
             .await
             .expect("retry saves existing snapshot");
         let saved: serde_json::Value = serde_json::from_str(

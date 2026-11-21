@@ -1,6 +1,6 @@
 use crate::domain::{
-    ConnectStorageError, DirEntry, MountSession, ReadDirError, ReadFileAtError,
-    StorageConfig, StoragePath,
+    ConfigurationPersistence, ConnectStorageError, DirEntry, ReadDirError,
+    ReadFileAtError, StoragePath, StorageSession,
 };
 use futures::{StreamExt, io::AsyncWrite};
 use std::{
@@ -111,23 +111,17 @@ impl AsyncWrite for ChunkWriter {
         Poll::Ready(Ok(()))
     }
 }
+
+type SaveCredentials =
+    (Arc<dyn StorageSession>, Arc<dyn ConfigurationPersistence>);
+
 impl NativeStorage {
     pub fn open(
-        config: Box<dyn StorageConfig>,
-        session: Option<Arc<dyn MountSession>>,
+        session: Arc<dyn StorageSession>,
+        persistence: Option<Arc<dyn ConfigurationPersistence>>,
     ) -> Result<Self, ConnectStorageError> {
-        let connection = session.clone();
-        Self::start(
-            move |runtime| {
-                runtime.block_on(async move {
-                    match connection {
-                        Some(session) => session.connect().await,
-                        None => config.connect().await,
-                    }
-                })
-            },
-            session,
-        )
+        let saver = persistence.map(|store| (Arc::clone(&session), store));
+        Self::start(move |runtime| runtime.block_on(session.connect()), saver)
     }
 
     #[cfg(test)]
@@ -142,7 +136,7 @@ impl NativeStorage {
 
     fn start<F>(
         factory: F,
-        session: Option<Arc<dyn MountSession>>,
+        saver: Option<SaveCredentials>,
     ) -> Result<Self, ConnectStorageError>
     where
         F: FnOnce(
@@ -186,20 +180,23 @@ impl NativeStorage {
                 };
                 runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
                     let (stop_saving, mut stopped) = tokio::sync::oneshot::channel();
-                    let saver = session.map(|session| tokio::task::spawn_local(async move {
+                    let saver = saver.map(|(session, store)| tokio::task::spawn_local(async move {
+                        let Some(authorization) = session.authorization() else {
+                            return;
+                        };
                         let mut generation = 0;
                         loop {
                             tokio::select! {
                                 _ = &mut stopped => break,
-                                updated = session.wait_for_update(generation) => {
+                                updated = authorization.wait_for_update(generation) => {
                                     generation = updated;
                                 }
                             }
-                            if session.save_pending().await.is_err() {
+                            if authorization.save_pending(store.as_ref()).await.is_err() {
                                 tracing::warn!(generation, "credential save failed; update retained");
                             }
                         }
-                        if session.save_pending().await.is_err() {
+                        if authorization.save_pending(store.as_ref()).await.is_err() {
                             tracing::warn!("final credential save failed; update retained");
                         }
                     }));
@@ -358,7 +355,7 @@ mod tests {
 
     #[test]
     fn native_connections_share_refresh_and_persist_without_another_request() {
-        use crate::config_dir::{ConfigFilePersistence, NativeConfiguration};
+        use crate::config_dir::ConfigFilePersistence;
         use crate::domain::SaveStatus;
         use crate::storages::onedrive::{OneDriveConfig, OneDriveSession};
         use crate::test_utils::fakeoauth::FakeOAuthRuntime;
@@ -389,19 +386,20 @@ mod tests {
         protocol.push_json(200, serde_json::json!({"value": []}));
         protocol.push_json(200, serde_json::json!({"value": []}));
         let session = OneDriveSession::with_runtime(
-            provider.clone(),
+            provider,
             persistence.identity(),
             protocol.runtime(),
         )
         .expect("session");
-        let owner =
-            Arc::new(NativeConfiguration::new(session.clone(), persistence));
+        let owner: Arc<dyn StorageSession> = Arc::new(session.clone());
+        let persistence: Arc<dyn ConfigurationPersistence> =
+            Arc::new(persistence);
         let first = NativeStorage::open(
-            Box::new(provider.clone()),
-            Some(owner.clone()),
+            Arc::clone(&owner),
+            Some(Arc::clone(&persistence)),
         )
         .expect("first native mount connection");
-        let second = NativeStorage::open(Box::new(provider), Some(owner))
+        let second = NativeStorage::open(owner, Some(persistence))
             .expect("second native mount connection");
         assert_eq!(
             first
@@ -444,7 +442,7 @@ mod tests {
 
     #[test]
     fn native_storage_stays_usable_when_background_save_fails() {
-        use crate::config_dir::{ConfigFilePersistence, NativeConfiguration};
+        use crate::config_dir::ConfigFilePersistence;
         use crate::domain::SaveStatus;
         use crate::storages::onedrive::{OneDriveConfig, OneDriveSession};
         use crate::test_utils::fakeoauth::FakeOAuthRuntime;
@@ -474,17 +472,19 @@ mod tests {
         protocol.push_json(200, serde_json::json!({"value": []}));
         protocol.push_json(200, serde_json::json!({"value": []}));
         let session = OneDriveSession::with_runtime(
-            provider.clone(),
+            provider,
             persistence.identity(),
             protocol.runtime(),
         )
         .expect("session");
-        let owner =
-            Arc::new(NativeConfiguration::new(session.clone(), persistence));
+        let persistence: Arc<dyn ConfigurationPersistence> =
+            Arc::new(persistence);
         std::fs::write(&path, "invalid json").expect("make persistence fail");
-        let storage =
-            NativeStorage::open(Box::new(provider), Some(owner.clone()))
-                .expect("native mount connection");
+        let storage = NativeStorage::open(
+            Arc::new(session.clone()),
+            Some(Arc::clone(&persistence)),
+        )
+        .expect("native mount connection");
         assert_eq!(
             storage
                 .read_dir(StoragePath::root())
@@ -512,7 +512,7 @@ mod tests {
             .enable_all()
             .build()
             .expect("retry runtime")
-            .block_on(owner.save_pending())
+            .block_on(session.save_pending(persistence.as_ref()))
             .expect("save retained update");
         assert!(matches!(session.save_status(), SaveStatus::Saved { .. }));
         assert_eq!(protocol.requests().len(), 3);

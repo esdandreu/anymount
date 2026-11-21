@@ -1,10 +1,8 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{fmt, path::PathBuf, sync::Arc};
 
-use async_trait::async_trait;
-
-use crate::domain::{
-    ConnectStorageError, HostSaveError, SaveStatus, Storage,
-    driver::DriverConfig, storage::StorageConfig,
+use super::{
+    AuthorizationError, ConfigurationPersistence, DriverConfig, StorageConfig,
+    StorageSession,
 };
 
 pub struct Config {
@@ -16,52 +14,56 @@ pub struct MountConfig {
     pub name: String,
     pub path: PathBuf,
     pub storage: Box<dyn StorageConfig>,
-    /// Explicit runtime ownership shared by connections to this record.
-    pub session: Option<Arc<dyn MountSession>>,
 }
 
-/// Connects a host-owned configuration and independently persists its updates.
-///
-/// Hosts retain one session per configuration record. Storage requests never
-/// call persistence; native hosts drive update saving in a separate task.
-#[async_trait(?Send)]
-pub trait MountSession: Send + Sync {
-    /// Returns the retained provider authorization boundary for host interaction.
-    fn authorization(&self) -> &dyn crate::domain::Authorization;
+/// Retains a saved configuration and its separate, live storage session.
+pub struct LoadedConfig {
+    pub config: Config,
+    pub session: Arc<dyn StorageSession>,
+    pub persistence: Option<Arc<dyn ConfigurationPersistence>>,
+}
 
-    /// Connects using the record's shared live credentials.
+impl fmt::Debug for LoadedConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LoadedConfig")
+            .field("has_persistence", &self.persistence.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl LoadedConfig {
+    /// Opens an independent session for this configuration record.
+    ///
+    /// Reuse this record or clone its session handle to share live state.
+    /// The saved configuration is unchanged by authorization and renewal.
     ///
     /// # Errors
     ///
-    /// Returns an error when this configuration cannot be connected.
-    async fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError>;
-
-    /// Reports persistence independently of storage access.
-    fn save_status(&self) -> SaveStatus;
-
-    /// Retries saving the newest credentials without repeating authorization.
-    ///
-    /// # Errors
-    ///
-    /// Returns a host save error while retaining the pending credentials.
-    async fn save_pending(&self) -> Result<(), HostSaveError>;
-
-    /// Waits for a newer credential generation without polling.
-    async fn wait_for_update(&self, after_generation: u64) -> u64;
+    /// Returns a provider setup error if the configuration cannot be used.
+    pub fn new(
+        config: Config,
+        identity: String,
+    ) -> Result<Self, AuthorizationError> {
+        let session = config.mount.storage.open_session(identity)?;
+        Ok(Self {
+            config,
+            session,
+            persistence: None,
+        })
+    }
 }
 
 pub trait ConfigRepository {
-    type Iter<'a>: Iterator<Item = Config>
+    type Iter<'a>: Iterator<Item = LoadedConfig>
     where
         Self: 'a;
 
     fn list(&self) -> Self::Iter<'_>;
 
     /// Finds a mount configuration by name in this repository.
-    fn find(&self, name: &str) -> Result<Config, ConfigNotFound> {
+    fn find(&self, name: &str) -> Result<LoadedConfig, ConfigNotFound> {
         self.list()
-            .find(|config| config.mount.name == name)
-            .map(|config| config)
+            .find(|record| record.config.mount.name == name)
             .ok_or_else(|| ConfigNotFound {
                 name: name.to_owned(),
             })

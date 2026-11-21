@@ -1,6 +1,6 @@
 use std::{cell::Cell, rc::Rc};
 
-use anymount::{Config, ConfigRepository};
+use anymount::{ConfigRepository, LoadedConfig};
 
 #[derive(Clone, Default)]
 pub struct EmptyConfigRepository {
@@ -14,7 +14,7 @@ impl EmptyConfigRepository {
 }
 
 impl ConfigRepository for EmptyConfigRepository {
-    type Iter<'a> = std::iter::Empty<Config>;
+    type Iter<'a> = std::iter::Empty<LoadedConfig>;
 
     fn list(&self) -> Self::Iter<'_> {
         self.reads.set(self.reads.get() + 1);
