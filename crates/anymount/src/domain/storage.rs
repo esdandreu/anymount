@@ -119,7 +119,6 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
 }
 
 pub trait DirEntry: Send + Sync {
-    // Should be &str
     fn file_name(&self) -> String;
     fn is_dir(&self) -> bool;
     fn size(&self) -> Option<u64>;

@@ -14,7 +14,6 @@ pub enum AnymountResult {
 
 impl Termination for AnymountResult {
     fn report(self) -> ExitCode {
-        // Maybe print a message here
         ExitCode::from(self as u8)
     }
 }

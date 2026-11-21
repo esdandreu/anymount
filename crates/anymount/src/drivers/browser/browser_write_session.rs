@@ -15,7 +15,6 @@ use wasm_bindgen_futures::JsFuture;
 #[path = "browser_write_session_tests.rs"]
 mod tests;
 
-// One browser-owned copy bounds memory and amortizes promise overhead.
 const WRITE_CHUNK_SIZE: usize = 65536;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -113,7 +112,6 @@ impl AsyncWrite for BrowserWriteSession<'_> {
         if let Err(error) = self.start("write", &Array::of1(&chunk)) {
             return Poll::Ready(Err(self.remember(error)));
         }
-        // Accepted bytes belong to the session, not a possibly canceled caller.
         Poll::Ready(Ok(count))
     }
 
@@ -190,7 +188,6 @@ impl WriteFileSession for BrowserWriteSession<'_> {
             return Err(closed());
         }
         if self.state != State::Aborting {
-            // Submit cleanup immediately, but retain the write's error.
             if self.pending.is_some() {
                 self.aborting_write = self.pending.take();
             }
