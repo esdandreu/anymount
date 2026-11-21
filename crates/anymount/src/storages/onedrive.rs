@@ -1,371 +1,251 @@
-//! Implements OneDrive storage and authorization.
+//! Portable OneDrive storage backed by an explicitly shared OAuth session.
+//!
+//! Hosts open one session per saved record and share it across connections.
+//! Cloning or deserializing saved data never shares that runtime state.
+//! Storage never presents UI or saves configuration. OneDrive remains read-only.
 
-mod authorization;
-mod token_source;
+mod session;
+#[doc(inline)]
+pub use session::{OneDriveSession, OneDriveStatus, RequestCredential};
 
-use authorization::OneDriveAuthorization;
-use chrono::{DateTime, Utc};
+use crate::domain::{
+    AuthorizationError, ConnectStorageError, DirEntry, DirStream, ReadDirError,
+    ReadFileAtError, Storage, StorageConfig, StoragePath, StorageSession,
+};
 use futures::io::{AsyncWrite, AsyncWriteExt};
 use serde::{Deserialize, Serialize};
-use std::path::{Component, Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use thiserror::Error;
-use token_source::{OneDriveTokenSource, jwt_expires_at};
-
-use crate::domain::{AuthStorageError, StartedAuthorization};
-use crate::domain::{
-    ConnectStorageError, DirEntry, ReadDirError, ReadFileAtError, Storage,
-    StorageConfig, StoragePath,
+use std::{
+    fmt,
+    path::{Component, Path, PathBuf},
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
-/// Default buffer (seconds) before token expiry to trigger refresh when not set in config.
-const DEFAULT_TOKEN_EXPIRY_BUFFER_SECS: u64 = 60;
-const ANYMOUNT_AZURE_APP_CLIENT_ID: &str =
+pub const ANYMOUNT_AZURE_APP_CLIENT_ID: &str =
     "5970173e-1b75-4317-987d-6849236cc3df";
+const DEFAULT_TOKEN_EXPIRY_BUFFER_SECS: u64 = 60;
 
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("invalid config: {message}")]
-    InvalidConfig { message: String },
-
-    #[error("token access failed")]
-    Token {
-        #[source]
-        source: token_source::Error,
-    },
-
-    #[error("request failed for {url}")]
-    Request {
-        url: String,
-        #[source]
-        source: Box<ureq::Error>,
-    },
-
-    #[error("response body read failed for {url}: {source}")]
-    ReadBody {
-        url: String,
-        #[source]
-        source: std::io::Error,
-    },
-
-    #[error("list failed for {url} with status {status}: {body}")]
-    ListFailed {
-        url: String,
-        status: u16,
-        body: String,
-    },
-
-    #[error("list response invalid for {url}: {source}")]
-    ListResponse {
-        url: String,
-        #[source]
-        source: serde_json::Error,
-    },
-
-    #[error("download failed for {url} with status {status}: {body}")]
-    DownloadFailed {
-        url: String,
-        status: u16,
-        body: String,
-    },
+/// Records the registration and resource to which the provider grant belongs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GrantBinding {
+    pub provider: String,
+    pub client_id: String,
+    pub authority: String,
+    pub resource: String,
 }
 
-pub type Result<T> = std::result::Result<T, Error>;
-
-#[derive(Debug, Error)]
-enum ConnectError {
-    #[error("{message}")]
-    InvalidConfig { message: &'static str },
-
-    #[error("token access failed")]
-    Token {
-        #[source]
-        source: token_source::Error,
-    },
-}
-
-impl From<ConnectError> for ConnectStorageError {
-    fn from(error: ConnectError) -> Self {
-        Self::Failed {
-            kind: "onedrive",
-            message: error.to_string(),
-        }
-    }
-}
-
-fn response_message(body: &[u8]) -> String {
-    String::from_utf8_lossy(body).into_owned()
-}
-
-fn read_dir_status_error(status: u16, body: &[u8]) -> ReadDirError {
-    let message = response_message(body);
-    match status {
-        401 | 403 => ReadDirError::PermissionDenied,
-        404 => ReadDirError::NotFound,
-        429 | 500..=599 => ReadDirError::Unavailable { message },
-        _ => ReadDirError::Unknown { message },
-    }
-}
-
-fn read_file_at_status_error(status: u16, body: &[u8]) -> ReadFileAtError {
-    let message = response_message(body);
-    match status {
-        401 | 403 => ReadFileAtError::PermissionDenied,
-        404 => ReadFileAtError::NotFound,
-        416 => ReadFileAtError::RangeNotSatisfiable,
-        429 | 500..=599 => ReadFileAtError::Unavailable { message },
-        _ => ReadFileAtError::Unknown { message },
-    }
-}
-
-fn read_dir_backend_error(error: Error) -> ReadDirError {
-    ReadDirError::Unknown {
-        message: error.to_string(),
-    }
-}
-
-fn read_file_at_backend_error(error: Error) -> ReadFileAtError {
-    ReadFileAtError::Unknown {
-        message: error.to_string(),
-    }
-}
-
-/// Provides a bearer token for HTTP requests.
+/// Encodes OneDrive credentials directly in the host's local configuration.
 ///
-/// Implementations may refresh tokens; callers use the returned string
-/// in an `Authorization: Bearer <token>` header.
-///
-/// # Errors
-///
-/// Returns an error string when the token cannot be obtained or refreshed.
-pub trait BearerToken: Send + Sync + 'static {
-    fn access_token(&self) -> Result<String>;
-}
-
-/// Fetches a URL with headers and returns status and full body.
-///
-/// Used by OneDrive storage to list and download; mockable for tests.
-///
-/// # Errors
-///
-/// Returns an error string on network failure or when the response cannot be read.
-pub trait HttpGet: Send + Sync + 'static {
-    fn get(
-        &self,
-        url: &str,
-        headers: &[(&str, &str)],
-    ) -> Result<(u16, Vec<u8>)>;
-}
-
-/// Production HTTP GET implementation using ureq.
-pub struct UreqHttpGet;
-
-impl UreqHttpGet {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for UreqHttpGet {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl HttpGet for UreqHttpGet {
-    fn get(
-        &self,
-        url: &str,
-        headers: &[(&str, &str)],
-    ) -> Result<(u16, Vec<u8>)> {
-        let mut request = ureq::get(url);
-        for (k, v) in headers {
-            request = request.set(k, v);
-        }
-        let response = match request.call() {
-            Ok(response) | Err(ureq::Error::Status(_, response)) => response,
-            Err(source) => {
-                return Err(Error::Request {
-                    url: url.to_owned(),
-                    source: Box::new(source),
-                });
-            }
-        };
-        let status = response.status();
-        let reader = response.into_reader();
-        let mut body = Vec::new();
-        let is_range = headers
-            .iter()
-            .any(|(name, _)| name.eq_ignore_ascii_case("range"));
-        let limit = if is_range {
-            crate::domain::MAX_READ_FILE_AT_RANGE_SIZE as u64 + 1
-        } else {
-            u64::MAX
-        };
-        std::io::Read::read_to_end(
-            &mut std::io::Read::take(reader, limit),
-            &mut body,
-        )
-        .map_err(|source| Error::ReadBody {
-            url: url.to_owned(),
-            source,
-        })?;
-        Ok((status, body))
-    }
-}
-
-impl BearerToken for OneDriveTokenSource {
-    fn access_token(&self) -> Result<String> {
-        OneDriveTokenSource::access_token(self)
-            .map_err(|source| Error::Token { source })
-    }
-}
-
-/// OneDrive storage configuration.
-///
-/// At least one of `access_token` or `refresh_token` must be set. If only
-/// `access_token` is set it must not be expired. Optional `client_id` defaults
-/// to the built-in Azure app when refreshing. Optional
-/// `token_expiry_buffer_secs` defaults to 60.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+/// Access tokens are opaque. Unknown expiry and absent refresh tokens are valid.
+/// `client_id = None` retains the legacy built-in native app interpretation.
+/// Browser hosts must supply their own correctly registered public SPA client.
+#[derive(Clone, Deserialize, Serialize)]
 pub struct OneDriveConfig {
+    #[serde(default)]
     pub root: PathBuf,
+    #[serde(default = "default_endpoint")]
     pub endpoint: String,
     pub access_token: Option<String>,
     pub refresh_token: Option<String>,
     pub client_id: Option<String>,
     pub token_expiry_buffer_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scopes: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding: Option<GrantBinding>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub credential_generation: u64,
 }
-
+fn default_endpoint() -> String {
+    "https://graph.microsoft.com/v1.0".into()
+}
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+impl fmt::Debug for OneDriveConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OneDriveConfig")
+            .field("credential_generation", &self.credential_generation)
+            .field("expires_at", &self.expires_at)
+            .finish_non_exhaustive()
+    }
+}
 impl OneDriveConfig {
-    /// Validates the config and creates the storage.
+    /// Opens an independent session from this saved OneDrive configuration.
     ///
     /// # Errors
     ///
-    /// Returns `NotAuthenticated` when credentials are absent. Returns a
-    /// connection failure when the configured credentials are unusable.
-    pub fn connect(
+    /// Rejects unsupported resource endpoints and mismatched grant bindings.
+    pub fn into_session(
         self,
-    ) -> std::result::Result<OneDriveStorage, ConnectStorageError> {
-        let has_access = self.access_token.is_some();
-        let has_refresh = self.refresh_token.is_some();
-        if !has_access && !has_refresh {
-            return Err(ConnectStorageError::NotAuthenticated {
-                kind: "onedrive",
-            });
-        }
-        let buffer_secs = self
-            .token_expiry_buffer_secs
-            .unwrap_or(DEFAULT_TOKEN_EXPIRY_BUFFER_SECS);
-        if has_access && !has_refresh {
-            let token = self.access_token.as_deref().ok_or_else(
-                || -> ConnectStorageError {
-                    ConnectError::InvalidConfig {
-                        message: "access_token required",
-                    }
-                    .into()
-                },
-            )?;
-            if let Some(exp) = jwt_expires_at(token) {
-                let now = SystemTime::now();
-                let buffer = Duration::from_secs(buffer_secs);
-                if exp <= now + buffer {
-                    return Err(ConnectError::InvalidConfig {
-                        message: "access_token is expired and no refresh_token provided",
-                    }
-                    .into());
-                }
-            }
-        }
-        let endpoint = self.endpoint.trim_end_matches('/').to_string();
-        let token_source = OneDriveTokenSource::new(
-            self.refresh_token.clone(),
-            self.access_token.clone(),
-            self.client_id.clone(),
-            self.token_expiry_buffer_secs,
+        identity: String,
+    ) -> Result<OneDriveSession, AuthorizationError> {
+        OneDriveSession::with_runtime(
+            self,
+            identity,
+            crate::drivers::oauth::OAuthRuntime::new()?,
         )
-        .map_err(|source| -> ConnectStorageError {
-            ConnectError::Token { source }.into()
-        })?;
-        Ok(OneDriveStorage {
-            root: self.root,
+    }
+    fn expected_binding(&self) -> GrantBinding {
+        GrantBinding {
+            provider: "onedrive".into(),
+            client_id: self
+                .client_id
+                .clone()
+                .unwrap_or_else(|| ANYMOUNT_AZURE_APP_CLIENT_ID.into()),
+            authority: "https://login.microsoftonline.com/common/oauth2/v2.0"
+                .into(),
+            resource: self.endpoint.trim_end_matches('/').into(),
+        }
+    }
+    fn validate(&self) -> Result<(), AuthorizationError> {
+        let endpoint = self.endpoint.trim_end_matches('/');
+        if !matches!(
             endpoint,
-            token: std::sync::Arc::new(token_source),
-            fetch: std::sync::Arc::new(UreqHttpGet::new()),
-        })
+            "https://graph.microsoft.com/v1.0"
+                | "https://graph.microsoft.com/beta"
+        ) {
+            return Err(AuthorizationError::Setup);
+        }
+        if self
+            .client_id
+            .as_ref()
+            .is_some_and(|id| id.trim().is_empty())
+        {
+            return Err(AuthorizationError::Setup);
+        }
+        if self
+            .binding
+            .as_ref()
+            .is_some_and(|binding| binding != &self.expected_binding())
+        {
+            return Err(AuthorizationError::Setup);
+        }
+        Ok(())
     }
 }
-
+fn connect_error(error: AuthorizationError) -> ConnectStorageError {
+    if error == AuthorizationError::SignInRequired {
+        ConnectStorageError::NotAuthenticated { kind: "onedrive" }
+    } else {
+        ConnectStorageError::Failed {
+            kind: "onedrive",
+            message: error.to_string(),
+        }
+    }
+}
 #[typetag::serde(name = "onedrive")]
-#[async_trait::async_trait(?Send)]
 impl StorageConfig for OneDriveConfig {
-    async fn connect(
+    fn open_session(
         &self,
-    ) -> std::result::Result<Box<dyn Storage>, ConnectStorageError> {
-        OneDriveConfig::connect(self.clone())
-            .map(|storage| Box::new(storage) as Box<dyn Storage>)
-    }
-
-    fn start_authorization(
-        self: Box<Self>,
-    ) -> std::result::Result<Box<dyn StartedAuthorization>, AuthStorageError>
-    {
-        OneDriveAuthorization::start(*self).map(|authorization| {
-            Box::new(authorization) as Box<dyn StartedAuthorization>
-        })
+        identity: String,
+    ) -> Result<Arc<dyn StorageSession>, AuthorizationError> {
+        Ok(Arc::new(self.clone().into_session(identity)?))
     }
 }
 
-pub struct OneDriveStorage<T = OneDriveTokenSource, F = UreqHttpGet>
-where
-    T: BearerToken,
-    F: HttpGet,
-{
+/// Connects portable resource requests to a host-owned authorization session.
+#[derive(Clone, Debug)]
+pub struct OneDriveStorage {
     root: PathBuf,
     endpoint: String,
-    token: std::sync::Arc<T>,
-    fetch: std::sync::Arc<F>,
+    session: OneDriveSession,
 }
-
-impl<T, F> OneDriveStorage<T, F>
-where
-    T: BearerToken,
-    F: HttpGet,
-{
-    fn path_to_graph_segment(path: &Path) -> String {
-        if path.as_os_str().is_empty() {
-            return "".to_string();
+impl OneDriveStorage {
+    fn new(config: &OneDriveConfig, session: OneDriveSession) -> Self {
+        Self {
+            root: config.root.clone(),
+            endpoint: config.endpoint.trim_end_matches('/').into(),
+            session,
         }
-        let has_normal =
-            path.components().any(|c| matches!(c, Component::Normal(_)));
-        if !has_normal {
-            return "".to_string();
+    }
+    fn item_url(&self, path: &StoragePath) -> String {
+        let full = self.root.join(path.as_path());
+        let segment = path_to_graph_segment(&full);
+        if segment.is_empty() {
+            format!("{}/me/drive/root", self.endpoint)
+        } else {
+            format!("{}/me/drive/root:{}:", self.endpoint, segment)
         }
-        let s = path.to_string_lossy();
-        let s = s.trim_start_matches('/').replace('\\', "/");
-        let s = s.trim_end_matches('/');
-        if s.is_empty() || s == "." {
-            return "".to_string();
+    }
+    async fn graph_get(
+        &self,
+        url: &str,
+    ) -> Result<oauth2::HttpResponse, AuthorizationError> {
+        let credential = self.session.request_credentials(None).await?;
+        let response =
+            self.get(url, Some(credential.token.as_ref()), None).await?;
+        if response.status() != 401 {
+            return Ok(response);
         }
-        format!("/{}", urlencoding::encode(s).into_owned())
+        // Graph 401 confirms rejection; only safe reads get one coordinated retry.
+        let credential = self
+            .session
+            .request_credentials(Some(credential.generation))
+            .await?;
+        let response =
+            self.get(url, Some(credential.token.as_ref()), None).await?;
+        if response.status() == 401 {
+            self.session.reject_credentials(credential.generation);
+            return Err(AuthorizationError::SignInRequired);
+        }
+        Ok(response)
+    }
+    async fn get(
+        &self,
+        url: &str,
+        bearer: Option<&str>,
+        range: Option<&str>,
+    ) -> Result<oauth2::HttpResponse, AuthorizationError> {
+        let mut builder =
+            oauth2::http::Request::builder().uri(url).method("GET");
+        if let Some(token) = bearer {
+            builder =
+                builder.header("Authorization", format!("Bearer {token}"));
+        }
+        if let Some(range) = range {
+            builder = builder.header("Range", range);
+        }
+        let request = builder
+            .body(Vec::new())
+            .map_err(|_| AuthorizationError::Setup)?;
+        self.session.runtime().request(request).await
     }
 }
+fn path_to_graph_segment(path: &Path) -> String {
+    let mut segment = String::new();
+    for component in path.components() {
+        if let Component::Normal(name) = component {
+            segment.push('/');
+            segment.push_str(&urlencoding::encode(&name.to_string_lossy()));
+        }
+    }
+    segment
+}
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GraphDriveItem {
     name: String,
     size: Option<u64>,
-    #[serde(default)]
     folder: Option<serde_json::Value>,
     last_modified_date_time: Option<String>,
 }
-
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct GraphChildrenResponse {
     value: Vec<GraphDriveItem>,
+    #[serde(rename = "@odata.nextLink")]
+    next_link: Option<String>,
+}
+#[derive(Deserialize)]
+struct DownloadMetadata {
+    #[serde(rename = "@microsoft.graph.downloadUrl")]
+    download_url: String,
 }
 
+/// Contains OneDrive entry metadata without exposing request credentials.
 #[derive(Debug)]
 pub struct OneDriveDirEntry {
     file_name: String,
@@ -373,7 +253,6 @@ pub struct OneDriveDirEntry {
     size: u64,
     accessed: SystemTime,
 }
-
 impl DirEntry for OneDriveDirEntry {
     fn file_name(&self) -> String {
         self.file_name.clone()
@@ -388,572 +267,156 @@ impl DirEntry for OneDriveDirEntry {
         Some(self.accessed)
     }
 }
-
-impl<T, F> OneDriveStorage<T, F>
-where
-    T: BearerToken,
-    F: HttpGet,
-{
-    fn read_dir(
-        &self,
-        path: StoragePath,
-    ) -> std::result::Result<
-        Box<dyn Iterator<Item = Box<dyn DirEntry>>>,
-        ReadDirError,
-    > {
-        let token =
-            self.token.access_token().map_err(read_dir_backend_error)?;
-        let full_path = if path.as_path().as_os_str().is_empty() {
-            self.root.clone()
-        } else {
-            self.root.join(path.as_path())
-        };
-        let segment = Self::path_to_graph_segment(&full_path);
-        let url = if segment.is_empty() {
-            format!("{}/me/drive/root/children", self.endpoint)
-        } else {
-            format!("{}/me/drive/root:{}:/children", self.endpoint, segment)
-        };
-        let auth = format!("Bearer {}", token);
-        let headers = [("Authorization", auth.as_str())];
-        let (status, body) = self
-            .fetch
-            .get(&url, &headers)
-            .map_err(read_dir_backend_error)?;
-        if status != 200 {
-            return Err(read_dir_status_error(status, &body));
-        }
-        let parsed: GraphChildrenResponse = serde_json::from_slice(&body)
-            .map_err(|source| ReadDirError::Unknown {
-                message: Error::ListResponse {
-                    url: url.clone(),
-                    source,
-                }
-                .to_string(),
-            })?;
-        let entries: Vec<Box<dyn DirEntry>> = parsed
-            .value
-            .into_iter()
-            .map(|item| {
-                let is_dir = item.folder.is_some();
-                let size = item.size.unwrap_or(0);
-                let accessed = item
-                    .last_modified_date_time
-                    .as_deref()
-                    .map(parse_last_modified)
-                    .unwrap_or(UNIX_EPOCH);
-                Box::new(OneDriveDirEntry {
-                    file_name: item.name,
-                    is_dir,
-                    size,
-                    accessed,
-                }) as Box<dyn DirEntry>
-            })
-            .collect();
-        Ok(Box::new(entries.into_iter()))
-    }
-
-    fn read_range(
-        &self,
-        path: StoragePath,
-        range: std::ops::Range<u64>,
-    ) -> std::result::Result<Vec<u8>, ReadFileAtError> {
-        let token = self
-            .token
-            .access_token()
-            .map_err(read_file_at_backend_error)?;
-        let full_path = self.root.join(path.as_path());
-        let segment = Self::path_to_graph_segment(&full_path);
-        let url =
-            format!("{}/me/drive/root:{}:/content", self.endpoint, segment);
-        let range_header =
-            format!("bytes={}-{}", range.start, range.end.saturating_sub(1));
-        let auth = format!("Bearer {}", token);
-        let headers = [
-            ("Authorization", auth.as_str()),
-            ("Range", range_header.as_str()),
-        ];
-        let (status, mut body) = self
-            .fetch
-            .get(&url, &headers)
-            .map_err(read_file_at_backend_error)?;
-        if status != 200 && status != 206 {
-            return Err(read_file_at_status_error(status, &body));
-        }
-        if status == 200 && range.start != 0 {
-            return Err(ReadFileAtError::Unknown {
-                message: "server ignored the range request".into(),
-            });
-        }
-        let length = (range.end - range.start).min(body.len() as u64) as usize;
-        body.truncate(length);
-        Ok(body)
+fn read_dir_status(status: u16) -> ReadDirError {
+    match status {
+        401 => AuthorizationError::SignInRequired.into(),
+        403 => ReadDirError::PermissionDenied,
+        404 => ReadDirError::NotFound,
+        429 | 500..=599 => AuthorizationError::Temporary.into(),
+        _ => ReadDirError::Unknown {
+            message: "OneDrive directory response failed".into(),
+        },
     }
 }
-
-fn parse_last_modified(s: &str) -> SystemTime {
-    DateTime::parse_from_rfc3339(s.trim())
-        .map(|dt| dt.with_timezone(&Utc).into())
-        .unwrap_or(UNIX_EPOCH)
-}
-
-impl<T: BearerToken, F: HttpGet> Clone for OneDriveStorage<T, F> {
-    fn clone(&self) -> Self {
-        Self {
-            root: self.root.clone(),
-            endpoint: self.endpoint.clone(),
-            token: self.token.clone(),
-            fetch: self.fetch.clone(),
-        }
+fn read_status(status: u16) -> ReadFileAtError {
+    match status {
+        401 => AuthorizationError::SignInRequired.into(),
+        403 => ReadFileAtError::PermissionDenied,
+        404 => ReadFileAtError::NotFound,
+        416 => ReadFileAtError::RangeNotSatisfiable,
+        429 | 500..=599 => AuthorizationError::Temporary.into(),
+        _ => ReadFileAtError::Unknown {
+            message: "OneDrive download response failed".into(),
+        },
     }
+}
+fn safe_download_url(value: &str) -> Result<(), AuthorizationError> {
+    let url = url::Url::parse(value).map_err(|_| AuthorizationError::Setup)?;
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(AuthorizationError::Setup);
+    }
+    Ok(())
 }
 #[async_trait::async_trait(?Send)]
-impl<T: BearerToken, F: HttpGet> Storage for OneDriveStorage<T, F> {
+impl Storage for OneDriveStorage {
     async fn read_dir(
         &self,
         path: StoragePath,
-    ) -> std::result::Result<crate::domain::DirStream, ReadDirError> {
-        let storage = self.clone();
-        tokio::task::spawn_blocking(move || {
-            storage
-                .read_dir(path)
-                .map(|entries| entries.collect::<Vec<_>>())
-        })
-        .await
-        .map_err(|e| ReadDirError::Unknown {
-            message: e.to_string(),
-        })?
-        .map(|entries| {
-            Box::pin(futures::stream::iter(entries.into_iter().map(Ok)))
-                as crate::domain::DirStream
-        })
+    ) -> Result<DirStream, ReadDirError> {
+        let mut url = format!("{}/children", self.item_url(&path));
+        let mut entries: Vec<Result<Box<dyn DirEntry>, ReadDirError>> =
+            Vec::new();
+        loop {
+            let response = self.graph_get(&url).await?;
+            if response.status() != 200 {
+                return Err(read_dir_status(response.status().as_u16()));
+            }
+            let parsed: GraphChildrenResponse =
+                serde_json::from_slice(response.body()).map_err(|_| {
+                    ReadDirError::Unknown {
+                        message: "invalid OneDrive directory metadata".into(),
+                    }
+                })?;
+            entries.extend(parsed.value.into_iter().map(|item| {
+                let accessed = item
+                    .last_modified_date_time
+                    .as_deref()
+                    .and_then(|text| {
+                        chrono::DateTime::parse_from_rfc3339(text).ok()
+                    })
+                    .map(SystemTime::from)
+                    .unwrap_or(UNIX_EPOCH);
+                Ok(Box::new(OneDriveDirEntry {
+                    file_name: item.name,
+                    is_dir: item.folder.is_some(),
+                    size: item.size.unwrap_or(0),
+                    accessed,
+                }) as Box<dyn DirEntry>)
+            }));
+            let Some(next) = parsed.next_link else {
+                break;
+            };
+            // Pagination is provider supplied, but never expands bearer destinations.
+            if !next.starts_with(&format!("{}/", self.endpoint)) {
+                return Err(AuthorizationError::Setup.into());
+            }
+            url = next;
+        }
+        Ok(Box::pin(futures::stream::iter(entries)))
     }
     async fn read_file_at(
         &self,
         path: StoragePath,
         writer: &mut (dyn AsyncWrite + Unpin),
         range: std::ops::Range<u64>,
-    ) -> std::result::Result<u64, ReadFileAtError> {
+    ) -> Result<u64, ReadFileAtError> {
         if range.start > range.end {
-            return Err(ReadFileAtError::Unknown {
-                message: "invalid range".into(),
-            });
+            return Err(ReadFileAtError::RangeNotSatisfiable);
         }
+        if range.is_empty() {
+            return Ok(0);
+        }
+        // Graph /content redirects authenticated requests and is unsuitable for
+        // browsers. Metadata provides a secret preauthenticated download URL.
+        let metadata = self.graph_get(&self.item_url(&path)).await?;
+        if metadata.status() != 200 {
+            return Err(read_status(metadata.status().as_u16()));
+        }
+        let metadata: DownloadMetadata =
+            serde_json::from_slice(metadata.body()).map_err(|_| {
+                ReadFileAtError::Unknown {
+                    message: "OneDrive download URL unavailable".into(),
+                }
+            })?;
+        safe_download_url(&metadata.download_url)?;
         let mut offset = range.start;
         while offset < range.end {
             let end = offset
                 + (range.end - offset)
                     .min(crate::domain::MAX_READ_FILE_AT_RANGE_SIZE as u64);
-            let path = path.clone();
-            let storage = self.clone();
-            let bytes = tokio::task::spawn_blocking(move || {
-                match storage.read_range(path, offset..end) {
-                    Err(ReadFileAtError::RangeNotSatisfiable) => Ok(Vec::new()),
-                    result => result,
-                }
-            })
-            .await
-            .map_err(|e| ReadFileAtError::Unknown {
-                message: e.to_string(),
-            })??;
-            if bytes.is_empty() {
+            let header = format!("bytes={offset}-{}", end - 1);
+            // Deliberately never attach bearer credentials to download URLs.
+            let response = self
+                .get(&metadata.download_url, None, Some(&header))
+                .await?;
+            let status = response.status().as_u16();
+            if status == 416 {
+                break;
+            }
+            if status != 200 && status != 206 {
+                return Err(read_status(status));
+            }
+            if status == 200 && offset != 0 {
+                return Err(ReadFileAtError::Unknown {
+                    message: "server ignored range request".into(),
+                });
+            }
+            let body = response.body();
+            if body.len() > (end - offset) as usize {
+                return Err(ReadFileAtError::Unknown {
+                    message: "download exceeded requested range".into(),
+                });
+            }
+            if body.is_empty() {
                 break;
             }
             writer
-                .write_all(&bytes)
+                .write_all(body)
                 .await
                 .map_err(ReadFileAtError::Write)?;
-            offset += bytes.len() as u64;
+            offset += body.len() as u64;
+            if body.len() < (end - (offset - body.len() as u64)) as usize {
+                break;
+            }
         }
         Ok(offset - range.start)
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_utils::mocks::{BytesWriter, FakeWriter};
-
-    type DefaultStorage = OneDriveStorage<OneDriveTokenSource, UreqHttpGet>;
-
-    fn storage_path(value: impl Into<PathBuf>) -> StoragePath {
-        StoragePath::try_from(value.into())
-            .expect("test storage path should be valid")
-    }
-
-    fn storage_with_response(
-        status: u16,
-        body: &[u8],
-    ) -> OneDriveStorage<StubToken, MockHttpGet> {
-        OneDriveStorage::<StubToken, MockHttpGet> {
-            root: PathBuf::from("/"),
-            endpoint: "https://example.com".into(),
-            token: std::sync::Arc::new(StubToken("test".into())),
-            fetch: std::sync::Arc::new(MockHttpGet {
-                status,
-                body: body.to_vec(),
-            }),
-        }
-    }
-
-    #[test]
-    fn http_status_and_range_body_are_preserved() {
-        use std::io::{Read, Write};
-        let listener =
-            std::net::TcpListener::bind("127.0.0.1:0").expect("bind server");
-        let address = listener.local_addr().expect("server address");
-        let server = std::thread::spawn(move || {
-            for (status, body) in [
-                ("416 Range Not Satisfiable", Vec::new()),
-                ("200 OK", vec![42u8; 100_000]),
-            ] {
-                let (mut stream, _) =
-                    listener.accept().expect("accept request");
-                let mut request = [0; 2048];
-                let _ = stream.read(&mut request).expect("read request");
-                write!(stream, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).expect("response headers");
-                let _ = stream.write_all(&body);
-            }
-        });
-        let url = format!("http://{address}/file");
-        let client = UreqHttpGet::new();
-        let (status, _) = client
-            .get(&url, &[("Range", "bytes=0-1")])
-            .expect("status response");
-        assert_eq!(status, 416);
-        let (status, body) = client
-            .get(&url, &[("Range", "bytes=0-1")])
-            .expect("range response");
-        assert_eq!(status, 200);
-        assert_eq!(body.len(), crate::domain::MAX_READ_FILE_AT_RANGE_SIZE + 1);
-        server.join().expect("server thread");
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn async_operations_preserve_unavailable_errors() {
-        let storage = storage_with_response(503, b"temporarily unavailable");
-        assert!(matches!(
-            Storage::read_dir(&storage, StoragePath::root()).await,
-            Err(ReadDirError::Unavailable { message }) if message == "temporarily unavailable"
-        ));
-        assert!(matches!(
-            Storage::read_file_at(&storage, storage_path("file"), &mut BytesWriter(Vec::new()), 0..1).await,
-            Err(ReadFileAtError::Unavailable { message }) if message == "temporarily unavailable"
-        ));
-    }
-
-    #[test]
-    fn config_without_token_is_not_authenticated() {
-        let config = OneDriveConfig {
-            root: PathBuf::from("/"),
-            endpoint: "https://graph.microsoft.com/v1.0".into(),
-            access_token: None,
-            refresh_token: None,
-            client_id: None,
-            token_expiry_buffer_secs: None,
-        };
-        let Err(error) = config.connect() else {
-            panic!("config should fail")
-        };
-        assert!(matches!(
-            error,
-            ConnectStorageError::NotAuthenticated { kind: "onedrive" }
-        ));
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn storage_config_deserializes_and_reports_missing_authorization() {
-        let config: Box<dyn StorageConfig> = toml::from_str(
-            r#"
-type = "onedrive"
-root = "/"
-endpoint = "https://graph.microsoft.com/v1.0"
-"#,
-        )
-        .expect("deserialize OneDrive config");
-
-        assert!(matches!(
-            config.connect().await,
-            Err(ConnectStorageError::NotAuthenticated { kind: "onedrive" })
-        ));
-    }
-
-    #[test]
-    fn config_ok_with_refresh_token_without_client_id() {
-        let config = OneDriveConfig {
-            root: PathBuf::from("/"),
-            endpoint: "https://graph.microsoft.com/v1.0".into(),
-            access_token: None,
-            refresh_token: Some("rt".into()),
-            client_id: None,
-            token_expiry_buffer_secs: None,
-        };
-        let r = config.connect();
-        assert!(r.is_ok());
-    }
-
-    #[test]
-    fn config_ok_with_refresh_token_and_client_id() {
-        let config = OneDriveConfig {
-            root: PathBuf::from("/"),
-            endpoint: "https://graph.microsoft.com/v1.0".into(),
-            access_token: None,
-            refresh_token: Some("rt".into()),
-            client_id: Some("cid".into()),
-            token_expiry_buffer_secs: None,
-        };
-        let r = config.connect();
-        assert!(r.is_ok());
-    }
-
-    #[test]
-    fn config_ok_with_valid_access_token() {
-        let payload_b64 = "eyJleHAiOjI1MDAwMDAwMDB9"; // exp far in future
-        let token = format!("h.{}.sig", payload_b64);
-        let config = OneDriveConfig {
-            root: PathBuf::from("/"),
-            endpoint: "https://graph.microsoft.com/v1.0".into(),
-            access_token: Some(token),
-            refresh_token: None,
-            client_id: None,
-            token_expiry_buffer_secs: None,
-        };
-        let r = config.connect();
-        assert!(r.is_ok());
-    }
-
-    #[test]
-    fn config_fails_expired_access_token_without_refresh() {
-        // Valid JWT with exp in the past so jwt_expires_at returns Some(past time).
-        let token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjEwMDAwMDAwMDB9.c2ln";
-        let config = OneDriveConfig {
-            root: PathBuf::from("/"),
-            endpoint: "https://graph.microsoft.com/v1.0".into(),
-            access_token: Some(token.to_string()),
-            refresh_token: None,
-            client_id: None,
-            token_expiry_buffer_secs: None,
-        };
-        let r = config.connect();
-        let Err(e) = r else {
-            panic!("expected config to fail")
-        };
-        assert!(e.to_string().contains("expired"));
-    }
-
-    #[test]
-    fn path_to_graph_segment() {
-        assert_eq!(
-            DefaultStorage::path_to_graph_segment(&PathBuf::from("")),
-            ""
-        );
-        assert_eq!(
-            DefaultStorage::path_to_graph_segment(&PathBuf::from(".")),
-            ""
-        );
-        assert_eq!(
-            DefaultStorage::path_to_graph_segment(&PathBuf::from("/.")),
-            ""
-        );
-        assert_eq!(
-            DefaultStorage::path_to_graph_segment(&PathBuf::from("Docs")),
-            "/Docs"
-        );
-        assert!(
-            DefaultStorage::path_to_graph_segment(&PathBuf::from("a/b"))
-                .contains("a")
-        );
-        assert!(
-            DefaultStorage::path_to_graph_segment(&PathBuf::from(
-                "Docs\\File.pdf"
-            ))
-            .contains("Docs")
-        );
-        assert!(
-            DefaultStorage::path_to_graph_segment(&PathBuf::from(
-                "La Desertica.pdf"
-            ))
-            .contains("%20")
-        );
-        assert!(
-            DefaultStorage::path_to_graph_segment(&PathBuf::from("a/b/c"))
-                .contains("a")
-        );
-    }
-
-    #[test]
-    fn parse_last_modified_valid() {
-        let t = parse_last_modified("2024-01-01T00:00:00Z");
-        assert!(t > UNIX_EPOCH);
-    }
-
-    #[test]
-    fn parse_last_modified_invalid() {
-        let t = parse_last_modified("not-a-date");
-        assert_eq!(t, UNIX_EPOCH);
-    }
-
-    #[test]
-    fn parse_last_modified_empty() {
-        let t = parse_last_modified("");
-        assert_eq!(t, UNIX_EPOCH);
-    }
-
-    struct StubToken(String);
-
-    // private test util: Supplies a token in OneDrive tests.
-    impl BearerToken for StubToken {
-        fn access_token(&self) -> Result<String> {
-            Ok(self.0.clone())
-        }
-    }
-
-    struct MockHttpGet {
-        status: u16,
-        body: Vec<u8>,
-    }
-
-    // private test util: Supplies HTTP responses in OneDrive tests.
-    impl HttpGet for MockHttpGet {
-        fn get(
-            &self,
-            _url: &str,
-            _headers: &[(&str, &str)],
-        ) -> Result<(u16, Vec<u8>)> {
-            Ok((self.status, self.body.clone()))
-        }
-    }
-
-    #[test]
-    fn read_dir_returns_entry_from_mock() {
-        let list_json = br#"{"value":[{"name":"f.txt","size":100,"lastModifiedDateTime":"2024-01-01T00:00:00Z"}]}"#;
-        let storage = storage_with_response(200, list_json);
-        let iter = storage
-            .read_dir(StoragePath::root())
-            .expect("mock directory listing should succeed");
-        let entries: Vec<_> = iter.collect();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].file_name(), "f.txt");
-        assert_eq!(entries[0].size(), Some(100));
-        assert!(!entries[0].is_dir());
-    }
-
-    #[test]
-    fn read_dir_http_failure_returns_list_error() {
-        let storage = storage_with_response(500, b"boom");
-        let result = storage.read_dir(StoragePath::root());
-        let Err(err) = result else {
-            panic!("list should fail")
-        };
-
-        assert!(matches!(err, ReadDirError::Unavailable { .. }));
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn async_range_returns_backend_bytes_and_rejects_invalid_ranges() {
-        let storage = storage_with_response(206, &[1, 2, 3]);
-        let path = storage_path("f");
-        let mut writer = FakeWriter::new();
-        let count =
-            Storage::read_file_at(&storage, path.clone(), &mut writer, 10..12)
-                .await
-                .expect("range");
-        assert_eq!(count, 2);
-        assert_eq!(writer.flat_bytes(), [1, 2]);
-        assert!(
-            Storage::read_file_at(&storage, path, &mut writer, 2..1)
-                .await
-                .is_err()
-        );
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn range_reads_honor_pending_partial_writes_and_current_position() {
-        let storage = storage_with_response(206, b"2345");
-        let mut writer = FakeWriter::new();
-        writer.bytes.extend_from_slice(b"prefix:");
-        writer.max_write = 1;
-        writer.pending = true;
-        let count = Storage::read_file_at(
-            &storage,
-            storage_path("file"),
-            &mut writer,
-            2..6,
-        )
-        .await
-        .expect("range");
-        assert_eq!(count, 4);
-        assert_eq!(writer.flat_bytes(), b"prefix:2345");
-        assert_eq!(writer.pending_polls, 4);
-        assert_eq!((writer.flushes, writer.closes), (0, 0));
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn range_reads_forward_sink_io_errors_and_zero_writes() {
-        let storage = storage_with_response(206, b"2345");
-        for zero in [false, true] {
-            let mut writer = FakeWriter::new();
-            writer.pending = true;
-            writer.max_write = 1;
-            let expected = if zero {
-                writer.zero_after = Some(2);
-                std::io::ErrorKind::WriteZero
-            } else {
-                writer.fail_after = Some(2);
-                std::io::ErrorKind::PermissionDenied
-            };
-            let error = Storage::read_file_at(
-                &storage,
-                storage_path("file"),
-                &mut writer,
-                2..6,
-            )
-            .await
-            .expect_err("sink failure");
-            let ReadFileAtError::Write(error) = error else {
-                panic!("expected sink I/O error")
-            };
-            assert_eq!(error.kind(), expected);
-            assert_eq!(writer.flat_bytes(), b"23");
-            assert_eq!((writer.flushes, writer.closes), (0, 0));
-        }
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn read_file_at_writes_exact_range_from_mock() {
-        let body: Vec<u8> = (0..5000).map(|i| (i % 256) as u8).collect();
-        let storage = OneDriveStorage::<StubToken, MockHttpGet> {
-            root: PathBuf::from("/"),
-            endpoint: "https://example.com".into(),
-            token: std::sync::Arc::new(StubToken("test".into())),
-            fetch: std::sync::Arc::new(MockHttpGet {
-                status: 206,
-                body: body.clone(),
-            }),
-        };
-        let mut writer = FakeWriter::new();
-        storage
-            .read_file_at(storage_path("f"), &mut writer, 0..5000)
-            .await
-            .expect("mock range read should succeed");
-        assert_eq!(writer.total_bytes(), 5000);
-        assert_eq!(writer.flat_bytes(), body);
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn read_file_at_caps_at_range_when_mock_returns_more() {
-        let body: Vec<u8> = (0..10_000).map(|i| (i % 256) as u8).collect();
-        let storage = OneDriveStorage::<StubToken, MockHttpGet> {
-            root: PathBuf::from("/"),
-            endpoint: "https://example.com".into(),
-            token: std::sync::Arc::new(StubToken("test".into())),
-            fetch: std::sync::Arc::new(MockHttpGet { status: 206, body }),
-        };
-        let mut writer = FakeWriter::new();
-        storage
-            .read_file_at(storage_path("f"), &mut writer, 0..5000)
-            .await
-            .expect("mock range read should succeed");
-        assert_eq!(writer.total_bytes(), 5000);
-    }
-}
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests;

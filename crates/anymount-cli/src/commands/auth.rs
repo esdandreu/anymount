@@ -1,180 +1,120 @@
-use crate::auth::{OneDriveAuthFlow, TokenResponse};
-use clap::Subcommand;
+use std::io::Write;
+use std::path::PathBuf;
 
-/// Top-level auth command; holds the provider subcommand.
+use anymount::ConfigDir;
+use anymount::domain::{ConfigRepository, DeviceAuthorization};
+use color_eyre::eyre::eyre;
+
+/// Authorizes an existing named storage configuration.
 #[derive(clap::Args, Debug, Clone)]
 pub struct AuthCommand {
-    #[command(subcommand)]
-    pub subcommand: AuthSubcommand,
-}
-
-/// Auth subcommand: which provider to obtain a token for.
-#[derive(Subcommand, Debug, Clone)]
-pub enum AuthSubcommand {
-    /// Obtain a refresh token for OneDrive (device code flow).
-    #[command(name = "onedrive")]
-    OneDrive(AuthOneDrive),
-}
-
-/// Arguments for `auth onedrive`.
-#[derive(clap::Args, Debug, Clone)]
-pub struct AuthOneDrive {
-    /// Override the default Azure app client ID.
-    #[arg(long)]
-    pub client_id: Option<String>,
+    /// Configuration name, without its file extension.
+    pub name: String,
 }
 
 impl AuthCommand {
-    /// Runs the chosen auth flow and prints the refresh token on stdout.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the device-code request fails, the user does not
-    /// complete sign-in, or the token response is invalid.
-    pub fn execute(&self) -> crate::cli::Result<()> {
-        let flow = OneDriveAuthFlow;
-        let app = AuthApplication::new(&flow);
-        self._execute(&app, &DefaultUrlOpener)
-    }
-
-    /// Internal entry point for injection (e.g. tests). Not part of the public
-    /// API.
-    fn _execute<U, O>(
+    pub async fn execute(
         &self,
-        use_case: &U,
-        url_opener: &O,
-    ) -> crate::cli::Result<()>
-    where
-        U: AuthUseCase,
-        O: UrlOpener,
-    {
-        let started =
-            use_case.start_onedrive_auth(self.subcommand.client_id())?;
-        print_instructions(&started.message());
-        if url_opener.open(&started.verification_uri()).is_err() {
-            eprintln!("(Could not open browser; open the URL above manually.)");
+        config_dir: Option<PathBuf>,
+    ) -> color_eyre::Result<()> {
+        let repository =
+            config_dir.map_or_else(ConfigDir::default, ConfigDir::new);
+        let record = repository.find(&self.name)?;
+        let authorization =
+            record.session.authorization().ok_or_else(|| {
+                eyre!("this storage does not support OAuth authorization")
+            })?;
+        let persistence = record.persistence.as_deref().ok_or_else(|| {
+            eyre!("no credential persistence for '{}'", self.name)
+        })?;
+        let device = authorization.begin_device().await?;
+        write_instructions(&mut std::io::stderr().lock(), &device)?;
+        tokio::select! {
+            result = authorization.poll_device() => result?,
+            result = tokio::signal::ctrl_c() => {
+                result?;
+                authorization.cancel();
+                return Err(eyre!("authorization cancelled"));
+            }
         }
-        eprintln!();
-        eprintln!("Waiting for you to sign in...");
-        let tokens = started.finish()?;
-        print_tokens(&tokens);
+        loop {
+            match authorization.save_pending(persistence).await {
+                Ok(()) => break,
+                Err(_) => {
+                    eprintln!(
+                        "Sign-in succeeded but saving failed; retrying the retained credentials. Ctrl-C to stop."
+                    );
+                    tokio::select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {},
+                        result = tokio::signal::ctrl_c() => {
+                            result?;
+                            return Err(eyre!("credentials remain unsaved"));
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("Credentials saved for '{}'.", self.name);
         Ok(())
     }
 }
 
-/// Port for opening a URL (e.g. in the default browser). Inject a no-op in tests.
-pub trait UrlOpener {
-    fn open(&self, url: &str) -> Result<(), ()>;
-}
-
-/// Default opener that uses the system handler (e.g. opens the default
-/// browser).
-pub struct DefaultUrlOpener;
-
-impl UrlOpener for DefaultUrlOpener {
-    fn open(&self, url: &str) -> Result<(), ()> {
-        open::that(url).map_err(|_| ())
+fn write_instructions(
+    output: &mut impl Write,
+    device: &DeviceAuthorization,
+) -> std::io::Result<()> {
+    writeln!(
+        output,
+        "Open {} and enter code {}.",
+        device.verification_uri, device.user_code
+    )?;
+    if let Some(complete) = &device.verification_uri_complete {
+        writeln!(output, "Or open {complete}")?;
     }
-}
-
-fn print_instructions(message: &str) {
-    eprintln!("{}", message);
-}
-
-fn print_tokens(tokens: &TokenResponse) {
-    if let Some(ref r) = tokens.refresh_token {
-        println!("refresh_token: {}", r);
-    }
-    eprintln!(
-        "access_token is short-lived; use refresh_token for storage config."
-    );
+    writeln!(
+        output,
+        "Expires at Unix time {}. Waiting for sign-in...",
+        device.expires_at
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::auth::{
-        AuthUseCase, Error as AuthApplicationError,
-        Result as AuthApplicationResult, StartedAuthSession,
-    };
 
-    struct MockSession;
-
-    // private test util: Provides a completed authorization session.
-    impl StartedAuthSession for MockSession {
-        fn message(&self) -> String {
-            "Open example.com".to_owned()
-        }
-
-        fn verification_uri(&self) -> String {
-            "https://example.com/device".to_owned()
-        }
-
-        fn finish(self: Box<Self>) -> AuthApplicationResult<TokenResponse> {
-            Ok(TokenResponse {
-                access_token: "at".into(),
-                refresh_token: Some("rt".into()),
-                expires_in: 3600,
-            })
-        }
-    }
-
-    struct FailingUseCase;
-
-    // private test util: Exercises authorization error handling.
-    impl AuthUseCase for FailingUseCase {
-        fn start_onedrive_auth(
-            &self,
-            _client_id: Option<String>,
-        ) -> AuthApplicationResult<Box<dyn StartedAuthSession>> {
-            Err(AuthApplicationError::Auth(crate::auth::Error::OneDrive(
-                crate::auth::onedrive::Error::DeviceCodeExpired,
-            )))
-        }
-    }
-
-    struct SuccessUseCase;
-
-    // private test util: Exercises successful authorization.
-    impl AuthUseCase for SuccessUseCase {
-        fn start_onedrive_auth(
-            &self,
-            _client_id: Option<String>,
-        ) -> AuthApplicationResult<Box<dyn StartedAuthSession>> {
-            Ok(Box::new(MockSession))
-        }
-    }
-
-    struct NoOpUrlOpener;
-
-    // private test util: Avoids opening a browser during authorization tests.
-    impl UrlOpener for NoOpUrlOpener {
-        fn open(&self, _url: &str) -> Result<(), ()> {
-            Ok(())
-        }
+    #[test]
+    fn displays_device_instructions_without_synthesizing_a_complete_url() {
+        let device = DeviceAuthorization {
+            verification_uri: "https://login.example/device".to_owned(),
+            user_code: "ABCD-EFGH".to_owned(),
+            verification_uri_complete: None,
+            expires_at: 2000000000,
+        };
+        let mut output = Vec::new();
+        write_instructions(&mut output, &device).expect("write instructions");
+        let text = String::from_utf8(output).expect("utf8");
+        assert!(text.contains("https://login.example/device"));
+        assert!(text.contains("ABCD-EFGH"));
+        assert!(text.contains("2000000000"));
+        assert!(!text.contains("user_code="));
+        assert!(!text.contains("Or open"));
     }
 
     #[test]
-    fn auth_execute_wraps_auth_error() {
-        let cmd = AuthCommand {
-            subcommand: AuthSubcommand::OneDrive(AuthOneDrive {
-                client_id: Some("test-client".into()),
-            }),
+    fn displays_only_provider_supplied_complete_url() {
+        let device = DeviceAuthorization {
+            verification_uri: "https://login.example/device".to_owned(),
+            user_code: "ABCD-EFGH".to_owned(),
+            verification_uri_complete: Some(
+                "https://login.example/device?provided=complete".to_owned(),
+            ),
+            expires_at: 2000000000,
         };
-        let err = cmd
-            ._execute(&FailingUseCase, &NoOpUrlOpener)
-            .expect_err("failing use case should return an error");
-        assert!(matches!(err, crate::cli::Error::Auth(_)));
-    }
-
-    #[test]
-    fn execute_succeeds_with_mock_authorizer() {
-        let cmd = AuthCommand {
-            subcommand: AuthSubcommand::OneDrive(AuthOneDrive {
-                client_id: Some("test-client".into()),
-            }),
-        };
-        let result = cmd._execute(&SuccessUseCase, &NoOpUrlOpener);
-        assert!(result.is_ok());
+        let mut output = Vec::new();
+        write_instructions(&mut output, &device).expect("write instructions");
+        let text = String::from_utf8(output).expect("utf8");
+        assert!(text.contains(
+            "Or open https://login.example/device?provided=complete"
+        ));
     }
 }

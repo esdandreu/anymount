@@ -1,13 +1,13 @@
 use crate::domain::{
-    ConnectStorageError, DirEntry, ReadDirError, ReadFileAtError,
-    StorageConfig, StoragePath,
+    ConfigurationPersistence, ConnectStorageError, DirEntry, ReadDirError,
+    ReadFileAtError, StoragePath, StorageSession,
 };
 use futures::{StreamExt, io::AsyncWrite};
 use std::{
     io::{self, Write},
     ops::Range,
     pin::Pin,
-    sync::mpsc,
+    sync::{Arc, mpsc},
     task::{Context, Poll},
 };
 
@@ -111,11 +111,17 @@ impl AsyncWrite for ChunkWriter {
         Poll::Ready(Ok(()))
     }
 }
+
+type SaveCredentials =
+    (Arc<dyn StorageSession>, Arc<dyn ConfigurationPersistence>);
+
 impl NativeStorage {
     pub fn open(
-        config: Box<dyn StorageConfig>,
+        session: Arc<dyn StorageSession>,
+        persistence: Option<Arc<dyn ConfigurationPersistence>>,
     ) -> Result<Self, ConnectStorageError> {
-        Self::start(move |runtime| runtime.block_on(config.connect()))
+        let saver = persistence.map(|store| (Arc::clone(&session), store));
+        Self::start(move |runtime| runtime.block_on(session.connect()), saver)
     }
 
     #[cfg(test)]
@@ -125,10 +131,13 @@ impl NativeStorage {
     >(
         factory: F,
     ) -> Result<Self, ConnectStorageError> {
-        Self::start(move |_| Ok(Box::new(factory())))
+        Self::start(move |_| Ok(Box::new(factory())), None)
     }
 
-    fn start<F>(factory: F) -> Result<Self, ConnectStorageError>
+    fn start<F>(
+        factory: F,
+        saver: Option<SaveCredentials>,
+    ) -> Result<Self, ConnectStorageError>
     where
         F: FnOnce(
                 &tokio::runtime::Runtime,
@@ -170,6 +179,27 @@ impl NativeStorage {
                     }
                 };
                 runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+                    let (stop_saving, mut stopped) = tokio::sync::oneshot::channel();
+                    let saver = saver.map(|(session, store)| tokio::task::spawn_local(async move {
+                        let Some(authorization) = session.authorization() else {
+                            return;
+                        };
+                        let mut generation = 0;
+                        loop {
+                            tokio::select! {
+                                _ = &mut stopped => break,
+                                updated = authorization.wait_for_update(generation) => {
+                                    generation = updated;
+                                }
+                            }
+                            if authorization.save_pending(store.as_ref()).await.is_err() {
+                                tracing::warn!(generation, "credential save failed; update retained");
+                            }
+                        }
+                        if authorization.save_pending(store.as_ref()).await.is_err() {
+                            tracing::warn!("final credential save failed; update retained");
+                        }
+                    }));
                     while let Some(request) = receiver.recv().await {
                         match request {
                             Request::ReadDir(path, reply) => {
@@ -210,6 +240,10 @@ impl NativeStorage {
                                 }));
                             }
                         }
+                    }
+                    let _ = stop_saving.send(());
+                    if let Some(saver) = saver {
+                        let _ = saver.await;
                     }
                 }));
             })
@@ -318,6 +352,171 @@ mod tests {
     };
     use std::time::Duration;
     use std::time::SystemTime;
+
+    #[test]
+    fn native_connections_share_refresh_and_persist_without_another_request() {
+        use crate::config_dir::ConfigFilePersistence;
+        use crate::domain::SaveStatus;
+        use crate::storages::onedrive::{OneDriveConfig, OneDriveSession};
+        use crate::test_utils::fakeoauth::FakeOAuthRuntime;
+
+        let directory = tempfile::TempDir::new().expect("temporary directory");
+        let path = directory.path().join("drive.json");
+        std::fs::write(&path,
+            r#"{"path":"/mnt/drive","label":"untouched","storage":{"type":"onedrive"}}"#)
+            .expect("write configuration");
+        let persistence =
+            ConfigFilePersistence::open(directory.path(), "drive")
+                .expect("open persistence");
+        let provider: OneDriveConfig =
+            serde_json::from_value(serde_json::json!({
+                "root": "/", "endpoint": "https://graph.microsoft.com/v1.0",
+                "access_token": "old-access", "refresh_token": "old-refresh",
+                "expires_at": 1
+            }))
+            .expect("provider config");
+        let protocol = FakeOAuthRuntime::new(1000);
+        protocol.push_json(
+            200,
+            serde_json::json!({
+                "access_token": "new-access", "refresh_token": "new-refresh",
+                "token_type": "Bearer", "expires_in": 3600
+            }),
+        );
+        protocol.push_json(200, serde_json::json!({"value": []}));
+        protocol.push_json(200, serde_json::json!({"value": []}));
+        let session = OneDriveSession::with_runtime(
+            provider,
+            persistence.identity(),
+            protocol.runtime(),
+        )
+        .expect("session");
+        let owner: Arc<dyn StorageSession> = Arc::new(session.clone());
+        let persistence: Arc<dyn ConfigurationPersistence> =
+            Arc::new(persistence);
+        let first = NativeStorage::open(
+            Arc::clone(&owner),
+            Some(Arc::clone(&persistence)),
+        )
+        .expect("first native mount connection");
+        let second = NativeStorage::open(owner, Some(persistence))
+            .expect("second native mount connection");
+        assert_eq!(
+            first
+                .read_dir(StoragePath::root())
+                .expect("first read")
+                .count(),
+            0
+        );
+        drop(first);
+        assert_eq!(
+            second
+                .read_dir(StoragePath::root())
+                .expect("second read")
+                .count(),
+            0
+        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !matches!(session.save_status(), SaveStatus::Saved { .. }) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "native host did not save update"
+            );
+            std::thread::yield_now();
+        }
+        let saved: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(path).expect("read saved config"),
+        )
+        .expect("json");
+        assert_eq!(saved["storage"]["refresh_token"], "new-refresh");
+        assert_eq!(saved["label"], "untouched");
+        assert_eq!(
+            protocol
+                .requests()
+                .iter()
+                .filter(|request| request.method == "POST")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn native_storage_stays_usable_when_background_save_fails() {
+        use crate::config_dir::ConfigFilePersistence;
+        use crate::domain::SaveStatus;
+        use crate::storages::onedrive::{OneDriveConfig, OneDriveSession};
+        use crate::test_utils::fakeoauth::FakeOAuthRuntime;
+
+        let directory = tempfile::TempDir::new().expect("temporary directory");
+        let path = directory.path().join("drive.json");
+        let original = r#"{"path":"/mnt/drive","storage":{"type":"onedrive"}}"#;
+        std::fs::write(&path, original).expect("write configuration");
+        let persistence =
+            ConfigFilePersistence::open(directory.path(), "drive")
+                .expect("open persistence");
+        let provider: OneDriveConfig =
+            serde_json::from_value(serde_json::json!({
+                "root": "/", "endpoint": "https://graph.microsoft.com/v1.0",
+                "access_token": "old-access", "refresh_token": "old-refresh",
+                "expires_at": 1
+            }))
+            .expect("provider config");
+        let protocol = FakeOAuthRuntime::new(1000);
+        protocol.push_json(
+            200,
+            serde_json::json!({
+                "access_token": "new-access", "refresh_token": "new-refresh",
+                "token_type": "Bearer", "expires_in": 3600
+            }),
+        );
+        protocol.push_json(200, serde_json::json!({"value": []}));
+        protocol.push_json(200, serde_json::json!({"value": []}));
+        let session = OneDriveSession::with_runtime(
+            provider,
+            persistence.identity(),
+            protocol.runtime(),
+        )
+        .expect("session");
+        let persistence: Arc<dyn ConfigurationPersistence> =
+            Arc::new(persistence);
+        std::fs::write(&path, "invalid json").expect("make persistence fail");
+        let storage = NativeStorage::open(
+            Arc::new(session.clone()),
+            Some(Arc::clone(&persistence)),
+        )
+        .expect("native mount connection");
+        assert_eq!(
+            storage
+                .read_dir(StoragePath::root())
+                .expect("first read")
+                .count(),
+            0
+        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !matches!(session.save_status(), SaveStatus::Failed { .. }) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "native host did not attempt saving"
+            );
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            storage
+                .read_dir(StoragePath::root())
+                .expect("read after save failure")
+                .count(),
+            0
+        );
+        std::fs::write(&path, original).expect("repair persistence");
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("retry runtime")
+            .block_on(session.save_pending(persistence.as_ref()))
+            .expect("save retained update");
+        assert!(matches!(session.save_status(), SaveStatus::Saved { .. }));
+        assert_eq!(protocol.requests().len(), 3);
+    }
 
     #[test]
     fn preserves_disconnected_errors() {
@@ -525,12 +724,15 @@ mod tests {
 
     #[test]
     fn reports_initialization_failure() {
-        let result = NativeStorage::start(|_| {
-            Err(ConnectStorageError::Failed {
-                kind: "test",
-                message: "unavailable".into(),
-            })
-        });
+        let result = NativeStorage::start(
+            |_| {
+                Err(ConnectStorageError::Failed {
+                    kind: "test",
+                    message: "unavailable".into(),
+                })
+            },
+            None,
+        );
         assert!(matches!(
             result,
             Err(ConnectStorageError::Failed { kind: "test", .. })

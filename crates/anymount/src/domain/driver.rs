@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 
 use super::storage::ConnectStorageError;
-use super::{Mount, MountConfig};
+use super::{LoadedConfig, Mount};
 
 #[typetag::serde(tag = "type")]
 pub trait DriverConfig: Send + Sync {
@@ -21,7 +21,7 @@ pub trait Driver {
     /// configuration.
     async fn mount(
         &self,
-        config: &MountConfig,
+        record: &LoadedConfig,
     ) -> Result<Box<dyn Mount>, MountError>;
 
     /// Unregisters a mount. No-op if the mount is not registered.
@@ -61,16 +61,13 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::domain::{Config, MountConfig};
     use crate::test_utils::mocks::{EmptyStorageConfig, NoOpDriver, NoOpMount};
 
     #[tokio::test]
     async fn driver_and_mount_work_through_trait_objects() {
         let driver: Box<dyn Driver> = Box::new(NoOpDriver::default());
-        let config = MountConfig {
-            name: "local".to_owned(),
-            path: PathBuf::from("/"),
-            storage: Box::new(EmptyStorageConfig),
-        };
+        let config = record("local");
         let mount = driver.mount(&config).await.expect("mount should succeed");
         mount.connect().await.expect("connect should succeed");
         driver
@@ -84,7 +81,7 @@ mod tests {
         let mut mock_driver = MockDriver::new();
         mock_driver
             .expect_mount()
-            .withf(|config| config.name == "test")
+            .withf(|record| record.config.mount.name == "test")
             .times(1)
             .returning(|_| {
                 let mount: Box<dyn Mount> = Box::new(NoOpMount::default());
@@ -96,11 +93,7 @@ mod tests {
             .times(1)
             .returning(|_| Ok(()));
         let driver: Box<dyn Driver> = Box::new(mock_driver);
-        let config = MountConfig {
-            name: "test".to_owned(),
-            path: PathBuf::from("/tmp/test"),
-            storage: Box::new(EmptyStorageConfig),
-        };
+        let config = record("test");
         let mount = driver.mount(&config).await.expect("mount should succeed");
         mount.connect().await.expect("mount should connect");
         mount.disconnect().await.expect("mount should disconnect");
@@ -109,5 +102,20 @@ mod tests {
             .unmount(mount.name())
             .await
             .expect("unmount should succeed");
+    }
+
+    fn record(name: &str) -> LoadedConfig {
+        LoadedConfig::new(
+            Config {
+                mount: MountConfig {
+                    name: name.to_owned(),
+                    path: PathBuf::from("/"),
+                    storage: Box::new(EmptyStorageConfig),
+                },
+                driver: None,
+            },
+            name.to_owned(),
+        )
+        .expect("open storage session")
     }
 }

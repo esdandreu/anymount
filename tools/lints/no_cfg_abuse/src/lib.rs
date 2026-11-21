@@ -128,12 +128,25 @@ fn allowed_attribute(path: &Path, meta: &Meta) -> bool {
         return match path.as_str() {
             "crates/anymount/src/lib.rs"
             | "crates/anymount/src/storages.rs" => is_not_wasm(&predicate),
+            "crates/anymount/src/drivers/oauth.rs" => {
+                is_wasm(&predicate)
+                    || is_not_wasm(&predicate)
+                    || is_platform_test(&predicate)
+            }
+            "crates/anymount/src/test_utils/fakeoauth.rs" => {
+                is_wasm(&predicate) || is_not_wasm(&predicate)
+            }
+            "crates/anymount/src/storages/onedrive.rs" => {
+                is_platform_test(&predicate)
+            }
             "crates/anymount/tests/browser_registry.rs" => is_wasm(&predicate),
             "crates/anymount/src/drivers.rs" => match &predicate {
                 Meta::NameValue(value) if value.path.is_ident("target_os") => {
                     matches!(&value.value, syn::Expr::Lit(expr) if matches!(&expr.lit, syn::Lit::Str(s) if s.value() == "windows"))
                 }
-                Meta::NameValue(value) if value.path.is_ident("target_arch") => {
+                Meta::NameValue(value)
+                    if value.path.is_ident("target_arch") =>
+                {
                     is_wasm(&predicate)
                 }
                 Meta::NameValue(value) if value.path.is_ident("feature") => {
@@ -177,37 +190,67 @@ fn is_not_wasm(meta: &Meta) -> bool {
     matches!(meta, Meta::List(list) if list.path.is_ident("not") && syn::parse2::<Meta>(list.tokens.clone()).is_ok_and(|inner| is_wasm(&inner)))
 }
 
+fn is_platform_test(meta: &Meta) -> bool {
+    let Meta::List(list) = meta else { return false };
+    if !list.path.is_ident("all") {
+        return false;
+    }
+    let Ok(parts) = Punctuated::<Meta, Token![,]>::parse_terminated
+        .parse2(list.tokens.clone())
+    else {
+        return false;
+    };
+    parts.len() == 2
+        && matches!(parts.first(), Some(Meta::Path(path)) if path.is_ident("test"))
+        && parts
+            .last()
+            .is_some_and(|part| is_wasm(part) || is_not_wasm(part))
+}
+
 #[test]
 fn rejects_cfg_even_in_inactive_code() {
     let source = "#[cfg(not(target_arch = \"wasm32\"))] mod native; #[cfg(unix)] fn f() {}";
     assert_eq!(
-        check_source(Path::new("crates/anymount/src/read_dir.rs"), source).unwrap(),
+        check_source(Path::new("crates/anymount/src/read_dir.rs"), source)
+            .unwrap(),
         2
     );
 }
 
 #[test]
 fn sparse_file_fixture_allows_only_windows_setup() {
-    let path = Path::new("crates/anymount/src/test_utils/create_sparse_file.rs");
+    let path =
+        Path::new("crates/anymount/src/test_utils/create_sparse_file.rs");
     assert_eq!(
         check_source(path, "fn f() { #[cfg(windows)] {} }").unwrap(),
         0
     );
-    assert_eq!(
-        check_source(path, "fn f() { #[cfg(unix)] {} }").unwrap(),
-        1
-    );
+    assert_eq!(check_source(path, "fn f() { #[cfg(unix)] {} }").unwrap(), 1);
 }
 
 #[test]
 fn accepts_only_explicit_exceptions() {
     assert_eq!(check_source(Path::new("crates/anymount/src/read_dir.rs"), "#[cfg(test)] mod tests {} #[cfg_attr(test, mockall::automock)] trait T {}").unwrap(), 0);
     assert_eq!(check_source(Path::new("crates/anymount/src/drivers.rs"), "#[cfg(target_os = \"windows\")] mod windows; #[cfg(feature = \"fuse\")] mod fuse; #[cfg(feature = \"other\")] mod other_feature; #[cfg(unix)] mod other;").unwrap(), 2);
-    assert_eq!(check_source(Path::new("other.rs"), "#[cfg(feature = \"fuse\")] mod fuse;").unwrap(), 1);
+    assert_eq!(
+        check_source(
+            Path::new("other.rs"),
+            "#[cfg(feature = \"fuse\")] mod fuse;"
+        )
+        .unwrap(),
+        1
+    );
     assert_eq!(check_source(Path::new("crates/anymount/src/drivers.rs"), "#[cfg(target_arch = \"wasm32\")] mod browser; #[cfg(all(unix, feature = \"fuse\"))] mod fuse; #[cfg(target_arch = \"arm\")] mod other;").unwrap(), 2);
     assert_eq!(check_source(Path::new("crates/anymount/src/storages.rs"), "#[cfg(not(target_arch = \"wasm32\"))] mod local; #[cfg(not(target_arch = \"arm\"))] mod other;").unwrap(), 1);
     assert_eq!(check_source(Path::new("crates/anymount/src/lib.rs"), "#[cfg(not(target_arch = \"wasm32\"))] mod config_dir; #[cfg(unix)] mod other;").unwrap(), 1);
-    assert_eq!(check_source(Path::new("crates/anymount/tests/browser_registry.rs"), "#![cfg(target_arch = \"wasm32\")] #[cfg(unix)] fn other() {}").unwrap(), 1);
+    assert_eq!(
+        check_source(
+            Path::new("crates/anymount/tests/browser_registry.rs"),
+            "#![cfg(target_arch = \"wasm32\")] #[cfg(unix)] fn other() {}"
+        )
+        .unwrap(),
+        1
+    );
     assert_eq!(
         check_source(
             Path::new("crates/anymount/src/storages/local.rs"),
@@ -232,4 +275,7 @@ fn accepts_only_explicit_exceptions() {
         .unwrap(),
         2
     );
+    assert_eq!(check_source(Path::new("crates/anymount/src/drivers/oauth.rs"), "#[cfg(target_arch = \"wasm32\")] fn browser() {} #[cfg(not(target_arch = \"wasm32\"))] fn native() {} #[cfg(all(test, target_arch = \"wasm32\"))] mod tests {} #[cfg(feature = \"fuse\")] fn other() {}").unwrap(), 1);
+    assert_eq!(check_source(Path::new("crates/anymount/src/test_utils/fakeoauth.rs"), "#[cfg(target_arch = \"wasm32\")] fn browser() {} #[cfg(not(target_arch = \"wasm32\"))] fn native() {} #[cfg(unix)] fn other() {}").unwrap(), 1);
+    assert_eq!(check_source(Path::new("crates/anymount/src/storages/onedrive.rs"), "#[cfg(all(test, not(target_arch = \"wasm32\")))] mod tests {} #[cfg(not(target_arch = \"wasm32\"))] fn production() {} #[cfg(all(test, feature = \"fuse\"))] mod other {}").unwrap(), 2);
 }

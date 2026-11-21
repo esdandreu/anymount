@@ -1,9 +1,10 @@
 use super::native_storage::NativeStorage;
 use super::windows_mount::WindowsMount;
 use crate::domain::{Driver, DriverConfig, MountError};
-use crate::domain::{Mount, MountConfig};
+use crate::domain::{LoadedConfig, Mount};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// Configuration for the Windows CloudFilter driver.
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
@@ -30,11 +31,13 @@ pub struct WindowsDriver;
 impl Driver for WindowsDriver {
     async fn mount(
         &self,
-        config: &MountConfig,
-    ) -> std::result::Result<Box<dyn Mount>, MountError> {
-        let storage_config = config.storage.clone();
+        record: &LoadedConfig,
+    ) -> Result<Box<dyn Mount>, MountError> {
+        let config = &record.config.mount;
+        let session = Arc::clone(&record.session);
+        let persistence = record.persistence.clone();
         let storage = tokio::task::spawn_blocking(move || {
-            NativeStorage::open(storage_config)
+            NativeStorage::open(session, persistence)
         })
         .await
         .map_err(|source| MountError::CannotMountAtPath {

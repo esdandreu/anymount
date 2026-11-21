@@ -1,13 +1,17 @@
 use std::path::PathBuf;
 
-use crate::domain::{Config, ConfigRepository};
+use crate::domain::{ConfigRepository, LoadedConfig};
 
+mod config_file_persistence;
+mod native_configuration;
 mod read_config;
 
-use read_config::{ReadConfigError, read_config};
+#[doc(inline)]
+pub use config_file_persistence::ConfigFilePersistence;
+use native_configuration::load_configuration;
+use read_config::ReadConfigError;
 
-/// A configuration repository that reads configuration from files within a
-/// folder. The name of the file determines the name of the configuration.
+/// Reads named configurations and preserves their format when saving credentials.
 #[derive(Debug, Clone)]
 pub struct ConfigDir {
     path: PathBuf,
@@ -61,12 +65,12 @@ pub enum ConfigFileIter {
 }
 
 impl Iterator for ConfigFileIter {
-    type Item = Config;
+    type Item = LoadedConfig;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
             Self::Entries(entries) => entries.find_map(|entry| match entry {
-                Ok(entry) => match read_config(&entry.path()) {
+                Ok(entry) => match load_configuration(&entry.path()) {
                     Ok(config) => Some(config),
                     Err(ReadConfigError::NotAConfigFile) => None,
                     Err(error) => {
@@ -108,8 +112,8 @@ error_message = "toml test"
         let config_dir = ConfigDir::new(dir.path().to_path_buf());
         let mounts = config_dir.list().collect::<Vec<_>>();
         let config = mounts.into_iter().next().expect("read config");
-        assert_eq!(config.mount.name, "demo");
-        match config.mount.storage.connect().await {
+        assert_eq!(config.config.mount.name, "demo");
+        match config.session.connect().await {
             Ok(_) => panic!("should not connect"),
             Err(ConnectStorageError::Failed { message, .. }) => {
                 assert_eq!(message, "toml test");
@@ -136,8 +140,8 @@ error_message = "toml test"
         let config_dir = ConfigDir::new(dir.path().to_path_buf());
         let mounts = config_dir.list().collect::<Vec<_>>();
         let config = mounts.into_iter().next().expect("read config");
-        assert_eq!(config.mount.name, "demo");
-        match config.mount.storage.connect().await {
+        assert_eq!(config.config.mount.name, "demo");
+        match config.session.connect().await {
             Ok(_) => panic!("should not connect"),
             Err(ConnectStorageError::Failed { message, .. }) => {
                 assert_eq!(message, "json test");
@@ -163,8 +167,8 @@ storage:
         let config_dir = ConfigDir::new(dir.path().to_path_buf());
         let mounts = config_dir.list().collect::<Vec<_>>();
         let config = mounts.into_iter().next().expect("read config");
-        assert_eq!(config.mount.name, "demo");
-        match config.mount.storage.connect().await {
+        assert_eq!(config.config.mount.name, "demo");
+        match config.session.connect().await {
             Ok(_) => panic!("should not connect"),
             Err(ConnectStorageError::Failed { message, .. }) => {
                 assert_eq!(message, "yaml test");
@@ -172,6 +176,93 @@ storage:
             Err(error) => panic!("unexpected connection error: {error}"),
         }
     }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn retains_a_host_session_for_a_named_onedrive_record() {
+        let directory = TempDir::new().expect("temporary directory");
+        let path = directory.path().join("drive.json");
+        let original = r#"{
+            "path": "/mnt/drive",
+            "storage": {
+                "type": "onedrive",
+                "root": "/documents",
+                "endpoint": "https://graph.microsoft.com/v1.0",
+                "access_token": "opaque-access-only"
+            }
+        }"#;
+        std::fs::write(&path, original).expect("write named record");
+        let repository = ConfigDir::new(directory.path().to_path_buf());
+        let config = repository.find("drive").expect("load named record");
+        let session = &config.session;
+        let _first = session.connect().await.expect("first connection");
+        let _second = session.connect().await.expect("second connection");
+        let authorization = session.authorization().expect("authorization");
+        assert_eq!(
+            authorization.save_status(),
+            crate::domain::SaveStatus::Clean
+        );
+        assert!(authorization.pending_update().is_none());
+        assert_eq!(
+            std::fs::read_to_string(path).expect("read original"),
+            original
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn loads_and_saves_a_non_onedrive_provider_without_host_dispatch() {
+        let directory = TempDir::new().expect("temporary directory");
+        let path = directory.path().join("fixture.json");
+        let original = serde_json::json!({
+            "path": "/mnt/fixture",
+            "storage": {
+                "type": "test", "bucket": "files", "username": "user",
+                "password": "", "retired_code": "obsolete",
+                "extension": {"arbitrary": [1, true]}
+            }
+        });
+        std::fs::write(&path, original.to_string()).expect("write fixture");
+        let repository = ConfigDir::new(directory.path().to_path_buf());
+        let record = repository.find("fixture").expect("load fixture");
+        let independent = repository.find("fixture").expect("reload fixture");
+        let session = std::sync::Arc::clone(&record.session);
+        assert!(matches!(
+            session.connect().await,
+            Err(ConnectStorageError::NotAuthenticated { .. })
+        ));
+
+        let authorization =
+            record.session.authorization().expect("authorization");
+        authorization.begin_device().await.expect("begin sign-in");
+        authorization.poll_device().await.expect("finish sign-in");
+
+        assert!(session.connect().await.is_ok());
+        assert!(matches!(
+            independent.session.connect().await,
+            Err(ConnectStorageError::NotAuthenticated { .. })
+        ));
+        let snapshot =
+            serde_json::to_value(record.config.mount.storage.as_ref())
+                .expect("serialize saved config");
+        assert_eq!(snapshot["password"], "");
+        authorization
+            .save_pending(record.persistence.as_deref().expect("persistence"))
+            .await
+            .expect("save rotated fixture credentials");
+        let saved: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(path).expect("saved fixture"),
+        )
+        .expect("JSON file");
+        assert_eq!(saved["storage"]["type"], "test");
+        assert_eq!(saved["storage"]["password"], "rotated-password");
+        assert_eq!(
+            saved["storage"]["extension"],
+            original["storage"]["extension"]
+        );
+        assert!(saved["storage"].get("retired_code").is_none());
+        let reloaded = repository.find("fixture").expect("load saved fixture");
+        assert!(reloaded.session.connect().await.is_ok());
+    }
+
     #[test]
     #[traced_test]
     fn warns_config_errors() {

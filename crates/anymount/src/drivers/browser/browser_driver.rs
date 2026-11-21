@@ -13,10 +13,11 @@ pub use browser_driver_api::BrowserDriverApi;
 use browser_write_session::{BrowserWriteSession, WorkspaceWriteSession};
 
 use crate::domain::{
-    ConnectMountError, ConnectStorageError, DirEntry, DisconnectMountError,
-    Driver, DriverConfig, Mount, MountConfig, MountError, ReadDirError,
-    ReadFileAtError, StartWriteFileError, Storage, StorageConfig, StoragePath,
-    UnregisterMountError, WriteFileError, WriteFileSession,
+    AuthorizationError, ConnectMountError, ConnectStorageError, DirEntry,
+    DisconnectMountError, Driver, DriverConfig, LoadedConfig, Mount,
+    MountError, ReadDirError, ReadFileAtError, StartWriteFileError, Storage,
+    StorageConfig, StoragePath, StorageSession, UnregisterMountError,
+    WriteFileError, WriteFileSession,
 };
 use async_trait::async_trait;
 use futures::{
@@ -29,6 +30,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 
@@ -223,8 +225,9 @@ impl std::fmt::Debug for BrowserDriver {
 impl Driver for BrowserDriver {
     async fn mount(
         &self,
-        config: &MountConfig,
+        record: &LoadedConfig,
     ) -> Result<Box<dyn Mount>, MountError> {
+        let config = &record.config.mount;
         let (storage, handle): (Rc<dyn Storage>, Option<JsValue>) = if config
             .storage
             .kind()
@@ -239,7 +242,7 @@ impl Driver for BrowserDriver {
             let handle = storage.handle.clone();
             (Rc::new(storage), Some(handle))
         } else {
-            let storage = config.storage.connect().await.map_err(|error| {
+            let storage = record.session.connect().await.map_err(|error| {
                 MountError::CannotMountAtPath {
                     path: config.path.clone(),
                     message: error.to_string(),
@@ -600,8 +603,17 @@ impl FileSystemAccessStorage {
 pub struct BrowserStorageConfig;
 
 #[typetag::serde(name = "browser")]
-#[async_trait(?Send)]
 impl StorageConfig for BrowserStorageConfig {
+    fn open_session(
+        &self,
+        _identity: String,
+    ) -> Result<Arc<dyn StorageSession>, AuthorizationError> {
+        Ok(Arc::new(*self))
+    }
+}
+
+#[async_trait(?Send)]
+impl StorageSession for BrowserStorageConfig {
     async fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError> {
         Ok(Box::new(self.pick_directory().await?))
     }
@@ -685,7 +697,9 @@ fn js_message(error: &JsValue) -> String {
 mod tests {
     use std::path::PathBuf;
 
-    use crate::domain::{Config, MountConfig, Storage, StorageConfig};
+    use crate::domain::{
+        Config, LoadedConfig, MountConfig, Storage, StorageConfig,
+    };
     use crate::drivers::{
         browser::{BrowserDriver, BrowserDriverConfig},
         get_default_driver_config,
@@ -759,7 +773,9 @@ mod tests {
                 storage,
             },
         };
-        let mount = crate::mount(config).await.expect("mount workspace");
+        let record = LoadedConfig::new(config, "workspace".to_owned())
+            .expect("open storage session");
+        let mount = crate::mount(&record).await.expect("mount workspace");
 
         assert_eq!(mount.name(), "workspace");
         assert!(!mount.is_connected());
@@ -787,12 +803,17 @@ mod tests {
         use crate::test_utils::mocks::EmptyStorageConfig;
 
         let driver = BrowserDriver::default();
-        let config = MountConfig {
-            name: "other".into(),
-            path: PathBuf::from("other"),
-            storage: Box::new(EmptyStorageConfig),
+        let config = Config {
+            driver: None,
+            mount: MountConfig {
+                name: "other".into(),
+                path: PathBuf::from("other"),
+                storage: Box::new(EmptyStorageConfig),
+            },
         };
-        let mount = driver.mount(&config).await.expect("mount");
+        let record = LoadedConfig::new(config, "other".to_owned())
+            .expect("open storage session");
+        let mount = driver.mount(&record).await.expect("mount");
         assert!(mount.is_connected());
         mount.disconnect().await.expect("disconnect");
         assert!(!mount.is_connected());
@@ -843,7 +864,12 @@ mod tests {
         .expect("install picker");
         let config: Box<dyn StorageConfig> =
             serde_json::from_str(r#"{"type":"browser"}"#).expect("config");
-        let provider = config.connect().await.expect("select directory");
+        let provider = config
+            .open_session("workspace".to_owned())
+            .expect("open storage session")
+            .connect()
+            .await
+            .expect("select directory");
         let storage = super::BrowserWorkspace::new(
             std::rc::Rc::from(provider),
             Some(handle.clone()),

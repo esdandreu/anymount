@@ -1,17 +1,13 @@
+use anymount::{ConfigDir, ConfigRepository, LoadedConfig};
 use clap::{Args, Subcommand};
 use color_eyre::eyre::eyre;
-use std::path::PathBuf;
 
-/// Connect command ensures configured driver processes are running.
+/// Connects configured mounts until the user presses Ctrl-C.
 #[derive(Args, Debug, Clone)]
 pub struct ConnectCommand {
     /// Connect all configured drivers.
     #[arg(long)]
     pub all: bool,
-
-    /// Config directory override.
-    #[arg(long)]
-    pub config_dir: Option<PathBuf>,
 
     #[command(subcommand)]
     pub action: Option<ConnectSubcommand>,
@@ -25,17 +21,47 @@ pub enum ConnectSubcommand {
 }
 
 impl ConnectCommand {
-    pub fn execute(&self) -> color_eyre::Result<()> {
+    pub async fn execute(
+        &self,
+        config_dir: Option<std::path::PathBuf>,
+    ) -> color_eyre::Result<()> {
+        let repository =
+            config_dir.map_or_else(ConfigDir::default, ConfigDir::new);
+        let configurations = self.configurations(&repository)?;
+        if configurations.is_empty() {
+            return Err(eyre!("no configured mounts"));
+        }
+        let mut mounts = Vec::with_capacity(configurations.len());
+        for record in &configurations {
+            let mount = anymount::mount(record).await?;
+            mount.connect().await?;
+            eprintln!(
+                "Connected '{}'. Press Ctrl-C to disconnect.",
+                record.config.mount.name
+            );
+            mounts.push(mount);
+        }
+        let shutdown = tokio::signal::ctrl_c().await;
+        for mount in &mounts {
+            mount.disconnect().await?;
+        }
+        shutdown?;
+        Ok(())
+    }
+
+    fn configurations(
+        &self,
+        repository: &impl ConfigRepository,
+    ) -> color_eyre::Result<Vec<LoadedConfig>> {
         self.validate_arguments()?;
         if self.all {
-            return Ok(());
+            return Ok(repository.list().collect());
         }
-
         match &self.action {
             None => Err(eyre!("missing connect target")),
             Some(ConnectSubcommand::Named(tokens)) => {
-                let _name = single_external_subcommand_name(tokens)?;
-                Ok(())
+                let name = single_external_subcommand_name(tokens)?;
+                Ok(vec![repository.find(name)?])
             }
         }
     }
@@ -67,46 +93,58 @@ mod tests {
     fn connect_without_args_returns_error() {
         let cmd = ConnectCommand {
             all: false,
-            config_dir: None,
             action: None,
         };
 
-        assert!(cmd.execute().is_err());
+        assert!(
+            cmd.configurations(&ConfigDir::new("/missing".into()))
+                .is_err()
+        );
     }
 
     #[test]
     fn all_with_subcommand_returns_error() {
         let cmd = ConnectCommand {
             all: true,
-            config_dir: None,
             action: Some(ConnectSubcommand::Named(vec!["demo".to_owned()])),
         };
 
-        assert!(cmd.execute().is_err());
+        assert!(
+            cmd.configurations(&ConfigDir::new("/missing".into()))
+                .is_err()
+        );
     }
 
     #[test]
     fn named_connect_accepts_single_name() {
         let cmd = ConnectCommand {
             all: false,
-            config_dir: None,
             action: Some(ConnectSubcommand::Named(vec!["demo".to_owned()])),
         };
 
-        assert!(cmd.execute().is_ok());
+        assert_eq!(
+            single_external_subcommand_name(match &cmd.action {
+                Some(ConnectSubcommand::Named(tokens)) => tokens,
+                None => panic!("missing target"),
+            })
+            .expect("single target"),
+            "demo",
+        );
     }
 
     #[test]
     fn named_connect_rejects_multiple_tokens() {
         let cmd = ConnectCommand {
             all: false,
-            config_dir: None,
             action: Some(ConnectSubcommand::Named(vec![
                 "a".to_owned(),
                 "b".to_owned(),
             ])),
         };
 
-        assert!(cmd.execute().is_err());
+        assert!(
+            cmd.configurations(&ConfigDir::new("/missing".into()))
+                .is_err()
+        );
     }
 }

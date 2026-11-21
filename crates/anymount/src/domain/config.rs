@@ -1,6 +1,9 @@
-use std::path::PathBuf;
+use std::{fmt, path::PathBuf, sync::Arc};
 
-use crate::domain::{driver::DriverConfig, storage::StorageConfig};
+use super::{
+    AuthorizationError, ConfigurationPersistence, DriverConfig, StorageConfig,
+    StorageSession,
+};
 
 pub struct Config {
     pub mount: MountConfig,
@@ -13,18 +16,54 @@ pub struct MountConfig {
     pub storage: Box<dyn StorageConfig>,
 }
 
+/// Retains a saved configuration and its separate, live storage session.
+pub struct LoadedConfig {
+    pub config: Config,
+    pub session: Arc<dyn StorageSession>,
+    pub persistence: Option<Arc<dyn ConfigurationPersistence>>,
+}
+
+impl fmt::Debug for LoadedConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LoadedConfig")
+            .field("has_persistence", &self.persistence.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl LoadedConfig {
+    /// Opens an independent session for this configuration record.
+    ///
+    /// Reuse this record or clone its session handle to share live state.
+    /// The saved configuration is unchanged by authorization and renewal.
+    ///
+    /// # Errors
+    ///
+    /// Returns a provider setup error if the configuration cannot be used.
+    pub fn new(
+        config: Config,
+        identity: String,
+    ) -> Result<Self, AuthorizationError> {
+        let session = config.mount.storage.open_session(identity)?;
+        Ok(Self {
+            config,
+            session,
+            persistence: None,
+        })
+    }
+}
+
 pub trait ConfigRepository {
-    type Iter<'a>: Iterator<Item = Config>
+    type Iter<'a>: Iterator<Item = LoadedConfig>
     where
         Self: 'a;
 
     fn list(&self) -> Self::Iter<'_>;
 
     /// Finds a mount configuration by name in this repository.
-    fn find(&self, name: &str) -> Result<Config, ConfigNotFound> {
+    fn find(&self, name: &str) -> Result<LoadedConfig, ConfigNotFound> {
         self.list()
-            .find(|config| config.mount.name == name)
-            .map(|config| config)
+            .find(|record| record.config.mount.name == name)
             .ok_or_else(|| ConfigNotFound {
                 name: name.to_owned(),
             })

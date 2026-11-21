@@ -5,33 +5,48 @@ pub use path::{InvalidStoragePath, StoragePath};
 #[doc(inline)]
 pub use write_file_session::{WriteFileError, WriteFileSession};
 
-use std::{ops::Range, pin::Pin, time::SystemTime};
-
-use futures::{Stream, io::AsyncWrite};
+use std::{ops::Range, pin::Pin, sync::Arc, time::SystemTime};
 
 use async_trait::async_trait;
+use futures::{Stream, io::AsyncWrite};
 
-use super::started_authorization::{AuthStorageError, StartedAuthorization};
+use super::{Authorization, AuthorizationError};
+use crate::drivers::oauth::RuntimeBounds;
 
 #[typetag::serde(tag = "type")]
-#[async_trait(?Send)]
 pub trait StorageConfig: dyn_clone::DynClone + Send + Sync {
-    async fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError>;
+    /// Opens an independent live session for this saved provider configuration.
+    ///
+    /// `identity` is a host-selected record identifier, not a credential.
+    /// Clone the returned handle to share state instead of opening it again.
+    ///
+    /// # Errors
+    ///
+    /// Returns a setup error when the provider cannot use this configuration.
+    fn open_session(
+        &self,
+        identity: String,
+    ) -> Result<Arc<dyn StorageSession>, AuthorizationError>;
 
     fn kind(&self) -> &'static str {
         std::any::type_name::<Self>()
     }
+}
 
-    /// Starts authorization for this storage configuration.
+/// Connects storage and optionally exposes live authorization for a record.
+#[async_trait(?Send)]
+pub trait StorageSession: RuntimeBounds {
+    /// Returns authorization when this session requires credentials.
+    fn authorization(&self) -> Option<&dyn Authorization> {
+        None
+    }
+
+    /// Connects storage using this session without saving configuration.
     ///
     /// # Errors
     ///
-    /// Returns an error when authorization cannot be started.
-    fn start_authorization(
-        self: Box<Self>,
-    ) -> Result<Box<dyn StartedAuthorization>, AuthStorageError> {
-        Err(AuthStorageError::NotImplemented { kind: self.kind() })
-    }
+    /// Returns an error if this session cannot connect.
+    async fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError>;
 }
 
 dyn_clone::clone_trait_object!(StorageConfig);
@@ -128,6 +143,8 @@ pub trait DirEntry: Send + Sync {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReadDirError {
+    #[error(transparent)]
+    Authorization(#[from] AuthorizationError),
     #[error("invalid storage path")]
     InvalidPath(#[from] InvalidStoragePath),
 
@@ -168,6 +185,8 @@ impl From<std::io::Error> for ReadDirError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReadFileAtError {
+    #[error(transparent)]
+    Authorization(#[from] AuthorizationError),
     #[error("invalid storage path")]
     InvalidPath(#[from] InvalidStoragePath),
 
@@ -248,46 +267,6 @@ mod test {
         ));
     }
 
-    #[derive(Clone, serde::Serialize, serde::Deserialize)]
-    struct TestStorageConfig {
-        endpoint: Option<String>,
-        bucket: String,
-        username: String,
-        password: String,
-    }
-
-    struct TestStorageConnection {}
-
-    // private test util: Tests the storage configuration contract.
-    #[async_trait(?Send)]
-    impl Storage for TestStorageConnection {}
-
-    // private test util: Tests storage defaults and deserialization.
-    #[typetag::serde(name = "test")]
-    #[async_trait(?Send)]
-    impl StorageConfig for TestStorageConfig {
-        async fn connect(
-            &self,
-        ) -> Result<Box<dyn Storage>, ConnectStorageError> {
-            Ok(Box::new(TestStorageConnection {}))
-        }
-    }
-
-    #[test]
-    fn authorization_is_not_implemented_by_default() {
-        let config = Box::new(TestStorageConfig {
-            endpoint: None,
-            bucket: "documents".to_owned(),
-            username: "user".to_owned(),
-            password: "secret".to_owned(),
-        });
-
-        assert!(matches!(
-            config.start_authorization(),
-            Err(AuthStorageError::NotImplemented { .. })
-        ));
-    }
-
     #[tokio::test(flavor = "current_thread")]
     async fn deserializes_test_storage_config_from_toml() {
         let config: Box<dyn StorageConfig> = toml::from_str(
@@ -311,7 +290,10 @@ password = "secret"
             toml::to_string(&cloned).expect("serialize cloned storage config"),
             serialized
         );
-        let connection = cloned.connect().await.expect("connect test storage");
+        let session = cloned
+            .open_session("fixture".to_owned())
+            .expect("open session");
+        let connection = session.connect().await.expect("connect test storage");
         assert!(matches!(
             connection.read_dir(StoragePath::root()).await,
             Err(ReadDirError::NotSupported)
@@ -330,7 +312,10 @@ password = "secret"
         )
         .expect("deserialize storage config");
 
-        let connection = config.connect().await.expect("connect test storage");
+        let session = config
+            .open_session("fixture".to_owned())
+            .expect("open session");
+        let connection = session.connect().await.expect("connect test storage");
         assert!(matches!(
             connection.read_dir(StoragePath::root()).await,
             Err(ReadDirError::NotSupported)
