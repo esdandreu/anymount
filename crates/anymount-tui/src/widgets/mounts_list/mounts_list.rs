@@ -74,8 +74,6 @@ impl MountsListState {
         let Some(selected) = self.selected else {
             return;
         };
-        // Update offset if the selected item is not visible. Selected item must
-        // be visible.
         if selected >= self.offset.saturating_add(self.visible_count) {
             self.offset =
                 selected.saturating_sub(self.visible_count.saturating_sub(1));
@@ -210,19 +208,15 @@ mod tests {
         let mut state = MountsListState::default();
         let mount_count = 2;
 
-        // Select next when no item is selected should select the first item.
         assert_eq!(state.selected(), None);
         state.select_next(mount_count);
         assert_eq!(state.selected(), Some(0));
 
-        // Select next when an item is selected should increment the selected
-        // index.
         state.select_next(mount_count);
         assert_eq!(state.selected(), Some(1));
         state.select_next(mount_count);
         assert_eq!(state.selected(), Some(2));
 
-        // Select next when the selected index is the last item does nothing.
         state.select_next(mount_count);
         assert_eq!(state.selected(), Some(2));
     }
@@ -232,20 +226,15 @@ mod tests {
         let mut state = MountsListState::default();
         let mount_count = 2;
 
-        // Select previous when no item is selected should wrap around to the
-        // last item.
         assert_eq!(state.selected(), None);
         state.select_previous(mount_count);
         assert_eq!(state.selected(), Some(2));
 
-        // Select previous when an item is selected should decrement the
-        // selected index.
         state.select_previous(mount_count);
         assert_eq!(state.selected(), Some(1));
         state.select_previous(mount_count);
         assert_eq!(state.selected(), Some(0));
 
-        // Select previous when the selected index is 0 does nothing.
         state.select_previous(mount_count);
         assert_eq!(state.selected(), Some(0));
     }
@@ -329,7 +318,6 @@ mod tests {
         let mut state = MountsListState::default();
         let mut terminal = Terminal::new(TestBackend::new(80, 11))
             .expect("test terminal should be created");
-        // Select the first item.
         state.select_next(mounts.len());
         terminal
             .draw(|f| f.render_stateful_widget(&app, f.area(), &mut state))
@@ -346,7 +334,6 @@ mod tests {
         let mut state = MountsListState::default();
         let mut terminal = Terminal::new(TestBackend::new(80, 11))
             .expect("test terminal should be created");
-        // Select the last item.
         state.select_previous(mounts.len());
         terminal
             .draw(|f| f.render_stateful_widget(&app, f.area(), &mut state))
@@ -363,14 +350,11 @@ mod tests {
         let mut state = MountsListState::default();
         let mut terminal = Terminal::new(TestBackend::new(80, 11))
             .expect("test terminal should be created");
-        // Select the last item.
         state.select_previous(mounts.len());
         terminal
             .draw(|f| f.render_stateful_widget(&app, f.area(), &mut state))
             .expect("mount list should render");
         assert_eq!(state.offset, 1);
-        // Resize and re-draw, the number of visible items should decrease and
-        // the offset should be updated accordingly.
         terminal.backend_mut().resize(80, 8);
         terminal
             .draw(|f| f.render_stateful_widget(&app, f.area(), &mut state))
