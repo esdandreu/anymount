@@ -96,7 +96,6 @@ where
         key_event: KeyEvent,
     ) -> color_eyre::Result<()> {
         match key_event.code {
-            // Quit
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.events.send(AppEvent::Quit)
             }
@@ -105,15 +104,12 @@ where
             {
                 self.events.send(AppEvent::Quit)
             }
-            // Up
             KeyCode::Up | KeyCode::Char('j') => {
                 self.events.send(AppEvent::SelectPrevious)
             }
-            // Down
             KeyCode::Down | KeyCode::Char('k') => {
                 self.events.send(AppEvent::SelectNext)
             }
-            // Connect/Disconnect
             KeyCode::Right => self.events.send(AppEvent::Connect),
             KeyCode::Left => self.events.send(AppEvent::Disconnect),
             _ => {}

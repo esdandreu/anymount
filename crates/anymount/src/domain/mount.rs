@@ -6,7 +6,6 @@ use thiserror::Error;
 pub trait Mount {
     fn name(&self) -> &str;
 
-    // Should it be just Path?
     fn root(&self) -> &Path;
 
     fn is_connected(&self) -> bool;
