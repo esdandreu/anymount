@@ -1,6 +1,11 @@
 use std::{fmt, path::PathBuf, sync::Arc};
 
-use super::{DriverConfig, StorageConfig, StorageConnector};
+use super::{
+    AuthorizationError, CredentialUpdate, DriverConfig, StorageConfig,
+    StorageConnector,
+};
+use crate::drivers::oauth::RuntimeBounds;
+use async_trait::async_trait;
 
 pub struct Config {
     pub mount: MountConfig,
@@ -13,32 +18,51 @@ pub struct MountConfig {
     pub storage: Box<dyn StorageConfig>,
 }
 
-/// A saved configuration paired with its live storage connector.
+/// An opaque identity for one loaded record within its repository.
+///
+/// The repository assigns an ID to a connector session. Use the same shared
+/// ID for every host of that session, not a new ID for each connection.
+#[derive(Debug, Default)]
+pub struct ConfigRecordId {
+    _private: (),
+}
+
 pub struct LoadedConfig {
     pub config: Config,
     pub connector: Arc<dyn StorageConnector>,
+    pub record_id: Option<Arc<ConfigRecordId>>,
 }
 
 impl fmt::Debug for LoadedConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LoadedConfig").finish_non_exhaustive()
+        f.debug_struct("LoadedConfig")
+            .field("record_id", &self.record_id)
+            .finish_non_exhaustive()
     }
 }
 
 impl LoadedConfig {
     /// Creates a connector without modifying the saved configuration.
-    pub fn new(config: Config, identity: String) -> Self {
-        let connector = config.mount.storage.create_connector(identity);
-        Self { config, connector }
+    ///
+    /// # Errors
+    ///
+    /// Propagates provider setup errors from connector creation.
+    pub fn new(
+        config: Config,
+        identity: String,
+    ) -> Result<Self, AuthorizationError> {
+        let connector = config.mount.storage.create_connector(identity)?;
+        Ok(Self {
+            config,
+            connector,
+            record_id: None,
+        })
     }
 }
 
-pub trait ConfigRepository {
-    type Iter<'a>: Iterator<Item = LoadedConfig>
-    where
-        Self: 'a;
-
-    fn list(&self) -> Self::Iter<'_>;
+#[async_trait(?Send)]
+pub trait ConfigRepository: RuntimeBounds {
+    fn list(&self) -> Box<dyn Iterator<Item = LoadedConfig> + '_>;
 
     /// Finds a mount configuration by name in this repository.
     fn find(&self, name: &str) -> Result<LoadedConfig, ConfigNotFound> {
@@ -48,6 +72,21 @@ pub trait ConfigRepository {
                 name: name.to_owned(),
             })
     }
+
+    /// Persists only the provider-designated fields on the selected record.
+    ///
+    /// Concurrent saves for the same loaded record must be serialized, even
+    /// if an awaiting caller is canceled. An already committed generation
+    /// supersedes requests for the same or an older generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the record is unknown or the update fails to save.
+    async fn save_credentials(
+        &self,
+        record_id: &ConfigRecordId,
+        update: CredentialUpdate,
+    ) -> Result<(), SaveCredentialsError>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -55,3 +94,7 @@ pub trait ConfigRepository {
 pub struct ConfigNotFound {
     pub name: String,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("could not save the latest credential configuration")]
+pub struct SaveCredentialsError;

@@ -1,5 +1,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 pub mod config_dir;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod connected_mount;
 pub mod domain;
 pub mod drivers;
 pub mod mount;

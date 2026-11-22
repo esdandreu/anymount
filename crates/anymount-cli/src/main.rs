@@ -22,6 +22,9 @@ impl Termination for AnymountResult {
 async fn main() -> AnymountResult {
     match Cli::parse().run().await {
         Ok(()) => AnymountResult::Ok,
-        Err(_) => AnymountResult::Err,
+        Err(error) => {
+            eprintln!("{error}");
+            AnymountResult::Err
+        }
     }
 }

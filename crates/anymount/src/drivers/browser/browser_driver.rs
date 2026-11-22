@@ -13,9 +13,9 @@ pub use browser_driver_api::BrowserDriverApi;
 use browser_write_session::{BrowserWriteSession, WorkspaceWriteSession};
 
 use crate::domain::{
-    ConnectMountError, ConnectStorageError, DirEntry, DisconnectMountError,
-    Driver, DriverConfig, Mount, MountConfig, MountError, ReadDirError,
-    ReadFileAtError, StartWriteFileError, Storage, StorageConfig,
+    AuthorizationError, ConnectMountError, ConnectStorageError, DirEntry,
+    DisconnectMountError, Driver, DriverConfig, Mount, MountConfig, MountError,
+    ReadDirError, ReadFileAtError, StartWriteFileError, Storage, StorageConfig,
     StorageConnector, StoragePath, UnregisterMountError, WriteFileError,
     WriteFileSession,
 };
@@ -604,8 +604,11 @@ pub struct BrowserStorageConfig;
 
 #[typetag::serde(name = "browser")]
 impl StorageConfig for BrowserStorageConfig {
-    fn create_connector(&self, _identity: String) -> Arc<dyn StorageConnector> {
-        Arc::new(*self)
+    fn create_connector(
+        &self,
+        _identity: String,
+    ) -> Result<Arc<dyn StorageConnector>, AuthorizationError> {
+        Ok(Arc::new(*self))
     }
 }
 
@@ -770,7 +773,8 @@ mod tests {
                 storage,
             },
         };
-        let record = LoadedConfig::new(config, "workspace".to_owned());
+        let record = LoadedConfig::new(config, "workspace".to_owned())
+            .expect("open storage session");
         let mount = crate::mount(&record).await.expect("mount workspace");
 
         assert_eq!(mount.name(), "workspace");
@@ -799,13 +803,20 @@ mod tests {
         use crate::test_utils::mocks::EmptyStorageConfig;
 
         let driver = BrowserDriver::default();
-        let config = MountConfig {
-            name: "other".into(),
-            path: PathBuf::from("other"),
-            storage: Box::new(EmptyStorageConfig),
+        let config = Config {
+            driver: None,
+            mount: MountConfig {
+                name: "other".into(),
+                path: PathBuf::from("other"),
+                storage: Box::new(EmptyStorageConfig),
+            },
         };
-        let connector = config.storage.create_connector("other".to_owned());
-        let mount = driver.mount(&config, connector).await.expect("mount");
+        let record = LoadedConfig::new(config, "other".to_owned())
+            .expect("open storage session");
+        let mount = driver
+            .mount(&record.config.mount, record.connector)
+            .await
+            .expect("mount");
         assert!(mount.is_connected());
         mount.disconnect().await.expect("disconnect");
         assert!(!mount.is_connected());
@@ -858,6 +869,7 @@ mod tests {
             serde_json::from_str(r#"{"type":"browser"}"#).expect("config");
         let provider = config
             .create_connector("workspace".to_owned())
+            .expect("open storage session")
             .connect()
             .await
             .expect("select directory");

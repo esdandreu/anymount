@@ -62,19 +62,15 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::domain::{Config, LoadedConfig};
     use crate::test_utils::mocks::{EmptyStorageConfig, NoOpDriver, NoOpMount};
 
     #[tokio::test]
     async fn driver_and_mount_work_through_trait_objects() {
         let driver: Box<dyn Driver> = Box::new(NoOpDriver::default());
-        let config = MountConfig {
-            name: "local".to_owned(),
-            path: PathBuf::from("/"),
-            storage: Box::new(EmptyStorageConfig),
-        };
-        let connector = config.storage.create_connector("local".to_owned());
+        let config = record("local");
         let mount = driver
-            .mount(&config, connector)
+            .mount(&config.config.mount, config.connector)
             .await
             .expect("mount should succeed");
         mount.connect().await.expect("connect should succeed");
@@ -101,14 +97,9 @@ mod tests {
             .times(1)
             .returning(|_| Ok(()));
         let driver: Box<dyn Driver> = Box::new(mock_driver);
-        let config = MountConfig {
-            name: "test".to_owned(),
-            path: PathBuf::from("/tmp/test"),
-            storage: Box::new(EmptyStorageConfig),
-        };
-        let connector = config.storage.create_connector("test".to_owned());
+        let config = record("test");
         let mount = driver
-            .mount(&config, connector)
+            .mount(&config.config.mount, config.connector)
             .await
             .expect("mount should succeed");
         mount.connect().await.expect("mount should connect");
@@ -118,5 +109,20 @@ mod tests {
             .unmount(mount.name())
             .await
             .expect("unmount should succeed");
+    }
+
+    fn record(name: &str) -> LoadedConfig {
+        LoadedConfig::new(
+            Config {
+                mount: MountConfig {
+                    name: name.to_owned(),
+                    path: PathBuf::from("/"),
+                    storage: Box::new(EmptyStorageConfig),
+                },
+                driver: None,
+            },
+            name.to_owned(),
+        )
+        .expect("open storage session")
     }
 }

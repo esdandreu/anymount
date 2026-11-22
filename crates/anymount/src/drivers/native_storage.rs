@@ -125,6 +125,7 @@ impl AsyncWrite for ChunkWriter {
         Poll::Ready(Ok(()))
     }
 }
+
 impl NativeStorage {
     pub fn open(
         connector: Arc<dyn StorageConnector>,
@@ -335,6 +336,63 @@ mod tests {
     };
     use std::time::Duration;
     use std::time::SystemTime;
+
+    #[test]
+    fn native_connections_share_refresh() {
+        use crate::storages::onedrive::{OneDriveConfig, OneDriveConnector};
+        use crate::test_utils::fakeoauth::FakeOAuthRuntime;
+        let provider: OneDriveConfig =
+            serde_json::from_value(serde_json::json!({
+                "root": "/", "endpoint": "https://graph.microsoft.com/v1.0",
+                "access_token": "old-access", "refresh_token": "old-refresh",
+                "expires_at": 1
+            }))
+            .expect("provider config");
+        let protocol = FakeOAuthRuntime::new(1000);
+        protocol.push_json(
+            200,
+            serde_json::json!({
+                "access_token": "new-access", "refresh_token": "new-refresh",
+                "token_type": "Bearer", "expires_in": 3600
+            }),
+        );
+        protocol.push_json(200, serde_json::json!({"value": []}));
+        protocol.push_json(200, serde_json::json!({"value": []}));
+        let connector = OneDriveConnector::with_runtime(
+            provider,
+            "drive".to_owned(),
+            protocol.runtime(),
+        )
+        .expect("session");
+        let owner: Arc<dyn StorageConnector> = Arc::new(connector);
+        let first = NativeStorage::open(Arc::clone(&owner))
+            .expect("first native mount connection");
+        let second =
+            NativeStorage::open(owner).expect("second native mount connection");
+        assert_eq!(
+            first
+                .read_dir(StoragePath::root())
+                .expect("first read")
+                .count(),
+            0
+        );
+        drop(first);
+        assert_eq!(
+            second
+                .read_dir(StoragePath::root())
+                .expect("second read")
+                .count(),
+            0
+        );
+        assert_eq!(
+            protocol
+                .requests()
+                .iter()
+                .filter(|request| request.method == "POST")
+                .count(),
+            1
+        );
+    }
 
     #[test]
     fn preserves_disconnected_errors() {
