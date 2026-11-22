@@ -33,7 +33,7 @@ fn read_config_file(path: &Path) -> Result<ConfigFileContent, ReadConfigError> {
         .map_err(|source| ReadConfigError::CannotReadFile { source })?;
     format
         .deserialize(&contents)
-        .map_err(|message| ReadConfigError::CannotDeserialize { message })
+        .ok_or(ReadConfigError::CannotDeserialize)
 }
 
 fn open_config_file(path: &Path) -> Result<File, ReadConfigError> {
@@ -88,15 +88,11 @@ impl ConfigFormat {
         }
     }
 
-    fn deserialize(&self, contents: &str) -> Result<ConfigFileContent, String> {
+    fn deserialize(&self, contents: &str) -> Option<ConfigFileContent> {
         match self {
-            Self::Toml => {
-                toml::from_str(contents).map_err(|error| error.to_string())
-            }
-            Self::Json => serde_json::from_str(contents)
-                .map_err(|error| error.to_string()),
-            Self::Yaml => serde_yaml::from_str(contents)
-                .map_err(|error| error.to_string()),
+            Self::Toml => toml::from_str(contents).ok(),
+            Self::Json => serde_json::from_str(contents).ok(),
+            Self::Yaml => serde_yaml::from_str(contents).ok(),
         }
     }
 }
@@ -119,8 +115,8 @@ pub enum ReadConfigError {
         directory_owner: u32,
     },
 
-    #[error("failed to deserialize configuration: {message}")]
-    CannotDeserialize { message: String },
+    #[error("failed to deserialize configuration: invalid configuration")]
+    CannotDeserialize,
 }
 
 #[cfg(test)]
@@ -157,14 +153,21 @@ key = "value"
         )
         .expect("write config");
 
-        match read_config_file(&path) {
-            Err(ReadConfigError::CannotDeserialize { message }) => {
-                assert!(message.starts_with("TOML parse error"));
-                assert!(message.contains("unknown variant"));
-            }
-            Err(other) => panic!("expected deserialize error, got {other:?}"),
-            Ok(_) => panic!("expected failure"),
-        }
+        assert!(matches!(
+            read_config_file(&path),
+            Err(ReadConfigError::CannotDeserialize)
+        ));
+    }
+
+    #[test]
+    fn parse_errors_do_not_expose_configuration_secrets() {
+        let directory = TempDir::new().expect("temporary directory");
+        let path = directory.path().join("drive.toml");
+        std::fs::write(&path, "access_token = sentinel-secret")
+            .expect("write invalid configuration");
+        let error = read_config(&path).err().expect("invalid configuration");
+        assert!(matches!(error, ReadConfigError::CannotDeserialize));
+        assert!(!format!("{error:?} {error}").contains("sentinel-secret"));
     }
 
     #[cfg(unix)]
