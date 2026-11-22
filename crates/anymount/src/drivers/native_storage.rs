@@ -9,11 +9,25 @@ use std::{
     pin::Pin,
     sync::mpsc,
     task::{Context, Poll},
+    thread::JoinHandle,
 };
 
 pub struct NativeStorage {
     requests: tokio::sync::mpsc::Sender<Request>,
+    // Close the request channel before joining its worker.
+    _worker: StorageWorker,
 }
+
+struct StorageWorker(Option<JoinHandle<()>>);
+
+impl Drop for StorageWorker {
+    fn drop(&mut self) {
+        if let Some(worker) = self.0.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
 enum Request {
     ReadDir(
         StoragePath,
@@ -140,7 +154,7 @@ impl NativeStorage {
     {
         let (requests, mut receiver) = tokio::sync::mpsc::channel(16);
         let (started, ready) = mpsc::sync_channel(1);
-        std::thread::Builder::new()
+        let worker = std::thread::Builder::new()
             .name("anymount-storage".to_owned())
             .spawn(move || {
                 let runtime =
@@ -221,7 +235,10 @@ impl NativeStorage {
             kind: "native",
             message: error.to_string(),
         })??;
-        Ok(Self { requests })
+        Ok(Self {
+            requests,
+            _worker: StorageWorker(Some(worker)),
+        })
     }
     pub fn read_dir(
         &self,
@@ -342,7 +359,10 @@ mod tests {
                 let _ = reply.send(Err(ReadFileAtError::Disconnected));
             }
         });
-        let storage = NativeStorage { requests };
+        let storage = NativeStorage {
+            requests,
+            _worker: StorageWorker(None),
+        };
         let mut writer = Vec::new();
         assert!(matches!(
             storage.read_file_at(StoragePath::root(), &mut writer, 0..1),
@@ -366,7 +386,10 @@ mod tests {
                     let _ = reply.send(Err(error));
                 }
             });
-            let storage = NativeStorage { requests };
+            let storage = NativeStorage {
+                requests,
+                _worker: StorageWorker(None),
+            };
             let mut writer = Vec::new();
             let result =
                 storage.read_file_at(StoragePath::root(), &mut writer, 0..1);
@@ -389,7 +412,10 @@ mod tests {
                 let _ = reply.send(Ok(vec![1, 2, 3]));
             }
         });
-        let storage = NativeStorage { requests };
+        let storage = NativeStorage {
+            requests,
+            _worker: StorageWorker(None),
+        };
         let mut writer = io::Cursor::new(vec![9, 9]);
         writer.set_position(1);
         storage
@@ -410,7 +436,10 @@ mod tests {
                 let _ = reply.send(Ok(vec![1, 2, 3]));
             }
         });
-        let storage = NativeStorage { requests };
+        let storage = NativeStorage {
+            requests,
+            _worker: StorageWorker(None),
+        };
         let mut buffer = [0; 2];
         let mut writer = io::Cursor::new(buffer.as_mut_slice());
         let error = storage

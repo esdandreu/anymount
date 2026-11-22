@@ -4,11 +4,12 @@ use crate::domain::{
 use async_trait::async_trait;
 use parking_lot::Mutex;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub struct FuseMount {
     name: String,
     path: PathBuf,
-    session: Mutex<Option<fuser::BackgroundSession>>,
+    session: Arc<Mutex<Option<fuser::BackgroundSession>>>,
 }
 
 impl FuseMount {
@@ -20,7 +21,17 @@ impl FuseMount {
         Self {
             name,
             path,
-            session: Mutex::new(Some(session)),
+            session: Arc::new(Mutex::new(Some(session))),
+        }
+    }
+}
+
+impl Drop for FuseMount {
+    fn drop(&mut self) {
+        if let Some(session) = self.session.lock().take()
+            && let Err(error) = session.umount_and_join()
+        {
+            tracing::warn!(%error, "could not shut down FUSE session");
         }
     }
 }
@@ -52,12 +63,32 @@ impl Mount for FuseMount {
     }
 
     async fn disconnect(&self) -> Result<(), DisconnectMountError> {
-        self.session.lock().take();
+        let session = Arc::clone(&self.session);
+        let disconnect_error = |message| DisconnectMountError {
+            path: self.path.clone(),
+            message,
+        };
+        tokio::task::spawn_blocking(move || {
+            // Drop must wait for this join if the disconnect is canceled.
+            let mut guard = session.lock();
+            match guard.take() {
+                Some(session) => session.umount_and_join(),
+                None => Ok(()),
+            }
+        })
+        .await
+        .map_err(|error| disconnect_error(error.to_string()))?
+        .map_err(|error| disconnect_error(error.to_string()))?;
         Ok(())
     }
 
     async fn unregister(&self) -> Result<(), UnregisterMountError> {
-        self.session.lock().take();
+        self.disconnect()
+            .await
+            .map_err(|error| UnregisterMountError {
+                path: error.path,
+                message: error.message,
+            })?;
         std::fs::remove_dir(&self.path).map_err(|source| {
             UnregisterMountError {
                 path: self.path.clone(),
