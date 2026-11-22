@@ -250,7 +250,9 @@ impl From<std::io::Error> for ReadFileAtError {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::test_utils::mocks::{EmptyStorageConfig, NoOpStorage};
+    use crate::test_utils::{
+        mocks::NoOpStorage, test_storage_config::TestStorageConfig,
+    };
 
     #[tokio::test(flavor = "current_thread")]
     async fn writes_are_unsupported_by_default() {
@@ -259,24 +261,6 @@ mod test {
             storage.start_write_file(StoragePath::root()).await,
             Err(StartWriteFileError::NotSupported)
         ));
-    }
-
-    #[derive(Clone, serde::Serialize, serde::Deserialize)]
-    struct TestStorageConfig {
-        endpoint: Option<String>,
-        bucket: String,
-        username: String,
-        password: String,
-    }
-
-    #[typetag::serde(name = "test")]
-    impl StorageConfig for TestStorageConfig {
-        fn create_connector(
-            &self,
-            identity: String,
-        ) -> Arc<dyn StorageConnector> {
-            EmptyStorageConfig.create_connector(identity)
-        }
     }
 
     #[test]
