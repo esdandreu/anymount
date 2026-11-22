@@ -4,7 +4,9 @@ mod mount;
 mod started_authorization;
 mod storage;
 
-pub use config::{Config, ConfigNotFound, ConfigRepository, MountConfig};
+pub use config::{
+    Config, ConfigNotFound, ConfigRepository, LoadedConfig, MountConfig,
+};
 pub use driver::{DefaultDriverConfig, Driver, DriverConfig, MountError};
 pub use mount::{
     ConnectMountError, DisconnectMountError, Mount, UnregisterMountError,
@@ -13,6 +15,6 @@ pub use started_authorization::{AuthStorageError, StartedAuthorization};
 pub use storage::{
     ConnectStorageError, DirEntry, DirStream, InvalidStoragePath,
     MAX_READ_FILE_AT_RANGE_SIZE, ReadDirError, ReadFileAtError,
-    StartWriteFileError, Storage, StorageConfig, StoragePath, WriteFileError,
-    WriteFileSession,
+    StartWriteFileError, Storage, StorageConfig, StorageConnector, StoragePath,
+    WriteFileError, WriteFileSession,
 };

@@ -1,5 +1,6 @@
-use crate::domain::{Driver, DriverConfig, MountError};
-use crate::domain::{Mount, MountConfig};
+use crate::domain::{
+    Driver, DriverConfig, Mount, MountConfig, MountError, StorageConnector,
+};
 use crate::drivers::fuse::fuse_mount::FuseMount;
 use crate::drivers::fuse::{NoCacheFsCache, StorageFilesystem};
 use async_trait::async_trait;
@@ -31,12 +32,12 @@ impl Driver for FuseDriver {
     async fn mount(
         &self,
         config: &MountConfig,
+        connector: Arc<dyn StorageConnector>,
     ) -> Result<Box<dyn Mount>, MountError> {
         let name = config.name.clone();
         let path = config.path.clone();
-        let storage_config = config.storage.clone();
         let storage = tokio::task::spawn_blocking(move || {
-            super::native_storage::NativeStorage::open(storage_config)
+            super::native_storage::NativeStorage::open(connector)
         })
         .await
         .map_err(|source| MountError::CannotMountAtPath {

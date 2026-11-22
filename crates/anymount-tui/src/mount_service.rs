@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::app::MountConfig;
-use anymount::{ConfigRepository, domain::Mount, mount};
+use anymount::{ConfigRepository, LoadedConfig, domain::Mount, mount};
 use async_trait::async_trait;
 
 #[async_trait(?Send)]
@@ -11,45 +11,54 @@ pub trait MountService {
     async fn disconnect(&mut self, name: &str) -> color_eyre::Result<()>;
 }
 
-pub struct AnymountMountService<R> {
-    repository: R,
+pub struct AnymountMountService {
+    configurations: Vec<LoadedConfig>,
     active_mounts: HashMap<String, Box<dyn Mount>>,
 }
 
-impl<R> AnymountMountService<R> {
-    pub fn new(repository: R) -> Self {
+impl AnymountMountService {
+    pub fn new(repository: impl ConfigRepository) -> Self {
         Self {
-            repository,
+            configurations: repository.list().collect(),
             active_mounts: HashMap::new(),
         }
     }
 }
 
 #[async_trait(?Send)]
-impl<R> MountService for AnymountMountService<R>
-where
-    R: ConfigRepository,
-{
+impl MountService for AnymountMountService {
     async fn list(&self) -> color_eyre::Result<Vec<MountConfig>> {
-        let mut mounts = Vec::new();
-        for config in self.repository.list() {
-            let name = config.mount.name.clone();
-            let path = config.mount.path.clone();
-            let storage_type = config.mount.storage.kind().to_owned();
-            let mount = mount(config).await?;
-            mounts.push(MountConfig {
-                name,
-                path,
-                storage_type,
-                is_connected: mount.is_connected(),
-            });
-        }
-        Ok(mounts)
+        Ok(self
+            .configurations
+            .iter()
+            .map(|record| {
+                let config = &record.config.mount;
+                MountConfig {
+                    name: config.name.clone(),
+                    path: config.path.clone(),
+                    storage_type: config.storage.kind().to_owned(),
+                    is_connected: self
+                        .active_mounts
+                        .get(&config.name)
+                        .is_some_and(|mount| mount.is_connected()),
+                }
+            })
+            .collect())
     }
 
     async fn connect(&mut self, name: &str) -> color_eyre::Result<()> {
-        let config = self.repository.find(name)?;
-        let mount = mount(config).await?;
+        if self.active_mounts.contains_key(name) {
+            return Ok(());
+        }
+        let record = self
+            .configurations
+            .iter()
+            .find(|record| record.config.mount.name == name)
+            .ok_or_else(|| anymount::domain::ConfigNotFound {
+                name: name.to_owned(),
+            })?;
+        let mount = mount(record).await?;
+        mount.connect().await?;
         self.active_mounts.insert(name.to_owned(), mount);
         Ok(())
     }
@@ -68,7 +77,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use anymount::{Config, ConfigRepository};
+    use anymount::{ConfigRepository, LoadedConfig};
 
     use super::{AnymountMountService, MountService};
 
@@ -76,7 +85,7 @@ mod tests {
 
     // private test util: Exercises an empty configuration repository.
     impl ConfigRepository for EmptyConfigRepository {
-        type Iter<'a> = std::iter::Empty<Config>;
+        type Iter<'a> = std::iter::Empty<LoadedConfig>;
 
         fn list(&self) -> Self::Iter<'_> {
             std::iter::empty()

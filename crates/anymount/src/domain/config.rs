@@ -1,6 +1,6 @@
-use std::path::PathBuf;
+use std::{fmt, path::PathBuf, sync::Arc};
 
-use crate::domain::{driver::DriverConfig, storage::StorageConfig};
+use super::{DriverConfig, StorageConfig, StorageConnector};
 
 pub struct Config {
     pub mount: MountConfig,
@@ -13,18 +13,37 @@ pub struct MountConfig {
     pub storage: Box<dyn StorageConfig>,
 }
 
+/// A saved configuration paired with its live storage connector.
+pub struct LoadedConfig {
+    pub config: Config,
+    pub connector: Arc<dyn StorageConnector>,
+}
+
+impl fmt::Debug for LoadedConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LoadedConfig").finish_non_exhaustive()
+    }
+}
+
+impl LoadedConfig {
+    /// Creates a connector without modifying the saved configuration.
+    pub fn new(config: Config, identity: String) -> Self {
+        let connector = config.mount.storage.create_connector(identity);
+        Self { config, connector }
+    }
+}
+
 pub trait ConfigRepository {
-    type Iter<'a>: Iterator<Item = Config>
+    type Iter<'a>: Iterator<Item = LoadedConfig>
     where
         Self: 'a;
 
     fn list(&self) -> Self::Iter<'_>;
 
     /// Finds a mount configuration by name in this repository.
-    fn find(&self, name: &str) -> Result<Config, ConfigNotFound> {
+    fn find(&self, name: &str) -> Result<LoadedConfig, ConfigNotFound> {
         self.list()
-            .find(|config| config.mount.name == name)
-            .map(|config| config)
+            .find(|record| record.config.mount.name == name)
             .ok_or_else(|| ConfigNotFound {
                 name: name.to_owned(),
             })

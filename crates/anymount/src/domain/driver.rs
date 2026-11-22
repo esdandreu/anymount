@@ -1,9 +1,9 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
 
 use super::storage::ConnectStorageError;
-use super::{Mount, MountConfig};
+use super::{Mount, MountConfig, StorageConnector};
 
 #[typetag::serde(tag = "type")]
 pub trait DriverConfig: Send + Sync {
@@ -22,6 +22,7 @@ pub trait Driver {
     async fn mount(
         &self,
         config: &MountConfig,
+        connector: Arc<dyn StorageConnector>,
     ) -> Result<Box<dyn Mount>, MountError>;
 
     /// Unregisters a mount. No-op if the mount is not registered.
@@ -71,7 +72,11 @@ mod tests {
             path: PathBuf::from("/"),
             storage: Box::new(EmptyStorageConfig),
         };
-        let mount = driver.mount(&config).await.expect("mount should succeed");
+        let connector = config.storage.create_connector("local".to_owned());
+        let mount = driver
+            .mount(&config, connector)
+            .await
+            .expect("mount should succeed");
         mount.connect().await.expect("connect should succeed");
         driver
             .unmount(mount.name())
@@ -84,9 +89,9 @@ mod tests {
         let mut mock_driver = MockDriver::new();
         mock_driver
             .expect_mount()
-            .withf(|config| config.name == "test")
+            .withf(|config, _| config.name == "test")
             .times(1)
-            .returning(|_| {
+            .returning(|_, _| {
                 let mount: Box<dyn Mount> = Box::new(NoOpMount::default());
                 Ok(mount)
             });
@@ -101,7 +106,11 @@ mod tests {
             path: PathBuf::from("/tmp/test"),
             storage: Box::new(EmptyStorageConfig),
         };
-        let mount = driver.mount(&config).await.expect("mount should succeed");
+        let connector = config.storage.create_connector("test".to_owned());
+        let mount = driver
+            .mount(&config, connector)
+            .await
+            .expect("mount should succeed");
         mount.connect().await.expect("mount should connect");
         mount.disconnect().await.expect("mount should disconnect");
         mount.unregister().await.expect("mount should unregister");
