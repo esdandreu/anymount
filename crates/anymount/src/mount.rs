@@ -1,9 +1,21 @@
-use crate::domain::{Config, Mount};
+use std::sync::Arc;
+
+use crate::domain::{LoadedConfig, Mount};
 use crate::drivers::{NoDefaultDriver, init_driver};
 
-pub async fn mount(config: Config) -> Result<Box<dyn Mount>, MountError> {
-    let driver = init_driver(config.driver.as_deref())?;
-    driver.mount(&config.mount).await.map_err(MountError::from)
+/// Mounts using the record's existing connector.
+///
+/// # Errors
+///
+/// Propagates driver selection and mount errors.
+pub async fn mount(
+    record: &LoadedConfig,
+) -> Result<Box<dyn Mount>, MountError> {
+    let driver = init_driver(record.config.driver.as_deref())?;
+    driver
+        .mount(&record.config.mount, Arc::clone(&record.connector))
+        .await
+        .map_err(MountError::from)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -19,7 +31,7 @@ pub enum MountError {
 mod tests {
     use std::path::PathBuf;
 
-    use crate::domain::{Config, MountConfig};
+    use crate::domain::{Config, LoadedConfig, MountConfig};
     use crate::test_utils::mocks::{EmptyStorageConfig, NoOpDriverConfig};
 
     #[tokio::test]
@@ -33,7 +45,8 @@ mod tests {
             },
         };
 
-        let mount = super::mount(config).await.expect("mount should succeed");
+        let record = LoadedConfig::new(config, "workspace".to_owned());
+        let mount = super::mount(&record).await.expect("mount should succeed");
 
         assert_eq!(mount.name(), "no-op");
     }

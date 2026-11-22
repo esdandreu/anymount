@@ -1,13 +1,13 @@
 use crate::domain::{
     ConnectStorageError, DirEntry, ReadDirError, ReadFileAtError,
-    StorageConfig, StoragePath,
+    StorageConnector, StoragePath,
 };
 use futures::{StreamExt, io::AsyncWrite};
 use std::{
     io::{self, Write},
     ops::Range,
     pin::Pin,
-    sync::mpsc,
+    sync::{Arc, mpsc},
     task::{Context, Poll},
     thread::JoinHandle,
 };
@@ -127,9 +127,9 @@ impl AsyncWrite for ChunkWriter {
 }
 impl NativeStorage {
     pub fn open(
-        config: Box<dyn StorageConfig>,
+        connector: Arc<dyn StorageConnector>,
     ) -> Result<Self, ConnectStorageError> {
-        Self::start(move |runtime| runtime.block_on(config.connect()))
+        Self::start(move |runtime| runtime.block_on(connector.connect()))
     }
 
     #[cfg(test)]

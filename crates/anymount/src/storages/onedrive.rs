@@ -6,8 +6,10 @@ mod token_source;
 use authorization::OneDriveAuthorization;
 use chrono::{DateTime, Utc};
 use futures::io::{AsyncWrite, AsyncWriteExt};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use token_source::{OneDriveTokenSource, jwt_expires_at};
@@ -15,7 +17,7 @@ use token_source::{OneDriveTokenSource, jwt_expires_at};
 use crate::domain::{AuthStorageError, StartedAuthorization};
 use crate::domain::{
     ConnectStorageError, DirEntry, ReadDirError, ReadFileAtError, Storage,
-    StorageConfig, StoragePath,
+    StorageConfig, StorageConnector, StoragePath,
 };
 
 /// Default buffer (seconds) before token expiry to trigger refresh when not set in config.
@@ -245,8 +247,31 @@ impl OneDriveConfig {
     /// Returns `NotAuthenticated` when credentials are absent. Returns a
     /// connection failure when the configured credentials are unusable.
     pub fn connect(
-        self,
+        mut self,
     ) -> std::result::Result<OneDriveStorage, ConnectStorageError> {
+        self.validate_credentials()?;
+        let endpoint_len = self.endpoint.trim_end_matches('/').len();
+        self.endpoint.truncate(endpoint_len);
+        let token_source = OneDriveTokenSource::new(
+            self.refresh_token,
+            self.access_token,
+            self.client_id,
+            self.token_expiry_buffer_secs,
+        )
+        .map_err(|source| -> ConnectStorageError {
+            ConnectError::Token { source }.into()
+        })?;
+        Ok(OneDriveStorage {
+            root: self.root,
+            endpoint: self.endpoint,
+            token: Arc::new(token_source),
+            fetch: Arc::new(UreqHttpGet::new()),
+        })
+    }
+
+    fn validate_credentials(
+        &self,
+    ) -> std::result::Result<(), ConnectStorageError> {
         let has_access = self.access_token.is_some();
         let has_refresh = self.refresh_token.is_some();
         if !has_access && !has_refresh {
@@ -277,33 +302,14 @@ impl OneDriveConfig {
                 }
             }
         }
-        let endpoint = self.endpoint.trim_end_matches('/').to_string();
-        let token_source = OneDriveTokenSource::new(
-            self.refresh_token.clone(),
-            self.access_token.clone(),
-            self.client_id.clone(),
-            self.token_expiry_buffer_secs,
-        )
-        .map_err(|source| -> ConnectStorageError {
-            ConnectError::Token { source }.into()
-        })?;
-        Ok(OneDriveStorage {
-            root: self.root,
-            endpoint,
-            token: std::sync::Arc::new(token_source),
-            fetch: std::sync::Arc::new(UreqHttpGet::new()),
-        })
+        Ok(())
     }
 }
 
 #[typetag::serde(name = "onedrive")]
-#[async_trait::async_trait(?Send)]
 impl StorageConfig for OneDriveConfig {
-    async fn connect(
-        &self,
-    ) -> std::result::Result<Box<dyn Storage>, ConnectStorageError> {
-        OneDriveConfig::connect(self.clone())
-            .map(|storage| Box::new(storage) as Box<dyn Storage>)
+    fn create_connector(&self, _identity: String) -> Arc<dyn StorageConnector> {
+        Arc::new(OneDriveConnector::new(self.clone()))
     }
 
     fn start_authorization(
@@ -313,6 +319,40 @@ impl StorageConfig for OneDriveConfig {
         OneDriveAuthorization::start(*self).map(|authorization| {
             Box::new(authorization) as Box<dyn StartedAuthorization>
         })
+    }
+}
+
+struct OneDriveConnector {
+    config: OneDriveConfig,
+    storage: Mutex<Option<OneDriveStorage>>,
+}
+
+impl OneDriveConnector {
+    fn new(config: OneDriveConfig) -> Self {
+        Self {
+            config,
+            storage: Mutex::new(None),
+        }
+    }
+
+    fn open(
+        &self,
+    ) -> std::result::Result<OneDriveStorage, ConnectStorageError> {
+        let mut storage = self.storage.lock();
+        if let Some(storage) = storage.as_ref() {
+            self.config.validate_credentials()?;
+            return Ok(storage.clone());
+        }
+        Ok(storage.insert(self.config.clone().connect()?).clone())
+    }
+}
+
+#[async_trait::async_trait(?Send)]
+impl StorageConnector for OneDriveConnector {
+    async fn connect(
+        &self,
+    ) -> std::result::Result<Box<dyn Storage>, ConnectStorageError> {
+        Ok(Box::new(self.open()?))
     }
 }
 
@@ -672,8 +712,9 @@ endpoint = "https://graph.microsoft.com/v1.0"
         )
         .expect("deserialize OneDrive config");
 
+        let connector = config.create_connector("workspace".to_owned());
         assert!(matches!(
-            config.connect().await,
+            connector.connect().await,
             Err(ConnectStorageError::NotAuthenticated { kind: "onedrive" })
         ));
     }
@@ -739,6 +780,28 @@ endpoint = "https://graph.microsoft.com/v1.0"
             panic!("expected config to fail")
         };
         assert!(e.to_string().contains("expired"));
+    }
+
+    #[test]
+    fn connector_lazily_shares_token_source_only_with_its_own_handles() {
+        let config = OneDriveConfig {
+            root: PathBuf::from("/"),
+            endpoint: "https://graph.microsoft.com/v1.0".into(),
+            access_token: None,
+            refresh_token: Some("rt".into()),
+            client_id: None,
+            token_expiry_buffer_secs: None,
+        };
+        let connector = OneDriveConnector::new(config.clone());
+        let other_connector = OneDriveConnector::new(config);
+        assert!(connector.storage.lock().is_none());
+
+        let first = connector.open().expect("open first storage handle");
+        let second = connector.open().expect("open second storage handle");
+        let other = other_connector.open().expect("open independent handle");
+
+        assert!(Arc::ptr_eq(&first.token, &second.token));
+        assert!(!Arc::ptr_eq(&first.token, &other.token));
     }
 
     #[test]

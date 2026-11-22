@@ -5,7 +5,7 @@ pub use path::{InvalidStoragePath, StoragePath};
 #[doc(inline)]
 pub use write_file_session::{WriteFileError, WriteFileSession};
 
-use std::{ops::Range, pin::Pin, time::SystemTime};
+use std::{ops::Range, pin::Pin, sync::Arc, time::SystemTime};
 
 use futures::{Stream, io::AsyncWrite};
 
@@ -14,9 +14,12 @@ use async_trait::async_trait;
 use super::started_authorization::{AuthStorageError, StartedAuthorization};
 
 #[typetag::serde(tag = "type")]
-#[async_trait(?Send)]
 pub trait StorageConfig: dyn_clone::DynClone + Send + Sync {
-    async fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError>;
+    /// Creates a connector for this saved configuration.
+    ///
+    /// The caller supplies the record's stable `identity`. Clone the returned
+    /// handle rather than creating another connector to share live state.
+    fn create_connector(&self, identity: String) -> Arc<dyn StorageConnector>;
 
     fn kind(&self) -> &'static str {
         std::any::type_name::<Self>()
@@ -35,6 +38,17 @@ pub trait StorageConfig: dyn_clone::DynClone + Send + Sync {
 }
 
 dyn_clone::clone_trait_object!(StorageConfig);
+
+/// Opens storage handles that share a record's live provider state.
+#[async_trait(?Send)]
+pub trait StorageConnector: Send + Sync {
+    /// Opens a storage connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a provider error if storage cannot be opened.
+    async fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError>;
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConnectStorageError {
@@ -236,7 +250,7 @@ impl From<std::io::Error> for ReadFileAtError {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::test_utils::mocks::NoOpStorage;
+    use crate::test_utils::mocks::{EmptyStorageConfig, NoOpStorage};
 
     #[tokio::test(flavor = "current_thread")]
     async fn writes_are_unsupported_by_default() {
@@ -255,20 +269,13 @@ mod test {
         password: String,
     }
 
-    struct TestStorageConnection {}
-
-    // private test util: Tests the storage configuration contract.
-    #[async_trait(?Send)]
-    impl Storage for TestStorageConnection {}
-
-    // private test util: Tests storage defaults and deserialization.
     #[typetag::serde(name = "test")]
-    #[async_trait(?Send)]
     impl StorageConfig for TestStorageConfig {
-        async fn connect(
+        fn create_connector(
             &self,
-        ) -> Result<Box<dyn Storage>, ConnectStorageError> {
-            Ok(Box::new(TestStorageConnection {}))
+            identity: String,
+        ) -> Arc<dyn StorageConnector> {
+            EmptyStorageConfig.create_connector(identity)
         }
     }
 
@@ -310,7 +317,9 @@ password = "secret"
             toml::to_string(&cloned).expect("serialize cloned storage config"),
             serialized
         );
-        let connection = cloned.connect().await.expect("connect test storage");
+        let connector = cloned.create_connector("fixture".to_owned());
+        let connection =
+            connector.connect().await.expect("connect test storage");
         assert!(matches!(
             connection.read_dir(StoragePath::root()).await,
             Err(ReadDirError::NotSupported)
@@ -329,7 +338,9 @@ password = "secret"
         )
         .expect("deserialize storage config");
 
-        let connection = config.connect().await.expect("connect test storage");
+        let connector = config.create_connector("fixture".to_owned());
+        let connection =
+            connector.connect().await.expect("connect test storage");
         assert!(matches!(
             connection.read_dir(StoragePath::root()).await,
             Err(ReadDirError::NotSupported)

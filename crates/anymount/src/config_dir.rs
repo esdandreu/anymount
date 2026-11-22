@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::domain::{Config, ConfigRepository};
+use crate::domain::{ConfigRepository, LoadedConfig};
 
 mod read_config;
 
@@ -61,13 +61,17 @@ pub enum ConfigFileIter {
 }
 
 impl Iterator for ConfigFileIter {
-    type Item = Config;
+    type Item = LoadedConfig;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
             Self::Entries(entries) => entries.find_map(|entry| match entry {
                 Ok(entry) => match read_config(&entry.path()) {
-                    Ok(config) => Some(config),
+                    Ok(config) => {
+                        let identity =
+                            entry.path().to_string_lossy().into_owned();
+                        Some(LoadedConfig::new(config, identity))
+                    }
                     Err(ReadConfigError::NotAConfigFile) => None,
                     Err(error) => {
                         tracing::warn!(
@@ -107,9 +111,9 @@ error_message = "toml test"
         .expect("write toml config");
         let config_dir = ConfigDir::new(dir.path().to_path_buf());
         let mounts = config_dir.list().collect::<Vec<_>>();
-        let config = mounts.into_iter().next().expect("read config");
-        assert_eq!(config.mount.name, "demo");
-        match config.mount.storage.connect().await {
+        let record = mounts.into_iter().next().expect("read config");
+        assert_eq!(record.config.mount.name, "demo");
+        match record.connector.connect().await {
             Ok(_) => panic!("should not connect"),
             Err(ConnectStorageError::Failed { message, .. }) => {
                 assert_eq!(message, "toml test");
@@ -135,9 +139,9 @@ error_message = "toml test"
 
         let config_dir = ConfigDir::new(dir.path().to_path_buf());
         let mounts = config_dir.list().collect::<Vec<_>>();
-        let config = mounts.into_iter().next().expect("read config");
-        assert_eq!(config.mount.name, "demo");
-        match config.mount.storage.connect().await {
+        let record = mounts.into_iter().next().expect("read config");
+        assert_eq!(record.config.mount.name, "demo");
+        match record.connector.connect().await {
             Ok(_) => panic!("should not connect"),
             Err(ConnectStorageError::Failed { message, .. }) => {
                 assert_eq!(message, "json test");
@@ -162,9 +166,9 @@ storage:
 
         let config_dir = ConfigDir::new(dir.path().to_path_buf());
         let mounts = config_dir.list().collect::<Vec<_>>();
-        let config = mounts.into_iter().next().expect("read config");
-        assert_eq!(config.mount.name, "demo");
-        match config.mount.storage.connect().await {
+        let record = mounts.into_iter().next().expect("read config");
+        assert_eq!(record.config.mount.name, "demo");
+        match record.connector.connect().await {
             Ok(_) => panic!("should not connect"),
             Err(ConnectStorageError::Failed { message, .. }) => {
                 assert_eq!(message, "yaml test");
