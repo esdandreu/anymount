@@ -7,48 +7,45 @@ pub use write_file_session::{WriteFileError, WriteFileSession};
 
 use std::{ops::Range, pin::Pin, sync::Arc, time::SystemTime};
 
+use async_trait::async_trait;
 use futures::{Stream, io::AsyncWrite};
 
-use async_trait::async_trait;
-
-use super::started_authorization::{AuthStorageError, StartedAuthorization};
+use super::{Authorization, AuthorizationError};
+use crate::drivers::oauth::RuntimeBounds;
 
 #[typetag::serde(tag = "type")]
 pub trait StorageConfig: dyn_clone::DynClone + Send + Sync {
-    /// Creates a connector for this saved configuration.
+    /// Creates a connector with independent live state for a saved record.
     ///
-    /// The caller supplies the record's stable `identity`. Clone the returned
-    /// handle rather than creating another connector to share live state.
-    fn create_connector(&self, identity: String) -> Arc<dyn StorageConnector>;
+    /// Use the same host-selected `identity` when resuming authorization.
+    /// Clone the handle rather than creating another connector to share state.
+    ///
+    /// # Errors
+    ///
+    /// Returns a setup error when the provider cannot use this configuration.
+    fn create_connector(
+        &self,
+        identity: String,
+    ) -> Result<Arc<dyn StorageConnector>, AuthorizationError>;
 
     fn kind(&self) -> &'static str {
         std::any::type_name::<Self>()
     }
+}
 
-    /// Starts authorization for this storage configuration.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when authorization cannot be started.
-    fn start_authorization(
-        self: Box<Self>,
-    ) -> Result<Box<dyn StartedAuthorization>, AuthStorageError> {
-        Err(AuthStorageError::NotImplemented { kind: self.kind() })
+/// Creates storage handles that share one record's live provider state.
+#[async_trait(?Send)]
+pub trait StorageConnector: RuntimeBounds {
+    /// Exposes sign-in before a connection exists, if the provider supports it.
+    fn authorization(&self) -> Option<&dyn Authorization> {
+        None
     }
+
+    /// Connects without starting sign-in or saving configuration.
+    async fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError>;
 }
 
 dyn_clone::clone_trait_object!(StorageConfig);
-
-/// Opens storage handles that share a record's live provider state.
-#[async_trait(?Send)]
-pub trait StorageConnector: Send + Sync {
-    /// Opens a storage connection.
-    ///
-    /// # Errors
-    ///
-    /// Returns a provider error if storage cannot be opened.
-    async fn connect(&self) -> Result<Box<dyn Storage>, ConnectStorageError>;
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConnectStorageError {
@@ -141,6 +138,8 @@ pub trait DirEntry: Send + Sync {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReadDirError {
+    #[error(transparent)]
+    Authorization(#[from] AuthorizationError),
     #[error("invalid storage path")]
     InvalidPath(#[from] InvalidStoragePath),
 
@@ -181,6 +180,8 @@ impl From<std::io::Error> for ReadDirError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReadFileAtError {
+    #[error(transparent)]
+    Authorization(#[from] AuthorizationError),
     #[error("invalid storage path")]
     InvalidPath(#[from] InvalidStoragePath),
 
@@ -250,9 +251,7 @@ impl From<std::io::Error> for ReadFileAtError {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::test_utils::{
-        mocks::NoOpStorage, test_storage_config::TestStorageConfig,
-    };
+    use crate::test_utils::mocks::NoOpStorage;
 
     #[tokio::test(flavor = "current_thread")]
     async fn writes_are_unsupported_by_default() {
@@ -260,21 +259,6 @@ mod test {
         assert!(matches!(
             storage.start_write_file(StoragePath::root()).await,
             Err(StartWriteFileError::NotSupported)
-        ));
-    }
-
-    #[test]
-    fn authorization_is_not_implemented_by_default() {
-        let config = Box::new(TestStorageConfig {
-            endpoint: None,
-            bucket: "documents".to_owned(),
-            username: "user".to_owned(),
-            password: "secret".to_owned(),
-        });
-
-        assert!(matches!(
-            config.start_authorization(),
-            Err(AuthStorageError::NotImplemented { .. })
         ));
     }
 
@@ -301,9 +285,10 @@ password = "secret"
             toml::to_string(&cloned).expect("serialize cloned storage config"),
             serialized
         );
-        let connector = cloned.create_connector("fixture".to_owned());
-        let connection =
-            connector.connect().await.expect("connect test storage");
+        let session = cloned
+            .create_connector("fixture".to_owned())
+            .expect("open session");
+        let connection = session.connect().await.expect("connect test storage");
         assert!(matches!(
             connection.read_dir(StoragePath::root()).await,
             Err(ReadDirError::NotSupported)
@@ -322,9 +307,10 @@ password = "secret"
         )
         .expect("deserialize storage config");
 
-        let connector = config.create_connector("fixture".to_owned());
-        let connection =
-            connector.connect().await.expect("connect test storage");
+        let session = config
+            .create_connector("fixture".to_owned())
+            .expect("open session");
+        let connection = session.connect().await.expect("connect test storage");
         assert!(matches!(
             connection.read_dir(StoragePath::root()).await,
             Err(ReadDirError::NotSupported)

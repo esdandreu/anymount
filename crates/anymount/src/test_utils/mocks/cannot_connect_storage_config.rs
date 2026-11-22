@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use crate::domain::{
-    ConnectStorageError, Storage, StorageConfig, StorageConnector,
+    AuthorizationError, ConnectStorageError, Storage, StorageConfig,
+    StorageConnector,
 };
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -11,8 +12,11 @@ pub struct CannotConnectStorageConfig {
 
 #[typetag::serde(name = "cannot-connect")]
 impl StorageConfig for CannotConnectStorageConfig {
-    fn create_connector(&self, _identity: String) -> Arc<dyn StorageConnector> {
-        Arc::new(self.clone())
+    fn create_connector(
+        &self,
+        _identity: String,
+    ) -> Result<Arc<dyn StorageConnector>, AuthorizationError> {
+        Ok(Arc::new(self.clone()))
     }
 }
 

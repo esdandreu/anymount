@@ -42,4 +42,14 @@ impl MountService for MockMountService {
         }
         Ok(())
     }
+
+    async fn shutdown(&mut self) -> color_eyre::Result<()> {
+        for mount in &mut self.mounts {
+            if mount.is_connected {
+                self.disconnected.push(mount.name.clone());
+                mount.is_connected = false;
+            }
+        }
+        Ok(())
+    }
 }

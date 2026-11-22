@@ -31,7 +31,8 @@ pub enum MountError {
 mod tests {
     use std::path::PathBuf;
 
-    use crate::domain::{Config, LoadedConfig, MountConfig};
+    use super::LoadedConfig;
+    use crate::domain::{Config, MountConfig};
     use crate::test_utils::mocks::{EmptyStorageConfig, NoOpDriverConfig};
 
     #[tokio::test]
@@ -45,7 +46,8 @@ mod tests {
             },
         };
 
-        let record = LoadedConfig::new(config, "workspace".to_owned());
+        let record = LoadedConfig::new(config, "workspace".to_owned())
+            .expect("open storage session");
         let mount = super::mount(&record).await.expect("mount should succeed");
 
         assert_eq!(mount.name(), "no-op");

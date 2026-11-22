@@ -1,5 +1,6 @@
 mod get_default_driver_config;
 mod init_driver;
+pub mod oauth;
 
 pub use get_default_driver_config::{
     NoDefaultDriver, get_default_driver_config,

@@ -13,26 +13,29 @@ serde = { version = "1.0", features = ["derive"] }
 inventory = "0.3"
 typetag = "0.2.22"
 thiserror = "1.0"
+oauth2 = { version = "5", default-features = false }
+url = "2"
+serde_json = "1.0"
+chrono = { version = "0.4", default-features = false, features = ["std", "serde"] }
+urlencoding = "2.1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
+gloo-timers = { version = "0.3", features = ["futures"] }
+getrandom = { version = "0.2", features = ["js"] }
+web-sys = { version = "0.3", features = ["Window", "Request", "RequestInit", "RequestMode", "RequestRedirect", "RequestCredentials", "Headers", "Response", "ReadableStream", "ReadableStreamDefaultReader"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 cap-std = "4.0.2"
 bytes = "1.9"
 parking_lot = "0.12"
-oauth2 = { version = "5", default-features = false, features = ["ureq"] }
-ureq = "2.11"
-url = "2"
-serde_json = "1.0"
 serde_yaml = "0.9"
 toml = "0.8"
 dirs = "6"
-chrono = "0.4"
-jsonwebtoken = "10"
-urlencoding = "2.1"
+tempfile = "3"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"

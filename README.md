@@ -30,28 +30,26 @@ dev tools, environments and tasks.
 
 ### Commands
 
-`connect` ensures configured named drivers are running in the background.
-It is non-blocking.
+`connect NAME` mounts a named configuration in the foreground. `connect --all`
+mounts all configured records. Local storage needs no OAuth authorization.
 
-`connect-sync` runs one provider process and blocks for its lifetime. It
-supports either a configured named driver or a temporary `temp` driver.
+OneDrive interactive native authorization uses a public-client device flow and
+saves credentials into the selected configuration, preserving its format and
+unrelated mount and driver fields. The host owns the Microsoft registration:
+enable public-client device authorization for the supported account types.
+The legacy built-in client ID remains the default, but its current registration
+and live consent have not been verified.
 
-Build and run the application:
+Authorize a named record in an explicit configuration directory:
 
 ```bash
-mise run anymount -- connect --all
+mise run anymount -- --config-dir /path/to/config auth demo
 ```
 
-Run one configured driver in the foreground:
+Connect that record:
 
 ```bash
-mise run anymount -- connect-sync demo
-```
-
-Ephemeral driver (mount path is the first argument after `temp`):
-
-```bash
-mise run anymount -- connect-sync temp /mnt/demo local /path/to/data
+mise run anymount -- --config-dir /path/to/config connect demo
 ```
 
 Build the release binary (`target/release/anymount-cli`):
@@ -112,8 +110,47 @@ external details around those layers.
 
 Storage implementations return directory entries through the domain `DirEntry`
 trait. Each storage implementation defines its own entry type.
-Storage configurations implement `Clone`; boxed configurations can be cloned
-when a driver needs to move one into an owned worker.
+`StorageConfig` holds saved data. `create_connector` creates an independent
+`StorageConnector`; share that handle across connections to share credentials.
+`ConfigDir` returns a `LoadedConfig` with the saved configuration and its live
+connector. Each loaded file has an ID scoped to its repository.
+`Driver::mount` takes mount data and the connector, not the repository.
+
+OAuth interaction is asynchronous and host-owned through `domain::Authorization`.
+OneDrive uses one portable implementation for native and browser requests.
+Storage reads never open a browser or save configuration. The native CLI and
+TUI use `connected_mount::ConnectedMount` to watch credential generations and save
+through `ConfigRepository::save_credentials`. Disconnect, unregister, and host
+exit stop native requests before draining pending saves. Only provider-designated
+paths change, leaving unknown fields and siblings untouched.
+Usable in-memory credentials do not wait for saves. `credential_snapshot`
+returns the newest changed credentials without consuming them. Hosts can retry
+failed saves without refreshing again. The repository serializes in-flight
+writes, even if the original caller stops waiting.
+
+Access and refresh tokens remain secret-bearing fields in local configuration.
+Copying a configuration copies its credentials; sharing or exporting it can
+expose access to the account.
+Expiry and scopes come from OAuth responses, not access-token JWT decoding.
+Tokens with unknown expiry remain usable until provider rejection. Access-only
+tokens with a known expiry remain usable until that expiry or rejection.
+Fresh sign-in replaces the whole grant; an omitted refresh token is preserved
+only during renewal of that same grant. Binding metadata prevents silently
+reusing a grant after changing its client or resource. Supported resource
+endpoints are Microsoft Graph `https://graph.microsoft.com/v1.0` and `/beta`;
+arbitrary bearer destinations and other cloud authorities are unsupported.
+
+Hosts must prevent concurrent owners of the same saved record. Failed renewal
+results remain shared; `Authorization::retry_renewal` explicitly permits another
+exchange only after a temporary failure. Requests have a 60-second deadline.
+Ambiguous exchanges are never replayed automatically. A restart can require
+fresh sign-in when rotated credentials were not saved.
+
+OneDrive downloads obtain the provider's preauthenticated metadata URL
+instead of following authenticated `/content` redirects. These URLs are secrets;
+download requests never carry bearer credentials. Authorization, configuration,
+and error debug output redact tokens, codes, callback queries, and raw responses.
+Device codes are displayed intentionally only as sign-in instructions.
 
 Range reads accept `futures::io::AsyncWrite + Unpin` sinks, including
 `WriteFileSession` directly. Requested source bytes are written sequentially at
@@ -152,7 +189,7 @@ mise run test
 ## Roadmap
 
 - [x] Storage write interface.
-- [ ] Storage auth interface.
+- [x] Storage OAuth interface and OneDrive authorization.
 - [ ] Local storage.
 - [ ] FUSE driver.
 - [ ] OneDrive storage.

@@ -64,13 +64,12 @@ impl Driver for FuseDriver {
         config
             .mount_options
             .push(fuser::MountOption::FSName(format!("anymount:{name}")));
-        let session = fuser::spawn_mount2(filesystem, &path, &config).map_err(
-            |source| MountError::CannotMountAtPath {
+        let connector = fuser::spawn_mount2(filesystem, &path, &config)
+            .map_err(|source| MountError::CannotMountAtPath {
                 path: path.clone(),
                 message: source.to_string(),
-            },
-        )?;
-        Ok(Box::new(FuseMount::new(name, path, session)))
+            })?;
+        Ok(Box::new(FuseMount::new(name, path, connector)))
     }
 
     async fn unmount(&self, _name: &str) -> Result<(), MountError> {

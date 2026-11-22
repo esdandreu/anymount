@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::app::MountConfig;
-use anymount::{ConfigRepository, LoadedConfig, domain::Mount, mount};
+use anymount::connected_mount::{ConnectedMount, disconnect_all};
+use anymount::{ConfigRepository, LoadedConfig};
 use async_trait::async_trait;
 
 #[async_trait(?Send)]
@@ -9,17 +11,20 @@ pub trait MountService {
     async fn list(&self) -> color_eyre::Result<Vec<MountConfig>>;
     async fn connect(&mut self, name: &str) -> color_eyre::Result<()>;
     async fn disconnect(&mut self, name: &str) -> color_eyre::Result<()>;
+    async fn shutdown(&mut self) -> color_eyre::Result<()>;
 }
 
 pub struct AnymountMountService {
+    repository: Arc<dyn ConfigRepository>,
     configurations: Vec<LoadedConfig>,
-    active_mounts: HashMap<String, Box<dyn Mount>>,
+    active_mounts: HashMap<String, ConnectedMount>,
 }
 
 impl AnymountMountService {
-    pub fn new(repository: impl ConfigRepository) -> Self {
+    pub fn new(repository: impl ConfigRepository + 'static) -> Self {
         Self {
             configurations: repository.list().collect(),
+            repository: Arc::new(repository),
             active_mounts: HashMap::new(),
         }
     }
@@ -32,15 +37,15 @@ impl MountService for AnymountMountService {
             .configurations
             .iter()
             .map(|record| {
-                let config = &record.config.mount;
+                let mount = &record.config.mount;
                 MountConfig {
-                    name: config.name.clone(),
-                    path: config.path.clone(),
-                    storage_type: config.storage.kind().to_owned(),
+                    name: mount.name.clone(),
+                    path: mount.path.clone(),
+                    storage_type: mount.storage.kind().to_owned(),
                     is_connected: self
                         .active_mounts
-                        .get(&config.name)
-                        .is_some_and(|mount| mount.is_connected()),
+                        .get(&mount.name)
+                        .is_some_and(ConnectedMount::is_connected),
                 }
             })
             .collect())
@@ -54,47 +59,44 @@ impl MountService for AnymountMountService {
             .configurations
             .iter()
             .find(|record| record.config.mount.name == name)
-            .ok_or_else(|| anymount::domain::ConfigNotFound {
-                name: name.to_owned(),
+            .ok_or_else(|| {
+                color_eyre::eyre::eyre!("configuration '{name}' was not found")
             })?;
-        let mount = mount(record).await?;
-        mount.connect().await?;
+        let mount =
+            ConnectedMount::connect(record, Arc::clone(&self.repository))
+                .await?;
         self.active_mounts.insert(name.to_owned(), mount);
         Ok(())
     }
 
     async fn disconnect(&mut self, name: &str) -> color_eyre::Result<()> {
-        let mount = self.active_mounts.get(name).ok_or_else(|| {
+        let mount = self.active_mounts.remove(name).ok_or_else(|| {
             color_eyre::eyre::eyre!(
                 "mount '{name}' was not connected by this TUI session"
             )
         })?;
         mount.disconnect().await?;
-        self.active_mounts.remove(name);
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> color_eyre::Result<()> {
+        disconnect_all(self.active_mounts.drain().map(|(_, mount)| mount))
+            .await?;
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use anymount::{ConfigRepository, LoadedConfig};
 
     use super::{AnymountMountService, MountService};
 
-    struct EmptyConfigRepository;
-
-    // private test util: Exercises an empty configuration repository.
-    impl ConfigRepository for EmptyConfigRepository {
-        type Iter<'a> = std::iter::Empty<LoadedConfig>;
-
-        fn list(&self) -> Self::Iter<'_> {
-            std::iter::empty()
-        }
-    }
+    use crate::test_utils::EmptyConfigRepository;
 
     #[tokio::test]
     async fn lists_an_empty_repository() {
-        let service = AnymountMountService::new(EmptyConfigRepository);
+        let service =
+            AnymountMountService::new(EmptyConfigRepository::default());
 
         assert!(
             service
@@ -106,8 +108,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn owns_configuration_records_without_reloading_for_each_operation() {
+        let repository = EmptyConfigRepository::default();
+        let mut service = AnymountMountService::new(repository.clone());
+        service.list().await.expect("first list");
+        service.list().await.expect("second list");
+        assert!(service.connect("missing").await.is_err());
+        assert_eq!(repository.reads(), 1);
+    }
+
+    #[tokio::test]
     async fn cannot_disconnect_mount_not_connected_by_session() {
-        let mut service = AnymountMountService::new(EmptyConfigRepository);
+        let mut service =
+            AnymountMountService::new(EmptyConfigRepository::default());
 
         let error = service
             .disconnect("missing")

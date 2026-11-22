@@ -34,7 +34,7 @@ impl Driver for WindowsDriver {
         &self,
         config: &MountConfig,
         connector: Arc<dyn StorageConnector>,
-    ) -> std::result::Result<Box<dyn Mount>, MountError> {
+    ) -> Result<Box<dyn Mount>, MountError> {
         let storage =
             tokio::task::spawn_blocking(move || NativeStorage::open(connector))
                 .await

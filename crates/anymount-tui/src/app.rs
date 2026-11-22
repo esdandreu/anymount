@@ -56,11 +56,19 @@ where
     /// Run the application's main loop.
     pub async fn run(
         mut self,
+        terminal: DefaultTerminal,
+    ) -> color_eyre::Result<()> {
+        let result = self.run_loop(terminal).await;
+        result.and(self.service.shutdown().await)
+    }
+
+    async fn run_loop(
+        &mut self,
         mut terminal: DefaultTerminal,
     ) -> color_eyre::Result<()> {
         while self.running {
             terminal
-                .draw(|frame| frame.render_widget(&mut self, frame.area()))?;
+                .draw(|frame| frame.render_widget(&mut *self, frame.area()))?;
             self.handle_events().await?;
         }
         Ok(())
