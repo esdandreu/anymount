@@ -121,12 +121,13 @@ OneDrive uses one portable implementation for native and browser requests.
 Storage reads never open a browser or save configuration. The native CLI and
 TUI use `connected_mount::ConnectedMount` to watch credential generations and save
 through `ConfigRepository::save_credentials`. Disconnect, unregister, and host
-exit stop native requests before draining pending saves. Only provider-designated
+exit stop native requests before draining pending saves. Browser hosts use
+`OneDriveBrowserApi` and its `savePending` callback. Only provider-designated
 paths change, leaving unknown fields and siblings untouched.
 Usable in-memory credentials do not wait for saves. `credential_snapshot`
 returns the newest changed credentials without consuming them. Hosts can retry
-failed saves without refreshing again. The repository serializes in-flight
-writes, even if the original caller stops waiting.
+failed saves without refreshing again. Native repositories and browser hosts
+serialize in-flight writes, even if the original caller stops waiting.
 
 Access and refresh tokens remain secret-bearing fields in local configuration.
 Copying a configuration copies its credentials; sharing or exporting it can
@@ -140,13 +141,31 @@ reusing a grant after changing its client or resource. Supported resource
 endpoints are Microsoft Graph `https://graph.microsoft.com/v1.0` and `/beta`;
 arbitrary bearer destinations and other cloud authorities are unsupported.
 
-Hosts must prevent concurrent owners of the same saved record. Failed renewal
-results remain shared; `Authorization::retry_renewal` explicitly permits another
-exchange only after a temporary failure. Requests have a 60-second deadline.
-Ambiguous exchanges are never replayed automatically. A restart can require
-fresh sign-in when rotated credentials were not saved.
+Browser deployments must supply their own public SPA `client_id` and registered
+redirect URI. The shared public-client PKCE flow uses Microsoft's `common`
+authority, delegated `Files.ReadWrite` and `offline_access`; account types,
+consent, redirect origin, and token/resource CORS must match that registration.
+There is no embedded client secret or required Anymount backend. No claim is
+made that the built-in registration or every provider works in every browser.
+Device flow is available only when the deployment permits its endpoints.
+Browser filesystem permissions remain a separate API.
 
-OneDrive downloads obtain the provider's preauthenticated metadata URL
+`OneDriveBrowserApi.beginRedirect` retains the newest bounded, short-lived
+continuation in this tab's sessionStorage. After navigation, restore it into the
+same configuration identity using `resumeRedirect`. `completeRedirect` validates
+the callback before consuming that record, removes it before exchange, and clears
+callback query parameters from the address bar. Never put continuations into URLs
+or long-lived configuration. Cancelled, expired, superseded, mismatched, and
+replayed callbacks are rejected. Hosts must prevent concurrent owners of the same
+saved record across processes or tabs; no distributed coordination or crash-safe
+provider/local-save transaction is promised. Failed renewal results remain shared;
+`Authorization::retry_renewal` (browser `retryRenewal`) explicitly permits another
+exchange only after a temporary failure. Requests have a 60-second deadline;
+browser timer throttling can delay it in suspended tabs. Ambiguous exchanges are
+never replayed automatically. A restart can require fresh sign-in when rotated
+credentials were not saved.
+
+OneDrive browser downloads obtain the provider's preauthenticated metadata URL
 instead of following authenticated `/content` redirects. These URLs are secrets;
 download requests never carry bearer credentials. Authorization, configuration,
 and error debug output redact tokens, codes, callback queries, and raw responses.

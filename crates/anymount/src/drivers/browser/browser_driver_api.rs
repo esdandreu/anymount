@@ -6,6 +6,7 @@ use crate::domain::{
     Driver, Mount, MountError, StartWriteFileError, Storage, StoragePath,
     WriteFileError,
 };
+use crate::drivers::browser::OneDriveBrowserApi;
 use futures::io::AsyncWriteExt;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -25,6 +26,27 @@ impl BrowserDriverApi {
         Self {
             driver: BrowserDriver::default(),
         }
+    }
+
+    /// Mounts a workspace sharing the host's existing OneDrive authorization.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SignInRequiredError` when the connector has no credentials.
+    pub fn mount_onedrive(
+        &self,
+        name: String,
+        path: String,
+        authorization: &OneDriveBrowserApi,
+    ) -> Result<(), JsValue> {
+        let storage = authorization.connector().connect().map_err(|_| {
+            let error = js_sys::Error::new("sign-in is required");
+            error.set_name("SignInRequiredError");
+            JsValue::from(error)
+        })?;
+        self.driver
+            .register(name, PathBuf::from(path), Rc::new(storage), None);
+        Ok(())
     }
 
     /// Selects a directory and registers it as a browser workspace.
@@ -192,20 +214,20 @@ impl BrowserDriverApi {
         let path = StoragePath::try_from(PathBuf::from(file_name))
             .map_err(|error| JsValue::from_str(&error.to_string()))?;
         let workspace = self.workspace(&name)?;
-        let mut session = workspace
+        let mut connector = workspace
             .start_write_file(path)
             .await
             .map_err(start_write_file_js_error)?;
         let result = async {
-            session
+            connector
                 .write_all(value.as_bytes())
                 .await
                 .map_err(WriteFileError::from)?;
-            session.finish().await
+            connector.finish().await
         }
         .await;
         if result.is_err() {
-            let _ = session.abort().await;
+            let _ = connector.abort().await;
         }
         result.map_err(write_js_error)
     }
